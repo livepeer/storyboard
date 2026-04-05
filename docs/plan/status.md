@@ -21,7 +21,7 @@
 - [x] 0.6 Vercel deployment (code ready — `vercel link` + `vercel deploy` needs user auth)
 - [x] 0.7 CLAUDE.md updated with full project state
 - [ ] 0.8 New infra VMs deployed (BLOCKED — requires user ops action)
-- [ ] 0.9 Acceptance tests pass
+- [x] 0.9 Acceptance tests pass (21 unit + 6 E2E)
 
 ### Key decisions
 - Using Next.js 15 App Router (not Pages Router)
