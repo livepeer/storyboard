@@ -3,7 +3,7 @@
 import { useCanvasStore } from "@/lib/canvas/store";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
 
-export function TopBar() {
+export function TopBar({ onTrainClick }: { onTrainClick?: () => void }) {
   const { viewport, zoomTo, fitAll } = useCanvasStore();
 
   const zoomIn = () =>
@@ -41,6 +41,14 @@ export function TopBar() {
           Fit
         </button>
         <div className="ml-2 h-5 w-px bg-[var(--border)]" />
+        {onTrainClick && (
+          <button
+            onClick={onTrainClick}
+            className="flex h-7 items-center justify-center rounded-md border border-[var(--border)] bg-transparent px-2 text-[11px] text-[var(--text-muted)] transition-all hover:border-[var(--border-hover)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+          >
+            Train
+          </button>
+        )}
         <SettingsPanel />
       </div>
     </div>
