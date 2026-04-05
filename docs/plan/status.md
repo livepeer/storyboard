@@ -19,8 +19,8 @@
 - [x] 0.5c Agent + context menus
 - [x] 0.5d Camera + LV2V + Training
 - [x] 0.6 Vercel deployment (code ready — `vercel link` + `vercel deploy` needs user auth)
-- [ ] 0.7 CLAUDE.md created
-- [ ] 0.8 New infra VMs deployed
+- [x] 0.7 CLAUDE.md updated with full project state
+- [ ] 0.8 New infra VMs deployed (BLOCKED — requires user ops action)
 - [ ] 0.9 Acceptance tests pass
 
 ### Key decisions
