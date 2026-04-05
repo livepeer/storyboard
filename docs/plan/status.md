@@ -1,13 +1,14 @@
 # Implementation Status
 
 ## Current State
-- **Active phase:** Phase 0 (Repository Setup + Migration)
+- **Active phase:** Phase 0 COMPLETE (except 0.8 infra VMs — blocked on user ops)
 - **Last updated:** 2026-04-05
-- **Blocking issues:** None
+- **Blocking issues:** 0.8 infra VMs need manual provisioning
+- **Next phase:** Phase 1 (Agent Plugin Interface)
 
 ---
 
-## Phase 0: Repository Setup + Migration — IN PROGRESS
+## Phase 0: Repository Setup + Migration — COMPLETE
 
 ### Completed
 - [x] 0.1 Project folder created at `/Users/qiang.han/Documents/mycodespace/storyboard-a3`
@@ -29,8 +30,23 @@
 - Dual system: new VMs for a3, existing infra untouched
 - SDK image tag `:a3-latest` (not `:latest`)
 
+### What was built
+- `app/` — Next.js 16 App Router with 2 API routes
+- `components/canvas/` — InfiniteCanvas, Card, ArrowEdge, TopBar, ContextMenu, CameraWidget
+- `components/chat/` — ChatPanel, MessageBubble
+- `components/settings/` — SettingsPanel (SDK connection)
+- `components/training/` — TrainingModal (LoRA fine-tuning)
+- `lib/canvas/` — Zustand store + types for cards, edges, viewport
+- `lib/chat/` — Zustand store for messages
+- `lib/sdk/` — sdkFetch client with auth, health, inference
+- `lib/agents/` — Plugin registry + built-in agent (enrich → DAG executor)
+- `lib/stream/` — LV2V session lifecycle + webcam capture
+- `tests/` — 21 unit tests (vitest) + 6 E2E tests (playwright)
+- Total: ~2800 lines of TypeScript/TSX/CSS across 26 source files
+
 ### Known issues
-- None yet
+- 0.8 infra VMs not yet provisioned (requires user ops action)
+- Vercel deployment not yet linked (requires `vercel link` with user auth)
 
 ---
 
