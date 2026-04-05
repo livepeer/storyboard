@@ -86,12 +86,13 @@ All storyboard.html features migrated to React. Build passes. Tests pass. Ready 
 | `livepeer/simple-infra` | `feat/storyboard-a3-infra` (off `main`) | New VM configs |
 | `livepeer/storyboard` | `main` | This repo (Vercel app) |
 
-## Infrastructure — Pending User Action
-New VMs need to be provisioned (Phase 0.8). Steps:
-1. Create `sdk-a3-staging-1` VM (clone sdk-staging-1 config, tag `:a3-latest`)
-2. Create `byoc-a3-staging-1` VM (clone byoc-staging-1 config)
-3. DNS: `sdk-a3.daydream.monster` → new VM IP
-4. Use `feat/storyboard-a3-infra` branch in simple-infra repo
+## Infrastructure — Deployed
+| VM | Type | IP | Domain |
+|----|------|-----|--------|
+| `sdk-a3-staging-1` | e2-small | 34.83.203.245 | sdk-a3-staging-1.daydream.monster |
+| `byoc-a3-staging-1` | e2-medium | 136.109.56.80 | byoc-a3-staging-1.daydream.monster |
+
+Config: `/Users/qiang.han/Documents/mycodespace/simple-infra/environments/staging/byoc-a3.yaml`
 
 ## Source Material
 - **Storyboard migrated from:** `/Users/qiang.han/Documents/mycodespace/simple-infra/storyboard.html`
@@ -105,7 +106,9 @@ New VMs need to be provisioned (Phase 0.8). Steps:
 - **Project:** `storyboard`
 - **Domain:** `storyboard.livepeer.org`
 - **Secrets:** via `vercel env add` (ANTHROPIC_API_KEY, NEXT_PUBLIC_SDK_URL)
-- **Deploy:** `vercel link` then `vercel deploy --prod`
+- **Production URL:** https://storyboard-rust.vercel.app
+- **Deploy:** `./scripts/dev.sh deploy` or `vercel deploy --prod --scope livepeer-foundation`
+- **Pending:** `ANTHROPIC_API_KEY` (Phase 2), custom domain `storyboard.livepeer.org`
 
 ## GitHub
 - **Repo:** `livepeer/storyboard` — https://github.com/livepeer/storyboard
