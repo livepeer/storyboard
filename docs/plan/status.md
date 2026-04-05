@@ -15,7 +15,7 @@
 - [x] Docs: architecture.md and implementation.md copied
 - [x] 0.4 Next.js scaffold + CI/CD
 - [x] 0.5a Canvas core migration
-- [ ] 0.5b Chat + SDK client
+- [x] 0.5b Chat + SDK client
 - [ ] 0.5c Agent + context menus
 - [ ] 0.5d Camera + LV2V + Training
 - [ ] 0.6 Vercel deployment

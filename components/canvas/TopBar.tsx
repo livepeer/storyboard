@@ -1,6 +1,7 @@
 "use client";
 
 import { useCanvasStore } from "@/lib/canvas/store";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
 
 export function TopBar() {
   const { viewport, zoomTo, fitAll } = useCanvasStore();
@@ -39,6 +40,8 @@ export function TopBar() {
         >
           Fit
         </button>
+        <div className="ml-2 h-5 w-px bg-[var(--border)]" />
+        <SettingsPanel />
       </div>
     </div>
   );
