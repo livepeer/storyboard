@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/lib/chat/store";
+import { getActivePlugin } from "@/lib/agents/registry";
 import { MessageBubble } from "./MessageBubble";
 
 export function ChatPanel() {
@@ -28,7 +29,10 @@ export function ChatPanel() {
     if (!text || isProcessing) return;
     addMessage(text, "user");
     setInput("");
-    // Agent processing is wired in Phase 0.5c
+    const plugin = getActivePlugin();
+    if (plugin) {
+      plugin.handleMessage(text);
+    }
   }, [input, isProcessing, addMessage]);
 
   const onKeyDown = useCallback(

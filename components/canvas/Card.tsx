@@ -107,6 +107,14 @@ export function Card({ card }: { card: CardData }) {
         height: card.minimized ? 36 : card.h,
       }}
       onPointerDown={() => selectCard(card.id)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("card-context-menu", {
+            detail: { card, x: e.clientX, y: e.clientY },
+          })
+        );
+      }}
     >
       {/* Header */}
       <div
