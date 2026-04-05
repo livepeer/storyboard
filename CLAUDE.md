@@ -107,6 +107,12 @@ New VMs need to be provisioned (Phase 0.8). Steps:
 - **Secrets:** via `vercel env add` (ANTHROPIC_API_KEY, NEXT_PUBLIC_SDK_URL)
 - **Deploy:** `vercel link` then `vercel deploy --prod`
 
+## GitHub
+- **Repo:** `livepeer/storyboard` — https://github.com/livepeer/storyboard
+- **Push access:** Use `seanhanca` account. `qianghan` does NOT have push access.
+- **Before pushing:** `gh auth switch --user seanhanca`
+- **After pushing:** `gh auth switch --user qianghan`
+
 ## Key Commands
 ```bash
 npm run dev          # local dev at localhost:3000
