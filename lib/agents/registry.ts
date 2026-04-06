@@ -17,6 +17,10 @@ export function getActivePlugin(): AgentPlugin | null {
   return activePlugin;
 }
 
+export function getActivePluginId(): string | null {
+  return activePlugin?.id ?? null;
+}
+
 export function getPluginList(): AgentPlugin[] {
   return Array.from(plugins.values());
 }

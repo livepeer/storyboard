@@ -1,8 +1,28 @@
-import type { AgentPlugin, AgentStep, EnrichResponse } from "../types";
+import type {
+  AgentPlugin,
+  AgentEvent,
+  AgentStep,
+  EnrichResponse,
+  CanvasContext,
+} from "../types";
 import type { CardType } from "@/lib/canvas/types";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useChatStore } from "@/lib/chat/store";
 import { sdkFetch, runInference } from "@/lib/sdk/client";
+
+/**
+ * Built-in agent plugin.
+ *
+ * Uses the SDK's /enrich endpoint to plan steps, then executes them
+ * as a DAG (independent steps in parallel, dependent steps in waves).
+ *
+ * Implements the AgentPlugin interface by yielding AgentEvent objects
+ * as it executes. Also maintains backward compatibility by writing
+ * directly to the chat and canvas stores (so the UI works identically
+ * to Phase 0).
+ */
+
+let stopped = false;
 
 function say(text: string, role: "agent" | "system" = "agent") {
   useChatStore.getState().addMessage(text, role);
@@ -13,7 +33,10 @@ function setProcessing(v: boolean) {
 }
 
 // --- Enrich: ask SDK to plan steps ---
-async function enrichTask(task: string, context: string): Promise<AgentStep[]> {
+async function enrichTask(
+  task: string,
+  context: string
+): Promise<AgentStep[]> {
   try {
     const resp = await sdkFetch<EnrichResponse>(
       "/enrich/v2",
@@ -70,11 +93,11 @@ function extractUrls(result: Record<string, unknown>): {
   };
 }
 
-// --- Execute a single step ---
-async function executeStep(
+// --- Execute a single step, yielding events ---
+async function* executeStep(
   step: AgentStep,
   results: Map<string, Record<string, unknown>>
-): Promise<Record<string, unknown>> {
+): AsyncGenerator<AgentEvent> {
   const canvas = useCanvasStore.getState();
   const cardType = (
     step.type === "music" ? "audio" : step.type
@@ -86,6 +109,12 @@ async function executeStep(
     title: step.title || step.prompt.slice(0, 40),
     refId: step.id,
   });
+
+  yield {
+    type: "card_created",
+    refId: step.id,
+    content: step.title || step.prompt.slice(0, 40),
+  };
 
   // Inject dependency URLs
   const params: Record<string, unknown> = { ...step.params };
@@ -103,6 +132,17 @@ async function executeStep(
     }
   }
 
+  // Yield tool_call event
+  yield {
+    type: "tool_call",
+    name: "inference",
+    input: {
+      capability: step.capability,
+      prompt: step.prompt,
+      params,
+    },
+  };
+
   // Run inference
   const t0 = performance.now();
   const result = await runInference({
@@ -111,6 +151,13 @@ async function executeStep(
     params,
   });
   const elapsed = performance.now() - t0;
+
+  // Yield tool_result event
+  yield {
+    type: "tool_result",
+    name: "inference",
+    result: { ...result, _elapsed: elapsed },
+  };
 
   // Update card with result
   const { imageUrl, videoUrl, audioUrl } = extractUrls(
@@ -140,11 +187,16 @@ async function executeStep(
     });
   }
 
-  return { ...(result as Record<string, unknown>), _elapsed: elapsed };
+  results.set(step.id, {
+    ...(result as Record<string, unknown>),
+    _elapsed: elapsed,
+  });
 }
 
-// --- DAG executor ---
-async function executeDag(steps: AgentStep[]) {
+// --- DAG executor (yields events as steps execute) ---
+async function* executeDag(
+  steps: AgentStep[]
+): AsyncGenerator<AgentEvent> {
   const results = new Map<string, Record<string, unknown>>();
   const idSet = new Set(steps.map((s) => s.id));
 
@@ -155,13 +207,22 @@ async function executeDag(steps: AgentStep[]) {
     (s) => s.depends_on && idSet.has(s.depends_on)
   );
 
-  // Run independent steps concurrently
+  // Run independent steps concurrently, collect events
+  const eventQueues: AgentEvent[][] = independent.map(() => []);
   const indResults = await Promise.allSettled(
-    independent.map(async (step) => {
-      const r = await executeStep(step, results);
-      results.set(step.id, r);
+    independent.map(async (step, idx) => {
+      for await (const event of executeStep(step, results)) {
+        eventQueues[idx].push(event);
+      }
     })
   );
+
+  // Yield all collected events
+  for (const queue of eventQueues) {
+    for (const event of queue) {
+      yield event;
+    }
+  }
 
   // Log failures
   for (let i = 0; i < indResults.length; i++) {
@@ -172,29 +233,49 @@ async function executeDag(steps: AgentStep[]) {
         "system"
       );
       results.set(independent[i].id, { error: String(reason) });
+      yield {
+        type: "error",
+        content: `Step "${independent[i].title || independent[i].id}" error: ${reason}`,
+      };
     }
   }
 
   // Run dependent steps in waves
   let remaining = [...dependent];
   while (remaining.length > 0) {
+    if (stopped) break;
+
     const ready = remaining.filter(
       (s) => s.depends_on && results.has(s.depends_on)
     );
     if (ready.length === 0) {
-      // Deadlock — remaining steps have unresolved deps
       for (const s of remaining) {
-        say(`Skipped "${s.title || s.id}" — dependency not available`, "system");
+        say(
+          `Skipped "${s.title || s.id}" — dependency not available`,
+          "system"
+        );
+        yield {
+          type: "error",
+          content: `Skipped "${s.title || s.id}" — dependency not available`,
+        };
       }
       break;
     }
 
+    const waveQueues: AgentEvent[][] = ready.map(() => []);
     const waveResults = await Promise.allSettled(
-      ready.map(async (step) => {
-        const r = await executeStep(step, results);
-        results.set(step.id, r);
+      ready.map(async (step, idx) => {
+        for await (const event of executeStep(step, results)) {
+          waveQueues[idx].push(event);
+        }
       })
     );
+
+    for (const queue of waveQueues) {
+      for (const event of queue) {
+        yield event;
+      }
+    }
 
     for (let i = 0; i < waveResults.length; i++) {
       if (waveResults[i].status === "rejected") {
@@ -204,6 +285,10 @@ async function executeDag(steps: AgentStep[]) {
           "system"
         );
         results.set(ready[i].id, { error: String(reason) });
+        yield {
+          type: "error",
+          content: `Step "${ready[i].title || ready[i].id}" error: ${reason}`,
+        };
       }
     }
 
@@ -211,44 +296,72 @@ async function executeDag(steps: AgentStep[]) {
   }
 }
 
-// --- Main handler ---
-async function handleMessage(text: string) {
-  setProcessing(true);
-
-  try {
-    // Command shortcuts
-    const lower = text.toLowerCase().trim();
-
-    if (/^(ls|list)\s+cap/i.test(lower)) {
-      const caps = await sdkFetch<Array<{ id: string; name?: string }>>(
-        "/capabilities"
-      );
-      say(
-        caps.map((c) => `• ${c.id}${c.name ? ` — ${c.name}` : ""}`).join("\n")
-      );
-      return;
-    }
-
-    // Enrich → DAG execute
-    say("Planning…", "system");
-    const steps = await enrichTask(text, "");
-    say(
-      `${steps.length} step${steps.length > 1 ? "s" : ""} planned`,
-      "system"
-    );
-    await executeDag(steps);
-  } catch (e) {
-    say(
-      `Error: ${e instanceof Error ? e.message : "Unknown error"}`,
-      "system"
-    );
-  } finally {
-    setProcessing(false);
-  }
-}
+// --- The plugin object ---
 
 export const builtInPlugin: AgentPlugin = {
   id: "built-in",
   name: "Built-in Agent",
-  handleMessage,
+  description:
+    "SDK-powered agent with enrich planning and DAG execution. No LLM required.",
+  configFields: [],
+
+  async *sendMessage(
+    text: string,
+    _context: CanvasContext
+  ): AsyncGenerator<AgentEvent> {
+    stopped = false;
+    setProcessing(true);
+
+    try {
+      const lower = text.toLowerCase().trim();
+
+      // Command shortcuts
+      if (/^(ls|list)\s+cap/i.test(lower)) {
+        yield { type: "tool_call", name: "capabilities", input: {} };
+        const caps = await sdkFetch<
+          Array<{ id: string; name?: string }>
+        >("/capabilities");
+        const capText = caps
+          .map((c) => `\u2022 ${c.id}${c.name ? ` \u2014 ${c.name}` : ""}`)
+          .join("\n");
+        say(capText);
+        yield {
+          type: "tool_result",
+          name: "capabilities",
+          result: caps,
+        };
+        yield { type: "text", content: capText };
+        yield { type: "done" };
+        return;
+      }
+
+      // Enrich -> DAG execute
+      say("Planning\u2026", "system");
+      yield { type: "text", content: "Planning\u2026" };
+
+      const steps = await enrichTask(text, "");
+      const planMsg = `${steps.length} step${steps.length > 1 ? "s" : ""} planned`;
+      say(planMsg, "system");
+      yield { type: "text", content: planMsg };
+
+      yield* executeDag(steps);
+      yield { type: "done" };
+    } catch (e) {
+      const errMsg = `Error: ${e instanceof Error ? e.message : "Unknown error"}`;
+      say(errMsg, "system");
+      yield { type: "error", content: errMsg };
+      yield { type: "done" };
+    } finally {
+      setProcessing(false);
+    }
+  },
+
+  configure() {
+    // Built-in plugin has no config fields (uses SDK config from SettingsPanel)
+  },
+
+  stop() {
+    stopped = true;
+    setProcessing(false);
+  },
 };

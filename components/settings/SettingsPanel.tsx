@@ -3,12 +3,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { loadConfig, saveConfig, checkHealth } from "@/lib/sdk/client";
 import { useChatStore } from "@/lib/chat/store";
+import {
+  getActivePluginId,
+  getPluginList,
+  setActivePlugin,
+} from "@/lib/agents/registry";
+
+const AGENT_STORAGE_KEY = "storyboard_active_agent";
 
 export function SettingsPanel() {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [orchUrl, setOrchUrl] = useState("");
+  const [activeAgent, setActiveAgent] = useState("built-in");
   const [status, setStatus] = useState<"idle" | "connecting" | "ok" | "error">(
     "idle"
   );
@@ -20,7 +28,39 @@ export function SettingsPanel() {
     setUrl(cfg.serviceUrl);
     setApiKey(cfg.apiKey);
     setOrchUrl(cfg.orchUrl);
+
+    // Restore saved agent selection
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem(AGENT_STORAGE_KEY);
+      if (saved) {
+        setActiveAgent(saved);
+        try {
+          setActivePlugin(saved);
+        } catch {
+          // Plugin not registered yet, will be set on page load
+        }
+      }
+    }
   }, []);
+
+  const handleAgentChange = useCallback(
+    (agentId: string) => {
+      setActiveAgent(agentId);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(AGENT_STORAGE_KEY, agentId);
+      }
+      try {
+        setActivePlugin(agentId);
+        addMessage(`Agent switched to: ${agentId}`, "system");
+      } catch (e) {
+        addMessage(
+          `Cannot switch agent: ${e instanceof Error ? e.message : "Unknown"}`,
+          "system"
+        );
+      }
+    },
+    [addMessage]
+  );
 
   const handleConnect = useCallback(async () => {
     const trimmedUrl = url.trim().replace(/\/+$/, "");
@@ -44,6 +84,8 @@ export function SettingsPanel() {
     }
   }, [url, apiKey, orchUrl, addMessage]);
 
+  const plugins = typeof window !== "undefined" ? getPluginList() : [];
+
   return (
     <>
       {/* Gear button in top bar */}
@@ -52,7 +94,7 @@ export function SettingsPanel() {
         className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--border)] bg-transparent text-sm text-[var(--text-muted)] transition-all hover:border-[var(--border-hover)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
         title="Settings"
       >
-        ⚙
+        &#9881;
       </button>
 
       {/* Overlay */}
@@ -71,6 +113,29 @@ export function SettingsPanel() {
               The SDK Service handles inference, AI enrichment, live
               video-to-video, and orchestrator discovery.
             </p>
+
+            {/* Agent selector */}
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
+              Agent
+            </label>
+            <select
+              value={activeAgent}
+              onChange={(e) => handleAgentChange(e.target.value)}
+              className="mb-4 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs text-[var(--text)] outline-none transition-colors focus:border-[var(--border-hover)]"
+            >
+              {plugins.length > 0 ? (
+                plugins.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))
+              ) : (
+                <option value="built-in">Built-in Agent</option>
+              )}
+              <option value="claude" disabled>
+                Claude (coming soon)
+              </option>
+            </select>
 
             <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
               SDK Service URL
@@ -124,7 +189,7 @@ export function SettingsPanel() {
               className="w-full rounded-lg bg-white py-2.5 text-xs font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {status === "connecting"
-                ? "Connecting…"
+                ? "Connecting..."
                 : status === "ok"
                   ? "Connected"
                   : status === "error"

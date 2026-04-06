@@ -4,9 +4,9 @@
 
 A Next.js 16 app that transforms the single-file `storyboard.html` prototype (from `simple-infra`) into a production agent-powered creative tool. Artists chat with Claude to generate, edit, animate, and live-stream media using Livepeer's AI model network.
 
-## Current State: Phase 0 — Migration Complete
+## Current State: Phase 1 — Agent Plugin Interface Complete
 
-All storyboard.html features migrated to React. Build passes. Tests pass. Ready for Phase 1.
+Phase 0 (migration) and Phase 1 (plugin interface) are complete. Build passes. All tests pass (40 unit + 6 E2E).
 
 ### Key Files
 
@@ -39,20 +39,29 @@ All storyboard.html features migrated to React. Build passes. Tests pass. Ready 
 - `lib/chat/store.ts` — Zustand: messages, processing state
 - `lib/sdk/client.ts` — `sdkFetch` wrapper with auth, timeout, health/inference
 - `lib/sdk/types.ts` — SDK request/response types
-- `lib/agents/types.ts` — AgentPlugin, AgentStep, EnrichResponse
-- `lib/agents/registry.ts` — Plugin registration and activation
-- `lib/agents/built-in/index.ts` — Built-in agent: enrich → DAG executor
+- `lib/agents/types.ts` — AgentPlugin (async generator), AgentEvent, CanvasContext, ConfigField
+- `lib/agents/registry.ts` — Plugin registration, activation, getPluginList
+- `lib/agents/built-in/index.ts` — Built-in agent: enrich → DAG executor (yields AgentEvents)
+- `lib/tools/types.ts` — ToolDefinition, ToolResult, JSONSchema interfaces
+- `lib/tools/registry.ts` — Tool registry: register, get, list, execute, clear
+- `lib/tools/sdk-tools.ts` — SDK tools: inference, stream_start/control/stop, capabilities, train_lora
+- `lib/tools/canvas-tools.ts` — Canvas tools: canvas_create, canvas_update, canvas_get
+- `lib/tools/index.ts` — Tool initialization (registers all built-in tools)
 - `lib/stream/session.ts` — LV2V lifecycle: start/publish/poll/control/stop
 - `lib/stream/webcam.ts` — getUserMedia, frame capture
 
 #### Tests
 - `tests/unit/canvas-store.test.ts` — Zustand store unit tests
+- `tests/unit/chat-store.test.ts` — Chat store unit tests
+- `tests/unit/sdk-client.test.ts` — SDK client unit tests
+- `tests/unit/tool-registry.test.ts` — Tool registry unit tests
+- `tests/unit/agent-plugin.test.ts` — Agent plugin interface unit tests
 - `tests/e2e/storyboard.spec.ts` — Playwright E2E smoke tests
 
-### What needs to happen next (Phase 1)
-1. **Agent Plugin Interface** — formalize plugin contract, event system
-2. **Tool Registry** — shared tool schemas for all plugins
-3. **Plugin hot-swap** — switch between BuiltIn/Claude/OpenAI at runtime
+### What needs to happen next (Phase 2)
+1. **Claude Plugin** — Messages API + tool_use, streaming via /api/agent/chat proxy
+2. **System prompt from skills/** — markdown skill files, on-demand loading
+3. **Conversation persistence** — Zustand + localStorage for messages
 
 ## Key Architecture Decisions
 

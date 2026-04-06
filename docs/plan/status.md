@@ -1,10 +1,10 @@
 # Implementation Status
 
 ## Current State
-- **Active phase:** Phase 0 COMPLETE (except 0.8 infra VMs — blocked on user ops)
-- **Last updated:** 2026-04-05
-- **Blocking issues:** 0.8 infra VMs need manual provisioning
-- **Next phase:** Phase 1 (Agent Plugin Interface)
+- **Active phase:** Phase 1 COMPLETE
+- **Last updated:** 2026-04-04
+- **Blocking issues:** None
+- **Next phase:** Phase 2 (Claude Plugin)
 
 ---
 
@@ -50,7 +50,27 @@
 
 ---
 
-## Phase 1: Agent Plugin Interface — NOT STARTED
+## Phase 1: Agent Plugin Interface — COMPLETE
+
+### Completed
+- [x] 1.1 Formalized AgentPlugin interface with AgentEvent types (text, tool_call, tool_result, card_created, error, done)
+- [x] 1.1 Added CanvasContext interface with CardSummary, CapabilitySummary
+- [x] 1.1 Made plugin interface async generator based (yields AgentEvents)
+- [x] 1.2 Created Tool Registry (lib/tools/types.ts, registry.ts)
+- [x] 1.2 Created SDK tools (inference, stream_start/control/stop, capabilities, train_lora)
+- [x] 1.2 Created Canvas tools (canvas_create, canvas_update, canvas_get)
+- [x] 1.3 Refactored BuiltInPlugin to implement AgentPlugin interface (yields events)
+- [x] 1.4 Added agent selector dropdown to SettingsPanel (Built-in | Claude coming soon)
+- [x] 1.4 Agent preference persisted in localStorage
+- [x] 1.5 Updated ChatPanel to consume AgentEvent stream, render tool_call pills
+- [x] 1.6 All 40 unit tests pass (21 existing + 19 new)
+- [x] 1.6 All 6 E2E tests pass
+
+### Key decisions
+- AgentPlugin.sendMessage returns AsyncGenerator<AgentEvent> (not Promise<void>)
+- Built-in plugin maintains backward compat by still writing to chat/canvas stores directly
+- Tool registry is separate from agent registry (tools shared across all plugins)
+- 9 tools registered: 6 SDK tools + 3 canvas tools
 ## Phase 2: Claude Plugin — NOT STARTED
 ## Phase 3: Claude Skills — NOT STARTED
 ## Phase 4: UX Polish — NOT STARTED
