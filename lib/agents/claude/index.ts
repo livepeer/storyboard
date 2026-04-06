@@ -8,6 +8,7 @@ import { listTools, executeTool } from "@/lib/tools/registry";
 import { useChatStore } from "@/lib/chat/store";
 import { loadSystemPrompt } from "./system-prompt";
 import { trackUsage, checkBudget } from "./budget";
+import { compactHistory } from "./compaction";
 
 interface Message {
   role: "user" | "assistant";
@@ -145,7 +146,8 @@ export const claudePlugin: AgentPlugin = {
           break;
         }
 
-        const response = await callApi(messages, system, tools);
+        const compactedMessages = compactHistory(messages);
+        const response = await callApi(compactedMessages, system, tools);
 
         // Track token usage
         if (response.usage) {

@@ -1,10 +1,10 @@
 # Implementation Status
 
 ## Current State
-- **Active phase:** Phase 2 COMPLETE
+- **Active phase:** Phase 3 COMPLETE
 - **Last updated:** 2026-04-05
 - **Blocking issues:** ANTHROPIC_API_KEY not yet set in Vercel env vars
-- **Next phase:** Phase 3 (Claude Skills)
+- **Next phase:** Phase 4 (UX Polish)
 
 ---
 
@@ -101,7 +101,35 @@
 - ANTHROPIC_API_KEY is server-side only (via Vercel env vars or .env.local)
 
 
-## Phase 3: Claude Skills — NOT STARTED
+## Phase 3: Claude Skills + Token Efficiency — COMPLETE
+
+### Completed
+- [x] 3.1 Slimmed base.md to ~200 tokens (was ~400), focused on tool usage
+- [x] 3.2 Created 6 skill files: text-to-image, image-editing, video, scope-lv2v, lora-training, style-presets
+- [x] 3.2 Skills served as static files from public/skills/
+- [x] 3.3 Added load_skill tool — on-demand skill loading (L3 token efficiency)
+- [x] 3.3 Added create_media compound tool — multi-step in one call (L2 token efficiency)
+- [x] 3.4 Conversation compaction (L4) — shrinks old tool results and long text
+- [x] 3.5 62 unit tests pass, build succeeds
+- [x] Total: 11 tools registered (create_media, inference, stream_*, capabilities, train_lora, canvas_*, load_skill)
+
+### Token efficiency levels implemented
+- L2: create_media compound tool (1 call instead of N for multi-step)
+- L3: On-demand skill loading via load_skill (not in system prompt)
+- L4: Conversation compaction (old tool results shrunk)
+- L1 (smart SDK): client-side schema ready, needs SDK service endpoint
+- L5 (memory): partial (budget), full in Phase 4
+
+### New files
+- `lib/tools/skill-tools.ts` — load_skill tool with caching
+- `lib/tools/compound-tools.ts` — create_media compound tool
+- `lib/agents/claude/compaction.ts` — conversation history compaction
+- `skills/*.md` — 7 skill files (base + 6 on-demand)
+- `public/skills/*.md` — static copies for client fetch
+- `tests/unit/compaction.test.ts` — 5 compaction tests
+- `tests/unit/skill-tools.test.ts` — 5 skill/compound tool tests
+
+
 ## Phase 4: UX Polish — NOT STARTED
 ## Phase 5: Wow Features — NOT STARTED
 ## Phase 6: Production Polish — NOT STARTED

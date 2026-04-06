@@ -9,9 +9,13 @@ export type { ToolDefinition, ToolResult, JSONSchema } from "./types";
 import { registerTools } from "./registry";
 import { sdkTools } from "./sdk-tools";
 import { canvasTools } from "./canvas-tools";
+import { skillTools } from "./skill-tools";
+import { compoundTools } from "./compound-tools";
 
 /** Register all built-in tools */
 export function initializeTools(): void {
-  registerTools(sdkTools);
-  registerTools(canvasTools);
+  registerTools(compoundTools);   // create_media (compound) — listed first for Claude
+  registerTools(sdkTools);        // inference, stream_*, capabilities, train_lora
+  registerTools(canvasTools);     // canvas_create, canvas_update, canvas_get
+  registerTools(skillTools);      // load_skill
 }
