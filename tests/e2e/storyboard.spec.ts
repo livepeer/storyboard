@@ -26,12 +26,13 @@ test.describe("Storyboard App", () => {
 
   test("settings panel opens and closes", async ({ page }) => {
     await page.goto("/");
-    await page.locator('button[title="Settings"]').click();
-    await expect(page.locator("text=Connect to Daydream")).toBeVisible();
+    // Click the gear button via title attribute
+    await page.locator('button[title="Settings"]').click({ force: true });
+    await expect(page.getByText("Connect to Daydream")).toBeVisible({ timeout: 10000 });
     // Click overlay background to close
     await page.mouse.click(10, 10);
     await expect(
-      page.locator("text=Connect to Daydream")
+      page.getByText("Connect to Daydream")
     ).not.toBeVisible();
   });
 

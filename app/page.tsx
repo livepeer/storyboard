@@ -9,6 +9,7 @@ import { CameraWidget } from "@/components/canvas/CameraWidget";
 import { TrainingModal } from "@/components/training/TrainingModal";
 import { registerPlugin, setActivePlugin } from "@/lib/agents/registry";
 import { builtInPlugin } from "@/lib/agents/built-in";
+import { claudePlugin } from "@/lib/agents/claude";
 import { initializeTools } from "@/lib/tools";
 
 export default function Home() {
@@ -18,6 +19,7 @@ export default function Home() {
     // Initialize tool registry and agent plugins
     initializeTools();
     registerPlugin(builtInPlugin);
+    registerPlugin(claudePlugin);
 
     // Restore saved agent preference or default to built-in
     const saved =

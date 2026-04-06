@@ -132,8 +132,8 @@ export function SettingsPanel() {
               ) : (
                 <option value="built-in">Built-in Agent</option>
               )}
-              <option value="claude" disabled>
-                Claude (coming soon)
+              <option value="openai" disabled>
+                OpenAI (Phase 6)
               </option>
             </select>
 

@@ -1,10 +1,10 @@
 # Implementation Status
 
 ## Current State
-- **Active phase:** Phase 1 COMPLETE
-- **Last updated:** 2026-04-04
-- **Blocking issues:** None
-- **Next phase:** Phase 2 (Claude Plugin)
+- **Active phase:** Phase 2 COMPLETE
+- **Last updated:** 2026-04-05
+- **Blocking issues:** ANTHROPIC_API_KEY not yet set in Vercel env vars
+- **Next phase:** Phase 3 (Claude Skills)
 
 ---
 
@@ -71,7 +71,36 @@
 - Built-in plugin maintains backward compat by still writing to chat/canvas stores directly
 - Tool registry is separate from agent registry (tools shared across all plugins)
 - 9 tools registered: 6 SDK tools + 3 canvas tools
-## Phase 2: Claude Plugin — NOT STARTED
+## Phase 2: Claude Plugin — COMPLETE
+
+### Completed
+- [x] 2.1 ClaudePlugin with tool-use loop (call API → execute tools → loop until end_turn)
+- [x] 2.2 System prompt from skills/base.md with canvas context injection
+- [x] 2.3 /api/agent/chat route supports both streaming SSE and non-streaming
+- [x] 2.4 Agent selector enabled in Settings (Built-in | Claude | OpenAI coming soon)
+- [x] 2.5 Claude plugin registered in page.tsx alongside built-in
+- [x] 2.6 Error handling: rate limits, missing API key, SDK errors
+- [x] 2.7 Budget controls: daily token tracking in localStorage, 80% warning, hard cap
+- [x] 2.8 52 unit tests pass (40 Phase 1 + 6 budget + 6 claude plugin)
+- [x] 2.9 6 E2E tests pass
+
+### New files
+- `lib/agents/claude/index.ts` — ClaudePlugin: API call → tool execution → yields AgentEvents
+- `lib/agents/claude/system-prompt.ts` — Loads skills/base.md, injects canvas context
+- `lib/agents/claude/budget.ts` — Token tracking, daily limit, warning threshold
+- `skills/base.md` — Base system prompt (capabilities, rules, workflow)
+- `public/skills/base.md` — Static-served copy for client fetch
+- `tests/unit/claude-budget.test.ts` — 6 budget tests
+- `tests/unit/claude-plugin.test.ts` — 6 plugin interface tests
+
+### Key decisions
+- Non-streaming API calls by default (simpler, reliable). SSE streaming available via `stream: true` flag.
+- Tool execution uses shared registry (executeTool) — same tools for built-in and Claude
+- Budget tracked in localStorage per day, auto-resets at midnight
+- Conversation history maintained in-memory (resets on page reload)
+- ANTHROPIC_API_KEY is server-side only (via Vercel env vars or .env.local)
+
+
 ## Phase 3: Claude Skills — NOT STARTED
 ## Phase 4: UX Polish — NOT STARTED
 ## Phase 5: Wow Features — NOT STARTED

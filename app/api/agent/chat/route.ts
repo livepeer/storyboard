@@ -7,8 +7,49 @@ export async function POST(req: Request) {
     );
   }
 
-  const { messages, tools, system } = await req.json();
+  const { messages, tools, system, stream } = await req.json();
 
+  const body: Record<string, unknown> = {
+    model: "claude-sonnet-4-6",
+    max_tokens: 4096,
+    system,
+    tools,
+    messages,
+  };
+
+  if (stream) {
+    body.stream = true;
+
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return Response.json(
+        { error: `Anthropic API error ${resp.status}: ${text.slice(0, 200)}` },
+        { status: resp.status }
+      );
+    }
+
+    // Forward SSE stream
+    return new Response(resp.body, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
+    });
+  }
+
+  // Non-streaming (default)
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -16,14 +57,16 @@ export async function POST(req: Request) {
       "anthropic-version": "2023-06-01",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4096,
-      system,
-      tools,
-      messages,
-    }),
+    body: JSON.stringify(body),
   });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    return Response.json(
+      { error: `Anthropic API error ${resp.status}: ${text.slice(0, 200)}` },
+      { status: resp.status }
+    );
+  }
 
   return new Response(resp.body, {
     status: resp.status,
