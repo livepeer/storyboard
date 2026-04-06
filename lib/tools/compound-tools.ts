@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "./types";
 import { useCanvasStore } from "@/lib/canvas/store";
-import { runInference } from "@/lib/sdk/client";
+import { sdkFetch, runInference } from "@/lib/sdk/client";
 import type { CardType } from "@/lib/canvas/types";
 
 interface MediaStep {
@@ -100,6 +100,61 @@ export const createMediaTool: ToolDefinition = {
       return { success: false, error: "No steps provided" };
     }
 
+    // Try server-side smart inference first (L1 token efficiency)
+    try {
+      const smartResult = await sdkFetch<{
+        status: string;
+        results: Array<{
+          step_index: number;
+          ref_id: string;
+          capability: string;
+          media_type: string;
+          image_url?: string;
+          video_url?: string;
+          audio_url?: string;
+          error?: string;
+          elapsed_ms: number;
+        }>;
+        summary: string;
+      }>("/smart/inference", { steps, timeout: 300 }, 300_000);
+
+      // If smart endpoint succeeded, create canvas cards from results
+      if (smartResult.results?.length) {
+        const canvas = useCanvasStore.getState();
+        const cardResults = smartResult.results.map((r, i) => {
+          const url = r.image_url || r.video_url || r.audio_url;
+          const card = canvas.addCard({
+            type: r.media_type as CardType,
+            title: steps[i]?.title || steps[i]?.prompt?.slice(0, 40) || r.ref_id,
+            refId: r.ref_id,
+            url: url || undefined,
+          });
+          if (r.error) canvas.updateCard(card.id, { error: r.error });
+          // Add edge for dependent steps
+          if (steps[i]?.depends_on !== undefined && smartResult.results[steps[i].depends_on!]) {
+            canvas.addEdge(
+              smartResult.results[steps[i].depends_on!].ref_id,
+              r.ref_id,
+              { capability: r.capability, prompt: steps[i].prompt, action: steps[i].action }
+            );
+          }
+          return r.ref_id;
+        });
+
+        return {
+          success: smartResult.status === "ok",
+          data: {
+            cards_created: cardResults,
+            summary: smartResult.summary,
+            smart: true,
+          },
+        };
+      }
+    } catch {
+      // Smart endpoint not available — fall through to client-side execution
+    }
+
+    // Fallback: client-side model selection and execution
     const canvas = useCanvasStore.getState();
     const results: Array<{
       refId: string;
