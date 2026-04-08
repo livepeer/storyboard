@@ -1,10 +1,10 @@
 # Implementation Status
 
 ## Current State
-- **Active phase:** Phase 3 COMPLETE
+- **Active phase:** Phase 7 COMPLETE — ALL PHASES DONE
 - **Last updated:** 2026-04-05
-- **Blocking issues:** ANTHROPIC_API_KEY not yet set in Vercel env vars
-- **Next phase:** Phase 4 (UX Polish)
+- **Blocking issues:** ANTHROPIC_API_KEY + OPENAI_API_KEY not yet set in Vercel env vars
+- **Next:** Production deployment, custom domain, API keys in Vercel
 
 ---
 
@@ -130,7 +130,120 @@
 - `tests/unit/skill-tools.test.ts` — 5 skill/compound tool tests
 
 
-## Phase 4: UX Polish — NOT STARTED
-## Phase 5: Wow Features — NOT STARTED
-## Phase 6: Production Polish — NOT STARTED
-## Phase 7: MCP Tools + Daily Briefing — NOT STARTED
+## Phase 4: UX Polish — COMPLETE
+
+### Completed
+- [x] 4.1 Agent thinking indicator — animated bouncing dots while Claude API call in progress
+- [x] 4.1 Enhanced tool pills — spinner while running, checkmark on success, X on error, collapsible results
+- [x] 4.1 Tool result summaries — "3 cards created", "media ready", "loaded text-to-image"
+- [x] 4.2 Context menu → agent chat — Restyle/Animate/LV2V/Ask Claude route to chat with pre-filled prompt
+- [x] 4.2 chat-prefill custom event system for cross-component communication
+- [x] 4.3 Canvas awareness — canvas_get returns compact summaries (~10 tokens/card) with has_media, filter_type
+- [x] 4.3 canvas_remove tool — remove cards by refId or filter_type ("Remove the video cards")
+- [x] 4.4 Quick actions toolbar — 5 buttons (Generate, Restyle, Animate, LV2V, Train) below chat input
+- [x] 4.4 Quick actions inject selected card context into templates
+- [x] 4.5 Compaction stats tracking — total_chars_saved, compaction_count, estimated_tokens_saved
+- [x] 4.5 Usage display in Settings — token budget bar, compaction savings
+- [x] 4.5 71 unit tests pass (62 existing + 9 new Phase 4 tests)
+- [x] Total: 12 tools registered (+ canvas_remove)
+
+### New files
+- `components/chat/ToolPill.tsx` — Enhanced tool pill with status icon, result summary, collapsible detail
+- `components/chat/QuickActions.tsx` — 5-button quick action toolbar with selected card context
+- `tests/unit/phase4-ux.test.ts` — 9 tests: canvas awareness, canvas_remove, compaction stats
+
+### Modified files
+- `components/chat/ChatPanel.tsx` — TrackedTool state, thinking dots, chat-prefill listener, QuickActions
+- `components/canvas/ContextMenu.tsx` — Restyle/Animate/LV2V/Ask Claude route to chat prefill
+- `components/settings/SettingsPanel.tsx` — UsageStats component with budget bar + compaction savings
+- `lib/tools/canvas-tools.ts` — canvas_get filter_type + compact format, canvas_remove tool
+- `lib/agents/claude/compaction.ts` — CompactionStats tracking, getCompactionStats export
+- `app/globals.css` — thinking-dot animation
+## Phase 5: Wow Features — COMPLETE
+
+### Completed
+- [x] 5.1 Storyboard from a Script — skill file with shot breakdown rules, step planning templates, example
+- [x] 5.2 Style DNA — memory store (localStorage), addStyleDNA/getActiveStyle/setActiveStyle, prompt_prefix injection
+- [x] 5.2 Style DNA tools — memory_style (save/activate/deactivate/list), auto-inject into system prompt
+- [x] 5.3 Live Director Mode — skill file mapping chat commands to stream_control parameters, transition recipes
+- [x] 5.4 Iterative Refinement — skill file with generate→evaluate→re-generate→upscale loop pattern
+- [x] 5.5 Remix Canvas — skill file for combining multiple canvas cards into composites
+- [x] 5.6 Memory + Quality Ratings — memory_rate tool (1-5 stars), RatingWidget inline UI, rating-based model preferences
+- [x] 5.6 Memory preference tool — memory_preference for saving user preferences
+- [x] 5.6 Memory summary injection — ~100 tokens in system prompt with active style, saved styles, model preferences
+- [x] 5.6 Inline rating UI — star rating widget in chat messages via [rate:refId:cap:prompt] pattern
+- [x] 85 unit tests pass (71 + 14 new), build succeeds
+- [x] Total: 15 tools registered (+ memory_style, memory_rate, memory_preference)
+- [x] Total: 10 skills available (+ storyboard, live-director, refinement, remix)
+
+### New files
+- `lib/memory/store.ts` — Memory store: StyleDNA, QualityRating, preferences, memory summary
+- `lib/tools/memory-tools.ts` — 3 memory tools: memory_style, memory_rate, memory_preference
+- `skills/storyboard.md` — Multi-shot storyboard from script skill
+- `skills/live-director.md` — Live Director Mode command mapping skill
+- `skills/refinement.md` ��� Iterative refinement loop skill
+- `skills/remix.md` — Remix Canvas combination skill
+- `public/skills/{storyboard,live-director,refinement,remix}.md` — Static copies
+- `components/chat/RatingWidget.tsx` — Inline 1-5 star rating widget
+- `tests/unit/phase5-wow.test.ts` — 14 tests: memory store, memory tools, skill registry
+
+### Modified files
+- `lib/tools/index.ts` — Registers memoryTools
+- `lib/tools/skill-tools.ts` — 4 new skills in registry (storyboard, live-director, refinement, remix)
+- `lib/agents/claude/system-prompt.ts` — Injects memory summary and active Style DNA
+- `components/chat/MessageBubble.tsx` — Renders inline RatingWidget for [rate:...] patterns
+- `skills/base.md` — Updated with memory tools, Style DNA rules, new skill list
+## Phase 6: OpenAI Plugin + Production Polish — COMPLETE
+
+### Completed
+- [x] 6.1 OpenAI Plugin — GPT-4o with function calling, same tool registry, /api/agent/openai proxy route
+- [x] 6.1 OpenAI tool-use loop — function_call → execute → send result → loop until stop
+- [x] 6.1 OpenAI conversation history with compaction (reuses Claude's compaction module)
+- [x] 6.2 Plugin marketplace UI — visual card selector replacing dropdown, shows name + description + active state
+- [x] 6.2 All 3 plugins selectable: Built-in, Claude, OpenAI
+- [x] 6.3 Token efficiency A/B test suite — 10 prompts across 6 categories, all optimized ≤ 20% of naive
+- [x] 6.4 Performance benchmark utilities — BenchmarkResult, saveBenchmark, estimateTokens, estimateConversationTokens
+- [x] 6.5 97 unit tests pass (85 + 12 new), build succeeds
+- [x] Total: 15 tools, 10 skills, 3 agent plugins
+
+### New files
+- `app/api/agent/openai/route.ts` — Server-side OpenAI API proxy
+- `lib/agents/openai/index.ts` — OpenAIPlugin: Chat Completions + function calling + tool loop
+- `lib/agents/benchmark.ts` — Performance benchmarks, token estimation, 10-prompt efficiency suite
+- `tests/unit/phase6-production.test.ts` — 12 tests: OpenAI plugin, token estimation, efficiency suite, tool registry
+
+### Modified files
+- `app/page.tsx` — Registers openaiPlugin
+- `components/settings/SettingsPanel.tsx` — Plugin marketplace cards UI, removed disabled OpenAI option
+## Phase 7: MCP Tools + Daily Briefing — COMPLETE
+
+### Completed
+- [x] 7.1 MCP client infrastructure — types, tool discovery (JSON-RPC tools/list), tool execution (tools/call)
+- [x] 7.1 MCP server config store — localStorage persistence, add/remove/connect/disconnect
+- [x] 7.1 MCP tool naming convention — mcp__{serverId}__{toolName} for namespace isolation
+- [x] 7.2 Settings UI — McpPanel with connected server list, status indicators, connect/disconnect
+- [x] 7.2 Pre-configured presets — Gmail, Google Drive, Slack, Notion with one-click add
+- [x] 7.2 Custom MCP server support — URL + bearer token input
+- [x] 7.3 Tool routing — /api/agent/chat discovers MCP tools, combines with storyboard tools
+- [x] 7.3 Server-side MCP execution — MCP tool calls executed in API route, results returned to Claude
+- [x] 7.3 Client-side routing — Claude plugin routes MCP results from _mcpResults, local tools executed normally
+- [x] 7.4 Daily briefing skill — fetch→analyze→script→visuals→narrate→present pattern
+- [x] 7.4 Adaptive rules — busy/light inbox, time of day, user preference signals
+- [x] 7.4 Multi-source support — email, calendar, Slack, news, GitHub patterns
+- [x] 110 unit tests pass (97 + 13 new), build succeeds
+- [x] Total: 15 tools, 11 skills, 3 agent plugins, 4 MCP presets
+
+### New files
+- `lib/mcp/types.ts` — McpServerConfig, McpToolDef, McpToolCallRequest/Response, MCP_PRESETS
+- `lib/mcp/store.ts` — MCP server config store (localStorage CRUD)
+- `lib/mcp/client.ts` — discoverTools, executeToolCall, isMcpTool, parseMcpToolName, format converters
+- `components/settings/McpPanel.tsx` — Connected Tools UI with presets, custom servers, status
+- `skills/daily-briefing.md` — Daily briefing skill with adaptive rules
+- `public/skills/daily-briefing.md` — Static copy
+- `tests/unit/phase7-mcp.test.ts` — 13 tests: MCP store, client utilities, presets, skill registry
+
+### Modified files
+- `app/api/agent/chat/route.ts` — MCP tool discovery + server-side execution + tool routing
+- `lib/agents/claude/index.ts` — Passes mcpServers to API, handles _mcpResults for MCP tools
+- `lib/tools/skill-tools.ts` — Added daily-briefing skill
+- `components/settings/SettingsPanel.tsx` — Integrated McpPanel

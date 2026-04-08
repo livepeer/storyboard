@@ -6,6 +6,45 @@
  * to a short summary to reduce accumulated token cost.
  */
 
+const COMPACTION_STATS_KEY = "storyboard_compaction_stats";
+
+interface CompactionStats {
+  total_chars_saved: number;
+  compaction_count: number;
+}
+
+function loadStats(): CompactionStats {
+  if (typeof window === "undefined") return { total_chars_saved: 0, compaction_count: 0 };
+  try {
+    const raw = localStorage.getItem(COMPACTION_STATS_KEY);
+    return raw ? JSON.parse(raw) : { total_chars_saved: 0, compaction_count: 0 };
+  } catch {
+    return { total_chars_saved: 0, compaction_count: 0 };
+  }
+}
+
+function saveStats(stats: CompactionStats) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(COMPACTION_STATS_KEY, JSON.stringify(stats));
+}
+
+export function getCompactionStats(): CompactionStats & { estimated_tokens_saved: number } {
+  const stats = loadStats();
+  return {
+    ...stats,
+    // Rough estimate: ~4 chars per token
+    estimated_tokens_saved: Math.round(stats.total_chars_saved / 4),
+  };
+}
+
+function trackSaving(charsBefore: number, charsAfter: number) {
+  if (charsAfter >= charsBefore) return;
+  const stats = loadStats();
+  stats.total_chars_saved += charsBefore - charsAfter;
+  stats.compaction_count += 1;
+  saveStats(stats);
+}
+
 function compactToolResult(content: string): string {
   try {
     const parsed = JSON.parse(content);
@@ -37,7 +76,8 @@ export function compactHistory<T extends AnyMessage>(
 ): T[] {
   if (messages.length <= keepRecent) return messages;
 
-  return messages.map((msg, i) => {
+  const beforeLen = JSON.stringify(messages).length;
+  const result = messages.map((msg, i) => {
     if (i >= messages.length - keepRecent) return msg;
 
     if (msg.role === "user" && Array.isArray(msg.content)) {
@@ -73,4 +113,8 @@ export function compactHistory<T extends AnyMessage>(
 
     return msg;
   });
+
+  const afterLen = JSON.stringify(result).length;
+  trackSaving(beforeLen, afterLen);
+  return result;
 }

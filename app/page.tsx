@@ -10,16 +10,21 @@ import { TrainingModal } from "@/components/training/TrainingModal";
 import { registerPlugin, setActivePlugin } from "@/lib/agents/registry";
 import { builtInPlugin } from "@/lib/agents/built-in";
 import { claudePlugin } from "@/lib/agents/claude";
+import { openaiPlugin } from "@/lib/agents/openai";
 import { initializeTools } from "@/lib/tools";
+import { fetchCapabilities } from "@/lib/sdk/capabilities";
 
 export default function Home() {
   const [trainingOpen, setTrainingOpen] = useState(false);
 
   useEffect(() => {
+    // Fetch live capabilities from SDK (single source of truth for model names)
+    fetchCapabilities();
     // Initialize tool registry and agent plugins
     initializeTools();
     registerPlugin(builtInPlugin);
     registerPlugin(claudePlugin);
+    registerPlugin(openaiPlugin);
 
     // Restore saved agent preference or default to built-in
     const saved =
@@ -27,7 +32,7 @@ export default function Home() {
         ? localStorage.getItem("storyboard_active_agent")
         : null;
     try {
-      setActivePlugin(saved || "built-in");
+      setActivePlugin(saved || "claude");
     } catch {
       setActivePlugin("built-in");
     }

@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "./types";
 import { sdkFetch, runInference, listCapabilities } from "@/lib/sdk/client";
+import { resolveCapability } from "@/lib/sdk/capabilities";
 import {
   startStream,
   controlStream,
@@ -13,13 +14,13 @@ import {
 export const inferenceTool: ToolDefinition = {
   name: "inference",
   description:
-    "Run AI inference (image generation, video generation, audio, etc.) via the SDK service.",
+    "Run AI inference directly. Prefer create_media instead — it handles model selection automatically. Only use this if you need a specific model override.",
   parameters: {
     type: "object",
     properties: {
       capability: {
         type: "string",
-        description: "Model capability ID (e.g., flux-1.1-pro, ltx-video)",
+        description: "Model capability ID. Invalid names are auto-corrected to the closest available model.",
       },
       prompt: {
         type: "string",
@@ -34,8 +35,16 @@ export const inferenceTool: ToolDefinition = {
     required: ["capability", "prompt"],
   },
   execute: async (input) => {
+    const requested = input.capability as string;
+    const resolved = resolveCapability(requested);
+    if (!resolved) {
+      return {
+        success: false,
+        error: `Cannot resolve capability "${requested}" to any available model.`,
+      };
+    }
     const result = await runInference({
-      capability: input.capability as string,
+      capability: resolved,
       prompt: input.prompt as string,
       params: (input.params as Record<string, unknown>) ?? {},
     });

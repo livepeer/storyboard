@@ -9,6 +9,8 @@ import { useChatStore } from "@/lib/chat/store";
 import { loadSystemPrompt } from "./system-prompt";
 import { trackUsage, checkBudget } from "./budget";
 import { compactHistory } from "./compaction";
+import { getConnectedServers } from "@/lib/mcp/store";
+import { isMcpTool } from "@/lib/mcp/client";
 
 interface Message {
   role: "user" | "assistant";
@@ -25,6 +27,7 @@ interface ApiResponse {
   content: ContentBlock[];
   stop_reason: string;
   usage?: { input_tokens?: number; output_tokens?: number };
+  _mcpResults?: Array<{ tool_use_id: string; name: string; result: string }>;
 }
 
 const MAX_TOOL_ROUNDS = 20;
@@ -66,6 +69,7 @@ async function callApi(
       messages: msgs,
       system,
       tools,
+      mcpServers: getConnectedServers(),
     }),
   });
 
@@ -191,8 +195,31 @@ export const claudePlugin: AgentPlugin = {
         }
 
         // Execute tools and send results back
+        // MCP tools are already executed server-side; results are in _mcpResults
+        const mcpResultMap = new Map(
+          (response._mcpResults || []).map((r) => [r.tool_use_id, r])
+        );
         const toolResults: ContentBlock[] = [];
+
         for (const toolBlock of toolUseBlocks) {
+          // Check if this was an MCP tool (already executed server-side)
+          const mcpResult = mcpResultMap.get(toolBlock.id);
+          if (mcpResult || isMcpTool(toolBlock.name)) {
+            const resultStr = mcpResult?.result || '{"error":"MCP tool not executed"}';
+            yield {
+              type: "tool_result",
+              name: toolBlock.name,
+              result: resultStr,
+            };
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolBlock.id,
+              content: resultStr,
+            });
+            continue;
+          }
+
+          // Local storyboard tool — execute client-side
           const result = await executeTool(toolBlock.name, toolBlock.input);
 
           yield {

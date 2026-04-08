@@ -82,17 +82,23 @@ export const canvasUpdateTool: ToolDefinition = {
 
 /**
  * canvas_get — get current canvas state (cards and edges).
+ * Token-efficient: ~10 tokens per card when returning all.
  */
 export const canvasGetTool: ToolDefinition = {
   name: "canvas_get",
-  description: "Get the current canvas state: cards and edges.",
+  description:
+    "Get canvas state. Returns compact card summaries (~10 tokens each). Use to answer 'what's on my canvas?' or find cards by type/title.",
   parameters: {
     type: "object",
     properties: {
       ref_id: {
         type: "string",
-        description:
-          "Optional: get a specific card by refId. Omit for all cards.",
+        description: "Get a specific card by refId. Omit for all cards.",
+      },
+      filter_type: {
+        type: "string",
+        enum: ["image", "video", "audio", "stream"],
+        description: "Filter cards by media type.",
       },
     },
   },
@@ -101,26 +107,89 @@ export const canvasGetTool: ToolDefinition = {
     if (input.ref_id) {
       const card = state.cards.find((c) => c.refId === input.ref_id);
       if (!card) {
-        return { success: false, error: `Card with refId "${input.ref_id}" not found` };
+        return {
+          success: false,
+          error: `Card with refId "${input.ref_id}" not found`,
+        };
       }
       const edges = state.edges.filter(
         (e) => e.fromRefId === card.refId || e.toRefId === card.refId
       );
       return { success: true, data: { card, edges } };
     }
+    let cards = state.cards;
+    if (input.filter_type) {
+      cards = cards.filter((c) => c.type === input.filter_type);
+    }
+    // Compact format: ~10 tokens per card
     return {
       success: true,
       data: {
-        cards: state.cards.map((c) => ({
-          id: c.id,
+        total: state.cards.length,
+        cards: cards.map((c) => ({
           refId: c.refId,
           type: c.type,
           title: c.title,
-          url: c.url,
-          error: c.error,
+          has_media: !!c.url,
+          error: c.error || undefined,
         })),
-        edges: state.edges,
+        edge_count: state.edges.length,
       },
+    };
+  },
+};
+
+/**
+ * canvas_remove — remove cards from the canvas by refId or type filter.
+ */
+export const canvasRemoveTool: ToolDefinition = {
+  name: "canvas_remove",
+  description:
+    "Remove cards from canvas. Specify ref_id for one card, or filter_type to remove all cards of a type.",
+  parameters: {
+    type: "object",
+    properties: {
+      ref_id: {
+        type: "string",
+        description: "Remove a specific card by refId.",
+      },
+      filter_type: {
+        type: "string",
+        enum: ["image", "video", "audio", "stream"],
+        description: "Remove all cards of this media type.",
+      },
+    },
+  },
+  execute: async (input) => {
+    const state = useCanvasStore.getState();
+    const removed: string[] = [];
+
+    if (input.ref_id) {
+      const card = state.cards.find((c) => c.refId === input.ref_id);
+      if (card) {
+        useCanvasStore.getState().removeCard(card.id);
+        removed.push(card.refId);
+      } else {
+        return {
+          success: false,
+          error: `Card "${input.ref_id}" not found`,
+        };
+      }
+    } else if (input.filter_type) {
+      const toRemove = state.cards.filter(
+        (c) => c.type === input.filter_type
+      );
+      for (const card of toRemove) {
+        useCanvasStore.getState().removeCard(card.id);
+        removed.push(card.refId);
+      }
+    } else {
+      return { success: false, error: "Provide ref_id or filter_type" };
+    }
+
+    return {
+      success: true,
+      data: { removed, count: removed.length },
     };
   },
 };
@@ -130,4 +199,5 @@ export const canvasTools: ToolDefinition[] = [
   canvasCreateTool,
   canvasUpdateTool,
   canvasGetTool,
+  canvasRemoveTool,
 ];

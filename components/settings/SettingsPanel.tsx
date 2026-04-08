@@ -8,6 +8,9 @@ import {
   getPluginList,
   setActivePlugin,
 } from "@/lib/agents/registry";
+import { checkBudget } from "@/lib/agents/claude/budget";
+import { getCompactionStats } from "@/lib/agents/claude/compaction";
+import { McpPanel } from "./McpPanel";
 
 const AGENT_STORAGE_KEY = "storyboard_active_agent";
 
@@ -114,28 +117,42 @@ export function SettingsPanel() {
               video-to-video, and orchestrator discovery.
             </p>
 
-            {/* Agent selector */}
-            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
+            {/* Agent marketplace */}
+            <label className="mb-2 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
               Agent
             </label>
-            <select
-              value={activeAgent}
-              onChange={(e) => handleAgentChange(e.target.value)}
-              className="mb-4 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs text-[var(--text)] outline-none transition-colors focus:border-[var(--border-hover)]"
-            >
-              {plugins.length > 0 ? (
-                plugins.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))
-              ) : (
-                <option value="built-in">Built-in Agent</option>
-              )}
-              <option value="openai" disabled>
-                OpenAI (Phase 6)
-              </option>
-            </select>
+            <div className="mb-4 flex flex-col gap-2">
+              {(plugins.length > 0
+                ? plugins
+                : [{ id: "built-in", name: "Built-in Agent", description: "Local DAG executor" }]
+              ).map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => handleAgentChange(p.id)}
+                  className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-all ${
+                    activeAgent === p.id
+                      ? "border-white/20 bg-white/[0.06]"
+                      : "border-[var(--border)] bg-transparent hover:border-[var(--border-hover)] hover:bg-white/[0.03]"
+                  }`}
+                >
+                  <span
+                    className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                      activeAgent === p.id ? "bg-emerald-400" : "bg-[var(--text-dim)]"
+                    }`}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-[var(--text)]">
+                      {p.name}
+                    </div>
+                    {"description" in p && (
+                      <div className="mt-0.5 text-[10px] text-[var(--text-dim)] line-clamp-2">
+                        {p.description}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
 
             <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
               SDK Service URL
@@ -170,6 +187,11 @@ export function SettingsPanel() {
               </a>
             </p>
 
+            {/* MCP Connected Tools */}
+            <div className="mb-6">
+              <McpPanel />
+            </div>
+
             <details className="mb-6">
               <summary className="cursor-pointer text-[11px] text-[var(--text-muted)]">
                 Advanced: Direct Orchestrator URL
@@ -181,6 +203,14 @@ export function SettingsPanel() {
                 placeholder="https://... (leave empty to use SDK Service)"
                 className="mt-2 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
               />
+            </details>
+
+            {/* Usage stats */}
+            <details className="mb-6">
+              <summary className="cursor-pointer text-[11px] text-[var(--text-muted)]">
+                Usage
+              </summary>
+              <UsageStats />
             </details>
 
             <button
@@ -200,5 +230,41 @@ export function SettingsPanel() {
         </div>
       )}
     </>
+  );
+}
+
+function UsageStats() {
+  const budget = checkBudget();
+  const compaction = getCompactionStats();
+
+  return (
+    <div className="mt-2 space-y-2 text-[10px] text-[var(--text-dim)]">
+      <div className="flex items-center justify-between">
+        <span>Tokens used today</span>
+        <span className={budget.warning ? "text-yellow-400" : ""}>
+          {budget.used.toLocaleString()} / {budget.limit.toLocaleString()} ({budget.pct}%)
+        </span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+        <div
+          className={`h-full rounded-full transition-all ${
+            budget.warning ? "bg-yellow-400" : "bg-emerald-400"
+          }`}
+          style={{ width: `${Math.min(budget.pct, 100)}%` }}
+        />
+      </div>
+      {compaction.estimated_tokens_saved > 0 && (
+        <div className="flex items-center justify-between">
+          <span>Tokens saved via compaction</span>
+          <span className="text-emerald-400">
+            ~{compaction.estimated_tokens_saved.toLocaleString()}
+          </span>
+        </div>
+      )}
+      <div className="flex items-center justify-between">
+        <span>Compaction runs</span>
+        <span>{compaction.compaction_count}</span>
+      </div>
+    </div>
   );
 }

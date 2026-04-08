@@ -5,7 +5,7 @@ test.describe("Storyboard App", () => {
     await page.goto("/");
     await expect(page.locator("text=Storyboard")).toBeVisible();
     await expect(page.locator("text=Fit")).toBeVisible();
-    await expect(page.locator("text=Train")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Train", exact: true }).first()).toBeVisible();
   });
 
   test("chat panel is visible with system message", async ({ page }) => {

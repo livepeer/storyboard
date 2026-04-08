@@ -5,7 +5,18 @@ import { useChatStore } from "@/lib/chat/store";
 import { getActivePlugin } from "@/lib/agents/registry";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { MessageBubble } from "./MessageBubble";
+import { ToolPill } from "./ToolPill";
+import { QuickActions } from "./QuickActions";
 import type { AgentEvent, CanvasContext } from "@/lib/agents/types";
+
+/** Tracked tool call with status and optional result summary */
+export interface TrackedTool {
+  name: string;
+  status: "running" | "done" | "error";
+  input?: Record<string, unknown>;
+  resultSummary?: string;
+  elapsed?: number;
+}
 
 function buildCanvasContext(): CanvasContext {
   const state = useCanvasStore.getState();
@@ -24,13 +35,35 @@ function buildCanvasContext(): CanvasContext {
   };
 }
 
+/** Summarize a tool result for display in the pill */
+function summarizeResult(name: string, result: unknown): string {
+  if (!result || typeof result !== "object") return "done";
+  const r = result as Record<string, unknown>;
+  if (r.error) return `error: ${String(r.error).slice(0, 60)}`;
+  const data = (r.data ?? r) as Record<string, unknown>;
+  if (data.cards_created) {
+    const cards = data.cards_created as string[];
+    return `${cards.length} card${cards.length > 1 ? "s" : ""} created`;
+  }
+  if (data.summary) return String(data.summary).slice(0, 80);
+  if (data.skill_id) return `loaded ${data.skill_id}`;
+  if (data.url) return "media ready";
+  if (name === "canvas_get") {
+    const cards = data.cards as unknown[] | undefined;
+    return cards ? `${cards.length} cards` : "canvas data";
+  }
+  return "done";
+}
+
 export function ChatPanel() {
   const { messages, isProcessing, addMessage } = useChatStore();
   const [input, setInput] = useState("");
-  const [activeTools, setActiveTools] = useState<string[]>([]);
+  const [trackedTools, setTrackedTools] = useState<TrackedTool[]>([]);
+  const [isThinking, setIsThinking] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -41,34 +74,54 @@ export function ChatPanel() {
   // Auto-scroll on new messages
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, trackedTools]);
 
   // --- Consume agent events ---
   const consumeEvents = useCallback(
     async (gen: AsyncGenerator<AgentEvent>) => {
-      const tools: string[] = [];
+      const tools: TrackedTool[] = [];
+      setIsThinking(true);
       try {
         for await (const event of gen) {
           switch (event.type) {
+            case "text":
+              // First text means thinking is done
+              setIsThinking(false);
+              break;
             case "tool_call":
+              setIsThinking(false);
               if (event.name) {
-                tools.push(event.name);
-                setActiveTools([...tools]);
+                tools.push({
+                  name: event.name,
+                  status: "running",
+                  input: event.input,
+                });
+                setTrackedTools([...tools]);
               }
               break;
-            case "tool_result":
-              // Remove completed tool from active list
+            case "tool_result": {
+              setIsThinking(false);
               if (event.name) {
-                const idx = tools.indexOf(event.name);
-                if (idx >= 0) tools.splice(idx, 1);
-                setActiveTools([...tools]);
+                const t = tools.find(
+                  (t) => t.name === event.name && t.status === "running"
+                );
+                if (t) {
+                  t.status = event.result &&
+                    typeof event.result === "object" &&
+                    (event.result as Record<string, unknown>).error
+                    ? "error"
+                    : "done";
+                  t.resultSummary = summarizeResult(event.name, event.result);
+                }
+                setTrackedTools([...tools]);
               }
               break;
+            }
             case "done":
-              setActiveTools([]);
+              setIsThinking(false);
+              // Keep completed tools visible briefly, then clear
+              setTimeout(() => setTrackedTools([]), 2000);
               break;
-            // text, card_created, error events are handled by the plugin
-            // writing directly to chat/canvas stores (backward compatible)
           }
         }
       } catch (e) {
@@ -77,25 +130,32 @@ export function ChatPanel() {
           "system"
         );
       } finally {
-        setActiveTools([]);
+        setIsThinking(false);
+        setTimeout(() => setTrackedTools([]), 2000);
       }
     },
     [addMessage]
   );
 
-  // --- Send ---
+  // --- Send (public for QuickActions) ---
+  const sendMessage = useCallback(
+    (text: string) => {
+      if (!text.trim() || isProcessing) return;
+      addMessage(text.trim(), "user");
+      setInput("");
+      const plugin = getActivePlugin();
+      if (plugin) {
+        const context = buildCanvasContext();
+        const gen = plugin.sendMessage(text.trim(), context);
+        consumeEvents(gen);
+      }
+    },
+    [isProcessing, addMessage, consumeEvents]
+  );
+
   const handleSend = useCallback(() => {
-    const text = input.trim();
-    if (!text || isProcessing) return;
-    addMessage(text, "user");
-    setInput("");
-    const plugin = getActivePlugin();
-    if (plugin) {
-      const context = buildCanvasContext();
-      const gen = plugin.sendMessage(text, context);
-      consumeEvents(gen);
-    }
-  }, [input, isProcessing, addMessage, consumeEvents]);
+    sendMessage(input);
+  }, [input, sendMessage]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -136,11 +196,35 @@ export function ChatPanel() {
     dragRef.current = null;
   }, []);
 
+  // --- Focus input (called from QuickActions and context menu) ---
+  const focusInput = useCallback(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // --- Listen for prefill events (from context menu / quick actions) ---
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        text: string;
+        autoSend?: boolean;
+      };
+      if (detail.autoSend) {
+        sendMessage(detail.text);
+      } else {
+        setInput(detail.text);
+        setMinimized(false);
+        setTimeout(() => focusInput(), 50);
+      }
+    };
+    window.addEventListener("chat-prefill", handler);
+    return () => window.removeEventListener("chat-prefill", handler);
+  }, [sendMessage, focusInput]);
+
   return (
     <div
       ref={panelRef}
       className={`fixed bottom-4 right-4 z-[1500] flex w-[380px] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[rgba(20,20,20,0.95)] shadow-[var(--shadow-lg)] backdrop-blur-xl backdrop-saturate-[1.2] ${
-        minimized ? "max-h-10" : "max-h-[520px]"
+        minimized ? "max-h-10" : "max-h-[560px]"
       }`}
     >
       {/* Header */}
@@ -174,17 +258,20 @@ export function ChatPanel() {
               <MessageBubble key={msg.id} message={msg} />
             ))}
 
-            {/* Active tool pills */}
-            {activeTools.length > 0 && (
-              <div className="flex flex-wrap gap-1 self-start">
-                {activeTools.map((tool, i) => (
-                  <span
-                    key={`${tool}-${i}`}
-                    className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-[var(--text-muted)]"
-                  >
-                    <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-yellow-400" />
-                    {tool}
-                  </span>
+            {/* Thinking indicator */}
+            {isThinking && (
+              <div className="flex items-center gap-1.5 self-start px-1 py-1">
+                <span className="thinking-dot" />
+                <span className="thinking-dot [animation-delay:0.15s]" />
+                <span className="thinking-dot [animation-delay:0.3s]" />
+              </div>
+            )}
+
+            {/* Tool call pills */}
+            {trackedTools.length > 0 && (
+              <div className="flex flex-col gap-1 self-start">
+                {trackedTools.map((tool, i) => (
+                  <ToolPill key={`${tool.name}-${i}`} tool={tool} />
                 ))}
               </div>
             )}
@@ -192,9 +279,11 @@ export function ChatPanel() {
             <div ref={messagesEnd} />
           </div>
 
-          {/* Input */}
+          {/* Input + Quick Actions */}
           <div className="border-t border-[var(--border)] p-2">
+            <QuickActions onSend={sendMessage} setInput={setInput} focusInput={focusInput} />
             <textarea
+              ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}

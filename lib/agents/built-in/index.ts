@@ -9,6 +9,7 @@ import type { CardType } from "@/lib/canvas/types";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useChatStore } from "@/lib/chat/store";
 import { sdkFetch, runInference } from "@/lib/sdk/client";
+import { resolveCapability } from "@/lib/sdk/capabilities";
 
 /**
  * Built-in agent plugin.
@@ -65,7 +66,7 @@ async function enrichTask(
       id: "step_0",
       type: "image",
       prompt: task,
-      capability: "flux-1.1-pro",
+      capability: "flux-dev",
       title: task.slice(0, 40),
     },
   ];
@@ -143,10 +144,13 @@ async function* executeStep(
     },
   };
 
+  // Resolve capability against live registry (guards against invalid names from /enrich)
+  const resolvedCap = resolveCapability(step.capability, step.type) || "flux-dev";
+
   // Run inference
   const t0 = performance.now();
   const result = await runInference({
-    capability: step.capability,
+    capability: resolvedCap,
     prompt: step.prompt,
     params,
   });

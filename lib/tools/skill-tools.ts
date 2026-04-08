@@ -7,6 +7,11 @@ const AVAILABLE_SKILLS = [
   { id: "scope-lv2v", description: "Scope LV2V parameters: noise_scale, transitions, denoising, scenarios" },
   { id: "lora-training", description: "LoRA training: image count, trigger words, step count guide" },
   { id: "style-presets", description: "15 built-in style presets with optimized prompts" },
+  { id: "storyboard", description: "Multi-shot storyboard from a script: shot breakdown, step planning, narrative order" },
+  { id: "live-director", description: "Live Director Mode: chat commands to LV2V stream_control parameter mapping" },
+  { id: "refinement", description: "Iterative refinement loop: generate, analyze, re-generate, upscale best" },
+  { id: "remix", description: "Remix Canvas: combine multiple cards into composites" },
+  { id: "daily-briefing", description: "Daily briefing videos from email, calendar, Slack, news via MCP" },
 ];
 
 const skillCache = new Map<string, string>();

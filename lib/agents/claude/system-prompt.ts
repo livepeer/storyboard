@@ -1,6 +1,13 @@
 import type { CanvasContext } from "../types";
+import { getMemorySummary, getActiveStyle } from "@/lib/memory/store";
+import { buildCapabilitySummary, getCachedCapabilities } from "@/lib/sdk/capabilities";
 
 let cachedBase: string | null = null;
+
+/** Clear cached base prompt (call after updating skills/base.md) */
+export function clearSystemPromptCache() {
+  cachedBase = null;
+}
 
 export async function loadSystemPrompt(
   context: CanvasContext
@@ -16,8 +23,30 @@ export async function loadSystemPrompt(
     }
   }
 
-  // Build context summary
   const parts = [cachedBase];
+
+  // Inject LIVE capabilities from the SDK (the single source of truth)
+  const capSummary = buildCapabilitySummary();
+  if (capSummary) {
+    const capNames = getCachedCapabilities().map((c) => c.name);
+    parts.push(
+      `\n## Available models (live from SDK — ONLY these exist)\n${capSummary}\n\nValid capability names: ${capNames.join(", ")}\nDo NOT invent model names. If you use create_media, just set the action — model selection is automatic.`
+    );
+  }
+
+  // Inject memory summary (~100 tokens)
+  const memory = getMemorySummary();
+  if (memory) {
+    parts.push(`\n## Memory\n${memory}`);
+  }
+
+  // Inject active style DNA
+  const style = getActiveStyle();
+  if (style) {
+    parts.push(
+      `\n## Active Style DNA: "${style.name}"\nPrepend to all generation prompts: "${style.prompt_prefix}"${style.model_hint ? `\nPreferred model: ${style.model_hint}` : ""}`
+    );
+  }
 
   if (context.cards.length > 0) {
     const cardList = context.cards
@@ -28,11 +57,6 @@ export async function loadSystemPrompt(
 
   if (context.selectedCard) {
     parts.push(`\nThe user has selected card: ${context.selectedCard}`);
-  }
-
-  if (context.capabilities.length > 0) {
-    const capList = context.capabilities.map((c) => c.id).join(", ");
-    parts.push(`\n## Live capabilities\n${capList}`);
   }
 
   return parts.join("\n");

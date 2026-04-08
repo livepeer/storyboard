@@ -12,7 +12,7 @@ const STORAGE_KEYS = {
   orchUrl: "orch_url",
 } as const;
 
-const DEFAULT_URL = "https://sdk.daydream.monster";
+const DEFAULT_URL = "https://sdk-a3-staging-1.daydream.monster";
 
 export function loadConfig(): SdkConfig {
   if (typeof window === "undefined") {

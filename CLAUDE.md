@@ -4,9 +4,9 @@
 
 A Next.js 16 app that transforms the single-file `storyboard.html` prototype (from `simple-infra`) into a production agent-powered creative tool. Artists chat with Claude to generate, edit, animate, and live-stream media using Livepeer's AI model network.
 
-## Current State: Phase 1 — Agent Plugin Interface Complete
+## Current State: Phase 7 — ALL PHASES COMPLETE
 
-Phase 0 (migration) and Phase 1 (plugin interface) are complete. Build passes. All tests pass (40 unit + 6 E2E).
+Phases 0-7 complete. Build passes. All tests pass (110 unit + 6 E2E). 15 tools, 11 skills, 3 agent plugins, MCP support.
 
 ### Key Files
 
@@ -58,10 +58,8 @@ Phase 0 (migration) and Phase 1 (plugin interface) are complete. Build passes. A
 - `tests/unit/agent-plugin.test.ts` — Agent plugin interface unit tests
 - `tests/e2e/storyboard.spec.ts` — Playwright E2E smoke tests
 
-### What needs to happen next (Phase 2)
-1. **Claude Plugin** — Messages API + tool_use, streaming via /api/agent/chat proxy
-2. **System prompt from skills/** — markdown skill files, on-demand loading
-3. **Conversation persistence** — Zustand + localStorage for messages
+### All phases complete
+- Remaining: Set ANTHROPIC_API_KEY + OPENAI_API_KEY in Vercel env vars, custom domain storyboard.livepeer.org
 
 ## Key Architecture Decisions
 

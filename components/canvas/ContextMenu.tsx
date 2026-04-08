@@ -15,12 +15,13 @@ interface MenuAction {
 }
 
 const ACTIONS: MenuAction[] = [
-  { id: "animate", label: "Animate", icon: "▶", forTypes: ["image"], requiresMedia: true },
-  { id: "restyle", label: "Restyle", icon: "🎨", forTypes: ["image"], requiresMedia: true },
-  { id: "upscale", label: "Upscale", icon: "⬆", forTypes: ["image"], requiresMedia: true },
-  { id: "transform-video", label: "Transform Video", icon: "🔄", forTypes: ["video"], requiresMedia: true },
-  { id: "lv2v", label: "Live Stream", icon: "📡", forTypes: ["image", "video"], requiresMedia: true },
-  { id: "custom", label: "Custom Prompt…", icon: "✏", forTypes: ["image", "video", "audio"], requiresMedia: false },
+  { id: "animate", label: "Animate", icon: "\u25B6", forTypes: ["image"], requiresMedia: true },
+  { id: "restyle", label: "Restyle", icon: "\u2728", forTypes: ["image"], requiresMedia: true },
+  { id: "upscale", label: "Upscale", icon: "\u2B06", forTypes: ["image"], requiresMedia: true },
+  { id: "transform-video", label: "Transform Video", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true },
+  { id: "lv2v", label: "Live Stream", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true },
+  { id: "chat", label: "Ask Claude\u2026", icon: "\uD83D\uDCAC", forTypes: ["image", "video", "audio"], requiresMedia: false },
+  { id: "custom", label: "Custom Prompt\u2026", icon: "\u270F", forTypes: ["image", "video", "audio"], requiresMedia: false },
 ];
 
 const ACTION_CONFIG: Record<string, { capability: string; newType: string; defaultPrompt?: string }> = {
@@ -66,21 +67,48 @@ export function ContextMenu() {
     };
   }, [visible]);
 
+  /** Dispatch a chat-prefill event so ChatPanel picks it up */
+  const prefillChat = useCallback(
+    (text: string, autoSend = false) => {
+      window.dispatchEvent(
+        new CustomEvent("chat-prefill", { detail: { text, autoSend } })
+      );
+    },
+    []
+  );
+
   const handleAction = useCallback(
     async (actionId: string) => {
       if (!targetCard) return;
       setVisible(false);
 
+      // --- Actions that route to chat ---
+      if (actionId === "chat") {
+        prefillChat(`Describe "${targetCard.title}" and suggest next steps`);
+        return;
+      }
+
+      if (actionId === "restyle") {
+        prefillChat(`Restyle "${targetCard.title}" in the style of `);
+        return;
+      }
+
+      if (actionId === "animate") {
+        prefillChat(`Animate "${targetCard.title}" with `);
+        return;
+      }
+
+      if (actionId === "lv2v") {
+        prefillChat(`Start a live video stream from "${targetCard.title}"`);
+        return;
+      }
+
+      // --- Actions that run directly ---
       let prompt: string | null = null;
       let capability: string;
       let newType: string;
 
       const config = ACTION_CONFIG[actionId];
-
-      if (actionId === "lv2v") {
-        addMessage("LV2V streaming will be available in Phase 0.5d", "system");
-        return;
-      }
 
       if (actionId === "custom") {
         prompt = window.prompt("Describe what to do with this card:");
@@ -165,7 +193,7 @@ export function ContextMenu() {
         });
       }
     },
-    [targetCard, addCard, addEdge, updateCard, addMessage]
+    [targetCard, addCard, addEdge, updateCard, addMessage, prefillChat]
   );
 
   if (!visible || !targetCard) return null;
