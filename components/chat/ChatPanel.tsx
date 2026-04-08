@@ -64,6 +64,8 @@ export function ChatPanel() {
   const messagesEnd = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const messageQueue = useRef<string[]>([]);
+  const processingRef = useRef(false);
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -137,20 +139,40 @@ export function ChatPanel() {
     [addMessage]
   );
 
-  // --- Send (public for QuickActions) ---
-  const sendMessage = useCallback(
-    (text: string) => {
-      if (!text.trim() || isProcessing) return;
-      addMessage(text.trim(), "user");
-      setInput("");
+  // --- Process one message (internal) ---
+  const processOne = useCallback(
+    async (text: string) => {
+      addMessage(text, "user");
       const plugin = getActivePlugin();
       if (plugin) {
         const context = buildCanvasContext();
-        const gen = plugin.sendMessage(text.trim(), context);
-        consumeEvents(gen);
+        const gen = plugin.sendMessage(text, context);
+        await consumeEvents(gen);
       }
     },
-    [isProcessing, addMessage, consumeEvents]
+    [addMessage, consumeEvents]
+  );
+
+  // --- Drain queue sequentially ---
+  const drainQueue = useCallback(async () => {
+    if (processingRef.current) return;
+    processingRef.current = true;
+    while (messageQueue.current.length > 0) {
+      const next = messageQueue.current.shift()!;
+      await processOne(next);
+    }
+    processingRef.current = false;
+  }, [processOne]);
+
+  // --- Send: always accepts input, queues if busy ---
+  const sendMessage = useCallback(
+    (text: string) => {
+      if (!text.trim()) return;
+      setInput("");
+      messageQueue.current.push(text.trim());
+      drainQueue();
+    },
+    [drainQueue]
   );
 
   const handleSend = useCallback(() => {
@@ -282,15 +304,26 @@ export function ChatPanel() {
           {/* Input + Quick Actions */}
           <div className="border-t border-[var(--border)] p-2">
             <QuickActions onSend={sendMessage} setInput={setInput} focusInput={focusInput} />
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder="Create a dragon as image, then animate it..."
-              rows={1}
-              className="w-full resize-none rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
-            />
+            <div className="relative">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder={isProcessing ? "Type to queue next message..." : "Create a dragon as image, then animate it..."}
+                rows={1}
+                className={`w-full resize-none rounded-lg border bg-transparent px-3 py-2 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-dim)] ${
+                  isProcessing
+                    ? "border-yellow-400/30 focus:border-yellow-400/50"
+                    : "border-[var(--border)] focus:border-[var(--border-hover)]"
+                }`}
+              />
+              {messageQueue.current.length > 0 && (
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-yellow-400/20 px-1.5 py-0.5 text-[9px] text-yellow-400">
+                  {messageQueue.current.length} queued
+                </span>
+              )}
+            </div>
           </div>
         </>
       )}

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useChatStore } from "@/lib/chat/store";
 import { runInference } from "@/lib/sdk/client";
+import { resolveCapability } from "@/lib/sdk/capabilities";
 import type { Card } from "@/lib/canvas/types";
 
 interface MenuAction {
@@ -12,23 +13,31 @@ interface MenuAction {
   icon: string;
   forTypes: string[];
   requiresMedia: boolean;
+  /** "direct" runs inference immediately, "chat" sends to agent */
+  mode: "direct" | "chat";
 }
 
 const ACTIONS: MenuAction[] = [
-  { id: "animate", label: "Animate", icon: "\u25B6", forTypes: ["image"], requiresMedia: true },
-  { id: "restyle", label: "Restyle", icon: "\u2728", forTypes: ["image"], requiresMedia: true },
-  { id: "upscale", label: "Upscale", icon: "\u2B06", forTypes: ["image"], requiresMedia: true },
-  { id: "transform-video", label: "Transform Video", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true },
-  { id: "lv2v", label: "Live Stream", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true },
-  { id: "chat", label: "Ask Claude\u2026", icon: "\uD83D\uDCAC", forTypes: ["image", "video", "audio"], requiresMedia: false },
-  { id: "custom", label: "Custom Prompt\u2026", icon: "\u270F", forTypes: ["image", "video", "audio"], requiresMedia: false },
+  // --- Direct execution (one-click, no prompt needed) ---
+  { id: "upscale", label: "Upscale", icon: "\u2B06", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "remove-bg", label: "Remove Background", icon: "\u2702", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  // --- Direct execution with prompt ---
+  { id: "animate", label: "Animate\u2026", icon: "\u25B6", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "restyle", label: "Restyle\u2026", icon: "\u2728", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "transform-video", label: "Transform Video\u2026", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true, mode: "direct" },
+  // --- Agent-assisted (routes to chat) ---
+  { id: "agent-restyle", label: "Restyle with AI\u2026", icon: "\uD83E\uDD16", forTypes: ["image"], requiresMedia: true, mode: "chat" },
+  { id: "agent-animate", label: "Animate with AI\u2026", icon: "\uD83E\uDD16", forTypes: ["image"], requiresMedia: true, mode: "chat" },
+  { id: "agent-lv2v", label: "Live Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "chat" },
+  { id: "agent-ask", label: "Ask Claude\u2026", icon: "\uD83D\uDCAC", forTypes: ["image", "video", "audio"], requiresMedia: false, mode: "chat" },
 ];
 
-const ACTION_CONFIG: Record<string, { capability: string; newType: string; defaultPrompt?: string }> = {
+const DIRECT_CONFIG: Record<string, { capability: string; newType: string; defaultPrompt?: string }> = {
   animate: { capability: "ltx-i2v", newType: "video" },
   restyle: { capability: "kontext-edit", newType: "image" },
-  upscale: { capability: "topaz-upscale", newType: "image", defaultPrompt: "Upscale and enhance this image with sharp details" },
-  "transform-video": { capability: "wan-v2v", newType: "video" },
+  upscale: { capability: "topaz-upscale", newType: "image", defaultPrompt: "Upscale and enhance with sharp details" },
+  "remove-bg": { capability: "bg-remove", newType: "image", defaultPrompt: "Remove background" },
+  "transform-video": { capability: "ltx-t2v", newType: "video" },
 };
 
 export function ContextMenu() {
@@ -39,14 +48,9 @@ export function ContextMenu() {
   const { addCard, addEdge, updateCard } = useCanvasStore();
   const addMessage = useChatStore((s) => s.addMessage);
 
-  // Show on custom event (dispatched from Card right-click)
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as {
-        card: Card;
-        x: number;
-        y: number;
-      };
+      const detail = (e as CustomEvent).detail as { card: Card; x: number; y: number };
       setTargetCard(detail.card);
       setPos({ x: detail.x, y: detail.y });
       setVisible(true);
@@ -55,7 +59,6 @@ export function ContextMenu() {
     return () => window.removeEventListener("card-context-menu", handler);
   }, []);
 
-  // Dismiss
   useEffect(() => {
     if (!visible) return;
     const dismiss = () => setVisible(false);
@@ -67,88 +70,69 @@ export function ContextMenu() {
     };
   }, [visible]);
 
-  /** Dispatch a chat-prefill event so ChatPanel picks it up */
-  const prefillChat = useCallback(
-    (text: string, autoSend = false) => {
-      window.dispatchEvent(
-        new CustomEvent("chat-prefill", { detail: { text, autoSend } })
-      );
-    },
-    []
-  );
+  const prefillChat = useCallback((text: string) => {
+    window.dispatchEvent(new CustomEvent("chat-prefill", { detail: { text } }));
+  }, []);
+
+  const sendToAgent = useCallback((text: string) => {
+    window.dispatchEvent(new CustomEvent("chat-prefill", { detail: { text, autoSend: true } }));
+  }, []);
 
   const handleAction = useCallback(
-    async (actionId: string) => {
+    async (action: MenuAction) => {
       if (!targetCard) return;
       setVisible(false);
 
-      // --- Actions that route to chat ---
-      if (actionId === "chat") {
-        prefillChat(`Describe "${targetCard.title}" and suggest next steps`);
+      // --- Agent-assisted actions → route to chat ---
+      if (action.mode === "chat") {
+        const title = targetCard.title;
+        switch (action.id) {
+          case "agent-restyle":
+            prefillChat(`Restyle "${title}" in the style of `);
+            return;
+          case "agent-animate":
+            prefillChat(`Animate "${title}" with `);
+            return;
+          case "agent-lv2v":
+            sendToAgent(`Start a live video stream from "${title}"`);
+            return;
+          case "agent-ask":
+            prefillChat(`Describe "${title}" and suggest next steps`);
+            return;
+        }
         return;
       }
 
-      if (actionId === "restyle") {
-        prefillChat(`Restyle "${targetCard.title}" in the style of `);
-        return;
-      }
+      // --- Direct execution ---
+      const config = DIRECT_CONFIG[action.id];
+      if (!config) return;
 
-      if (actionId === "animate") {
-        prefillChat(`Animate "${targetCard.title}" with `);
-        return;
-      }
-
-      if (actionId === "lv2v") {
-        prefillChat(`Start a live video stream from "${targetCard.title}"`);
-        return;
-      }
-
-      // --- Actions that run directly ---
-      let prompt: string | null = null;
-      let capability: string;
-      let newType: string;
-
-      const config = ACTION_CONFIG[actionId];
-
-      if (actionId === "custom") {
-        prompt = window.prompt("Describe what to do with this card:");
+      let prompt = config.defaultPrompt || null;
+      if (!prompt) {
+        prompt = window.prompt(`${action.label.replace("\u2026", "")} — describe what you want:`);
         if (!prompt) return;
-        // Auto-detect type
-        const isVideo = /\b(animate|video|motion)\b/i.test(prompt);
-        capability = isVideo ? "ltx-i2v" : "kontext-edit";
-        newType = isVideo ? "video" : targetCard.type;
-      } else if (config) {
-        capability = config.capability;
-        newType = config.newType;
-        prompt = config.defaultPrompt || window.prompt(`${actionId} prompt:`) || null;
-        if (!prompt) return;
-      } else {
-        return;
       }
 
-      // Create new card
-      const newRefId = `${actionId}_${Date.now()}`;
+      // Resolve capability through live registry
+      const resolved = resolveCapability(config.capability, action.id) || config.capability;
+
+      const newRefId = `${action.id}_${Date.now()}`;
       const card = addCard({
-        type: newType as Card["type"],
+        type: config.newType as Card["type"],
         title: prompt.slice(0, 40),
         refId: newRefId,
       });
 
-      // Add edge
       addEdge(targetCard.refId, newRefId, {
-        capability,
+        capability: resolved,
         prompt,
-        action: actionId,
+        action: action.id,
       });
 
-      // Run inference
       try {
         const params: Record<string, unknown> = {};
         if (targetCard.url) {
-          if (
-            targetCard.type === "video" ||
-            actionId === "transform-video"
-          ) {
+          if (targetCard.type === "video" || action.id === "transform-video") {
             params.video_url = targetCard.url;
           } else {
             params.image_url = targetCard.url;
@@ -156,80 +140,82 @@ export function ContextMenu() {
         }
 
         const t0 = performance.now();
-        const result = await runInference({
-          capability,
-          prompt,
-          params,
-        });
+        const result = await runInference({ capability: resolved, prompt, params });
         const elapsed = performance.now() - t0;
 
         const r = result as Record<string, unknown>;
+        const data = (r.data ?? r) as Record<string, unknown>;
         const url =
           (r.image_url as string) ??
           (r.video_url as string) ??
-          (r.audio_url as string);
+          (r.audio_url as string) ??
+          (data.url as string);
 
         if (r.error) {
           updateCard(card.id, { error: r.error as string });
         } else if (url) {
           updateCard(card.id, { url });
-          addMessage(
-            `${actionId} — ${capability} (${(elapsed / 1000).toFixed(1)}s)`,
-            "agent"
-          );
+          addMessage(`${action.label.replace("\u2026", "")} — ${resolved} (${(elapsed / 1000).toFixed(1)}s)`, "agent");
         } else {
           updateCard(card.id, { error: "No media returned" });
         }
 
-        addEdge(targetCard.refId, newRefId, {
-          capability,
-          prompt,
-          action: actionId,
-          elapsed,
-        });
+        addEdge(targetCard.refId, newRefId, { capability: resolved, prompt, action: action.id, elapsed });
       } catch (e) {
-        updateCard(card.id, {
-          error: e instanceof Error ? e.message : "Unknown error",
-        });
+        updateCard(card.id, { error: e instanceof Error ? e.message : "Unknown error" });
       }
     },
-    [targetCard, addCard, addEdge, updateCard, addMessage, prefillChat]
+    [targetCard, addCard, addEdge, updateCard, addMessage, prefillChat, sendToAgent]
   );
 
   if (!visible || !targetCard) return null;
 
   const hasMedia = !!targetCard.url;
-  const visibleActions = ACTIONS.filter(
-    (a) =>
-      a.forTypes.includes(targetCard.type) &&
-      (!a.requiresMedia || hasMedia)
+  const directActions = ACTIONS.filter(
+    (a) => a.mode === "direct" && a.forTypes.includes(targetCard.type) && (!a.requiresMedia || hasMedia)
+  );
+  const chatActions = ACTIONS.filter(
+    (a) => a.mode === "chat" && a.forTypes.includes(targetCard.type) && (!a.requiresMedia || hasMedia)
   );
 
   return (
     <div
       ref={menuRef}
-      className="fixed z-[2500] min-w-[180px] overflow-hidden rounded-lg border border-[var(--border)] bg-[rgba(16,16,16,0.96)] py-1 shadow-[var(--shadow-lg)] backdrop-blur-xl backdrop-saturate-[1.3]"
+      className="fixed z-[2500] min-w-[200px] overflow-hidden rounded-lg border border-[var(--border)] bg-[rgba(16,16,16,0.96)] py-1 shadow-[var(--shadow-lg)] backdrop-blur-xl backdrop-saturate-[1.3]"
       style={{ left: pos.x, top: pos.y }}
       onClick={(e) => e.stopPropagation()}
     >
-      {visibleActions.map((action, i) => (
-        <div key={action.id}>
-          {i > 0 && action.id === "custom" && (
-            <div className="my-1 h-px bg-white/[0.06]" />
-          )}
-          <button
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
-            onClick={() => handleAction(action.id)}
-          >
-            <span className="w-4 text-center">{action.icon}</span>
-            {action.label}
-          </button>
-        </div>
+      {/* Direct actions */}
+      {directActions.map((action) => (
+        <button
+          key={action.id}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={() => handleAction(action)}
+        >
+          <span className="w-4 text-center">{action.icon}</span>
+          {action.label}
+        </button>
       ))}
-      {visibleActions.length === 0 && (
-        <div className="px-3 py-2 text-xs text-[var(--text-dim)]">
-          No actions available
-        </div>
+
+      {/* Separator */}
+      {directActions.length > 0 && chatActions.length > 0 && (
+        <div className="my-1 h-px bg-white/[0.06]" />
+      )}
+
+      {/* Agent-assisted actions */}
+      {chatActions.map((action) => (
+        <button
+          key={action.id}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-dim)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text-muted)]"
+          onClick={() => handleAction(action)}
+        >
+          <span className="w-4 text-center">{action.icon}</span>
+          {action.label}
+        </button>
+      ))}
+
+      {directActions.length === 0 && chatActions.length === 0 && (
+        <div className="px-3 py-2 text-xs text-[var(--text-dim)]">No actions available</div>
       )}
     </div>
   );
