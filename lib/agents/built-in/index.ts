@@ -82,6 +82,9 @@ function extractUrls(result: Record<string, unknown>): {
   const images = data.images as Array<{ url: string }> | undefined;
   const image = data.image as { url: string } | undefined;
   const video = data.video as { url: string } | undefined;
+  const audio = data.audio as { url: string } | undefined;
+  const audioFile = data.audio_file as { url: string } | undefined;
+  const output = data.output as { url: string } | undefined;
 
   return {
     imageUrl:
@@ -90,7 +93,13 @@ function extractUrls(result: Record<string, unknown>): {
       image?.url ??
       undefined,
     videoUrl: (result.video_url as string) ?? video?.url ?? undefined,
-    audioUrl: (result.audio_url as string) ?? undefined,
+    audioUrl:
+      (result.audio_url as string) ??
+      audio?.url ??
+      audioFile?.url ??
+      output?.url ??
+      (data.url as string) ??
+      undefined,
   };
 }
 

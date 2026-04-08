@@ -164,6 +164,9 @@ export const createMediaTool: ToolDefinition = {
         const images = data.images as Array<{ url: string }> | undefined;
         const image = data.image as { url: string } | undefined;
         const video = data.video as { url: string } | undefined;
+        const audio = data.audio as { url: string } | undefined;
+        const audioFile = data.audio_file as { url: string } | undefined;
+        const output = data.output as { url: string } | undefined;
 
         const url =
           (r.image_url as string) ??
@@ -171,7 +174,12 @@ export const createMediaTool: ToolDefinition = {
           image?.url ??
           (r.video_url as string) ??
           video?.url ??
-          (r.audio_url as string);
+          (r.audio_url as string) ??
+          audio?.url ??
+          audioFile?.url ??
+          output?.url ??
+          (data.url as string) ??
+          undefined;
 
         if (r.error) {
           canvas.updateCard(card.id, { error: r.error as string });
