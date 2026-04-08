@@ -124,12 +124,14 @@ export function startPolling(session: Lv2vSession, intervalMs = 200) {
 
 export async function controlStream(
   session: Lv2vSession,
-  prompt: string
+  prompt: string,
+  params?: Record<string, unknown>
 ): Promise<void> {
+  const payload: Record<string, unknown> = { prompts: prompt, ...params };
   await fetch(`${sdkUrl()}/stream/${session.streamId}/control`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...sdkHeaders() },
-    body: JSON.stringify({ type: "parameters", params: { prompts: prompt } }),
+    body: JSON.stringify({ type: "parameters", params: payload }),
   });
 }
 

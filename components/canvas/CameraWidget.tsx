@@ -7,6 +7,7 @@ import {
   waitForReady,
   startPublishing,
   startPolling,
+  controlStream,
   stopStream,
   type Lv2vSession,
 } from "@/lib/stream/session";
@@ -18,9 +19,13 @@ export function CameraWidget() {
   const [minimized, setMinimized] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [status, setStatus] = useState("");
+  const [promptInput, setPromptInput] = useState("");
+  const [currentPrompt, setCurrentPrompt] = useState("");
+  const [useAgent, setUseAgent] = useState(true);
   const videoRef = useRef<HTMLVideoElement>(null);
   const sessionRef = useRef<Lv2vSession | null>(null);
-  const { addCard, updateCard, addEdge } = useCanvasStore();
+  const promptRef = useRef<HTMLInputElement>(null);
+  const { addCard, updateCard } = useCanvasStore();
   const addMessage = useChatStore((s) => s.addMessage);
 
   const handleStart = useCallback(async () => {
@@ -44,6 +49,7 @@ export function CameraWidget() {
       stopStream(sessionRef.current);
       sessionRef.current = null;
       setStreaming(false);
+      setCurrentPrompt("");
     }
   }, []);
 
@@ -53,27 +59,25 @@ export function CameraWidget() {
     if (!prompt) return;
 
     setStreaming(true);
-    setStatus("Starting stream…");
+    setStatus("Starting stream\u2026");
+    setCurrentPrompt(prompt);
 
     try {
       const session = await startStream(prompt);
       sessionRef.current = session;
 
-      // Create stream card
       const card = addCard({
         type: "stream",
         title: `LV2V: ${prompt.slice(0, 30)}`,
         refId: `lv2v_${Date.now()}`,
       });
 
-      setStatus("Waiting for pipeline…");
+      setStatus("Waiting for pipeline\u2026");
       await waitForReady(session, (phase) => setStatus(phase));
 
-      // Publish webcam frames at ~10fps
       const video = videoRef.current!;
       startPublishing(session, () => captureFrame(video), 100);
 
-      // Poll output frames
       session.onFrame = (url) => {
         updateCard(card.id, { url });
       };
@@ -84,12 +88,70 @@ export function CameraWidget() {
     } catch (e) {
       setStreaming(false);
       setStatus("");
+      setCurrentPrompt("");
       addMessage(
         `LV2V error: ${e instanceof Error ? e.message : "Unknown"}`,
         "system"
       );
     }
-  }, [streaming, addCard, updateCard, addEdge, addMessage]);
+  }, [streaming, addCard, updateCard, addMessage]);
+
+  /** Send a direct control command to the LV2V stream */
+  const handleDirectControl = useCallback(
+    async (text: string) => {
+      if (!sessionRef.current || !text.trim()) return;
+      try {
+        await controlStream(sessionRef.current, text.trim());
+        setCurrentPrompt(text.trim());
+        addMessage(`LV2V prompt: ${text.trim()}`, "system");
+      } catch (e) {
+        addMessage(
+          `Control error: ${e instanceof Error ? e.message : "Unknown"}`,
+          "system"
+        );
+      }
+    },
+    [addMessage]
+  );
+
+  /** Send intent to the agent to interpret via live-director skill */
+  const handleAgentControl = useCallback(
+    (text: string) => {
+      if (!sessionRef.current || !text.trim()) return;
+      const streamId = sessionRef.current.streamId;
+      // Send to chat agent with context about the active stream
+      window.dispatchEvent(
+        new CustomEvent("chat-prefill", {
+          detail: {
+            text: `[LV2V stream ${streamId} active, current prompt: "${currentPrompt}"] ${text.trim()}`,
+            autoSend: true,
+          },
+        })
+      );
+    },
+    [currentPrompt]
+  );
+
+  const handlePromptSubmit = useCallback(() => {
+    const text = promptInput.trim();
+    if (!text) return;
+    setPromptInput("");
+    if (useAgent) {
+      handleAgentControl(text);
+    } else {
+      handleDirectControl(text);
+    }
+  }, [promptInput, useAgent, handleAgentControl, handleDirectControl]);
+
+  const handlePromptKey = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handlePromptSubmit();
+      }
+    },
+    [handlePromptSubmit]
+  );
 
   return (
     <div
@@ -121,13 +183,13 @@ export function CameraWidget() {
               onClick={() => setMinimized(!minimized)}
               className="flex h-[22px] w-[22px] items-center justify-center rounded bg-transparent text-xs text-[var(--text-dim)] hover:bg-white/[0.08]"
             >
-              {minimized ? "□" : "—"}
+              {minimized ? "\u25A1" : "\u2014"}
             </button>
             <button
               onClick={handleStop}
               className="flex h-[22px] w-[22px] items-center justify-center rounded bg-transparent text-xs text-[var(--text-dim)] hover:bg-white/[0.08] hover:text-red-500"
             >
-              ×
+              \u00D7
             </button>
           </>
         )}
@@ -141,19 +203,79 @@ export function CameraWidget() {
         )}
       </div>
 
-      {/* Video preview */}
-      {active && !minimized && (
-        <video
-          ref={videoRef}
-          autoPlay
-          muted
-          playsInline
-          className="w-full bg-black"
-        />
-      )}
-      {/* Hidden video for getUserMedia when not yet active */}
-      {!active && (
-        <video ref={videoRef} autoPlay muted playsInline className="hidden" />
+      {/* Video */}
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        className={active && !minimized ? "w-full bg-black" : "hidden"}
+      />
+
+      {/* LV2V Prompt Control Bar — visible when streaming */}
+      {streaming && !minimized && (
+        <div className="border-t border-[var(--border)] p-1.5">
+          {/* Current prompt display */}
+          {currentPrompt && (
+            <div className="mb-1 truncate text-[9px] text-[var(--text-dim)]">
+              \u25B6 {currentPrompt}
+            </div>
+          )}
+
+          {/* Mode toggle + input */}
+          <div className="flex gap-1">
+            <button
+              onClick={() => setUseAgent(!useAgent)}
+              title={useAgent ? "Agent mode: AI interprets your intent" : "Direct mode: sends raw prompt"}
+              className={`shrink-0 rounded px-1.5 py-1 text-[8px] font-semibold uppercase transition-colors ${
+                useAgent
+                  ? "bg-purple-500/20 text-purple-300"
+                  : "bg-white/[0.06] text-[var(--text-dim)]"
+              }`}
+            >
+              {useAgent ? "AI" : "RAW"}
+            </button>
+            <input
+              ref={promptRef}
+              value={promptInput}
+              onChange={(e) => setPromptInput(e.target.value)}
+              onKeyDown={handlePromptKey}
+              placeholder={
+                useAgent
+                  ? "make it dreamy, go wild, freeze..."
+                  : "oil painting warm colors..."
+              }
+              className="min-w-0 flex-1 rounded border border-[var(--border)] bg-transparent px-2 py-1 text-[10px] text-[var(--text)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
+            />
+            <button
+              onClick={handlePromptSubmit}
+              className="shrink-0 rounded bg-white/[0.08] px-2 py-1 text-[9px] text-[var(--text-muted)] transition-colors hover:bg-white/[0.12]"
+            >
+              \u21B5
+            </button>
+          </div>
+
+          {/* Quick presets */}
+          <div className="mt-1 flex flex-wrap gap-1">
+            {[
+              { label: "Dreamy", cmd: useAgent ? "make it dreamy" : "dreamy soft focus ethereal glow" },
+              { label: "Wild", cmd: useAgent ? "go wild" : "psychedelic fractal patterns neon" },
+              { label: "Freeze", cmd: useAgent ? "freeze this" : currentPrompt },
+              { label: "Paint", cmd: useAgent ? "make it look like a painting" : "oil painting warm colors visible brush strokes" },
+            ].map((p) => (
+              <button
+                key={p.label}
+                onClick={() => {
+                  if (useAgent) handleAgentControl(p.cmd);
+                  else handleDirectControl(p.cmd);
+                }}
+                className="rounded bg-white/[0.04] px-1.5 py-0.5 text-[8px] text-[var(--text-dim)] transition-colors hover:bg-white/[0.08] hover:text-[var(--text-muted)]"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

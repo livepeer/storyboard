@@ -86,14 +86,40 @@ export const streamStartTool: ToolDefinition = {
 export const streamControlTool: ToolDefinition = {
   name: "stream_control",
   description:
-    "Send a control command (e.g., change prompt) to an active LV2V stream.",
+    "Send a control command to an active LV2V stream. Change prompt, noise_scale, denoising steps, transitions, etc. Load the 'live-director' skill for parameter mapping.",
   parameters: {
     type: "object",
     properties: {
       stream_id: { type: "string", description: "Stream session ID" },
-      prompt: { type: "string", description: "New prompt for the stream" },
+      prompt: { type: "string", description: "New style prompt for the stream" },
+      noise_scale: { type: "number", description: "Creativity level 0.0-1.0 (lower=faithful, higher=creative)" },
+      kv_cache_attention_bias: { type: "number", description: "Responsiveness 0.01-1.0 (lower=responsive, higher=stable)" },
+      reset_cache: { type: "boolean", description: "Flush cache for dramatic style change" },
+      denoising_step_list: {
+        type: "array",
+        items: { type: "number" },
+        description: "Denoising steps e.g. [1000,750,500,250]. More=quality, fewer=speed",
+      },
+      transition: {
+        type: "object",
+        description: "Smooth style transition",
+        properties: {
+          target_prompts: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+                weight: { type: "number" },
+              },
+            },
+          },
+          num_steps: { type: "number", description: "Transition steps (default 8)" },
+          temporal_interpolation_method: { type: "string", description: "slerp or lerp" },
+        },
+      },
     },
-    required: ["stream_id", "prompt"],
+    required: ["stream_id"],
   },
   execute: async (input) => {
     const session = getSession(input.stream_id as string);
@@ -103,8 +129,13 @@ export const streamControlTool: ToolDefinition = {
         error: `Stream ${input.stream_id} not found`,
       };
     }
-    await controlStream(session, input.prompt as string);
-    return { success: true, data: { stream_id: session.streamId } };
+    const { stream_id, prompt, ...params } = input;
+    await controlStream(
+      session,
+      (prompt as string) || "",
+      params as Record<string, unknown>
+    );
+    return { success: true, data: { stream_id: session.streamId, applied: Object.keys(input).filter(k => k !== "stream_id") } };
   },
 };
 
