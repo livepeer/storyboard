@@ -72,18 +72,44 @@ export function CameraWidget() {
         refId: `lv2v_${Date.now()}`,
       });
 
-      setStatus("Waiting for pipeline\u2026");
+      setStatus("Waiting for pipeline (2-5 min cold start)\u2026");
+      addMessage("Waiting for pipeline to be ready (2-5 min on cold start)\u2026", "system");
       await waitForReady(session, (phase) => setStatus(phase));
 
+      // Camera sleep detection — browser may suspend camera during long pipeline wait
       const video = videoRef.current!;
+      if (!video.srcObject || video.videoWidth === 0) {
+        addMessage("Camera suspended during wait \u2014 restarting\u2026", "system");
+        setStatus("Restarting camera\u2026");
+        await startWebcam(video);
+        await new Promise((r) => setTimeout(r, 1000));
+        if (!video.srcObject || video.videoWidth === 0) {
+          addMessage("Camera unavailable \u2014 cannot publish frames", "system");
+          setStreaming(false);
+          setStatus("");
+          return;
+        }
+      }
+
+      addMessage("Pipeline ready \u2014 starting frame capture", "agent");
+
+      // Publish webcam frames at ~10fps (only AFTER pipeline ready)
       startPublishing(session, () => captureFrame(video), 100);
 
+      // Wire up callbacks
       session.onFrame = (url) => {
         updateCard(card.id, { url });
       };
+      session.onStatus = (msg) => {
+        setStatus(msg);
+      };
+      session.onError = (err) => {
+        addMessage(`LV2V: ${err}`, "system");
+      };
+
       startPolling(session, 200);
 
-      setStatus("Streaming");
+      setStatus("Publishing cam @ 10fps\u2026");
       addMessage(`LV2V stream started: ${prompt}`, "agent");
     } catch (e) {
       setStreaming(false);

@@ -8,6 +8,11 @@ export interface Lv2vSession {
   publishSeq: number;
   pollSeq: number;
   frameCount: number;
+  totalRecv: number;
+  publishOk: number;
+  publishErr: number;
+  consecutiveEmpty: number;
+  lastFpsTime: number;
   onFrame?: (url: string) => void;
   onStatus?: (msg: string) => void;
   onError?: (err: string) => void;
@@ -44,56 +49,99 @@ export async function startStream(prompt: string): Promise<Lv2vSession> {
     publishSeq: 0,
     pollSeq: -1,
     frameCount: 0,
+    totalRecv: 0,
+    publishOk: 0,
+    publishErr: 0,
+    consecutiveEmpty: 0,
+    lastFpsTime: Date.now(),
   };
   sessions.set(streamId, session);
   return session;
 }
 
+/**
+ * Wait for SDK background init to complete.
+ * Phases: connecting → waiting_runner → loading_pipeline → starting_stream → sending_prompt → ready
+ * The fal runner needs ~2-5 min on cold start. Frames sent before ready go to the wrong URL.
+ */
 export async function waitForReady(
   session: Lv2vSession,
   onStatus?: (phase: string) => void
 ): Promise<void> {
+  const PHASE_LABELS: Record<string, string> = {
+    connecting: "connecting to fal runner\u2026",
+    waiting_runner: "waiting for fal runner to start\u2026",
+    loading_pipeline: "loading pipeline (downloading model weights)\u2026",
+    starting_stream: "starting media stream\u2026",
+    sending_prompt: "sending prompt\u2026",
+    ready: "ready!",
+  };
+
+  let lastPhase = "";
   for (let i = 0; i < 600; i++) {
+    // up to 10 min
     if (session.stopped) throw new Error("Stream stopped");
-    const resp = await fetch(`${sdkUrl()}/stream/${session.streamId}/status`, {
-      headers: sdkHeaders(),
-    });
-    const st = await resp.json();
-    const phase = st.status || st.phase || "unknown";
-    onStatus?.(phase);
-    if (phase === "ready" || phase === "running") return;
-    if (phase === "failed" || phase === "error") {
-      throw new Error(`Stream failed: ${st.error || phase}`);
+    try {
+      const resp = await fetch(
+        `${sdkUrl()}/stream/${session.streamId}/status`,
+        { headers: sdkHeaders() }
+      );
+      const st = await resp.json();
+      const phase = st.phase || st.status || "unknown";
+
+      if (phase !== lastPhase) {
+        lastPhase = phase;
+        onStatus?.(PHASE_LABELS[phase] || phase);
+      }
+
+      if (phase === "error" || phase === "failed") {
+        throw new Error(`Pipeline error: ${st.error || phase}`);
+      }
+
+      // The original uses st.ready (boolean) as the definitive check
+      if (st.ready || phase === "ready" || phase === "running") return;
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith("Pipeline error:")) throw e;
+      // Status not available yet — keep polling
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
-  throw new Error("Stream start timeout");
+  throw new Error("Stream start timeout (10 min)");
 }
 
+/**
+ * Publish webcam frames at ~10fps.
+ * Uses async toBlob for reliable frame capture (matching original storyboard).
+ * Only call AFTER waitForReady — frames sent before ready go to wrong URL.
+ */
 export function startPublishing(
   session: Lv2vSession,
   getFrame: () => Blob | null,
   intervalMs = 100
 ) {
+  const headers = { "Content-Type": "image/jpeg", ...sdkHeaders() };
+
   session.publishTimer = setInterval(async () => {
     if (session.stopped) return;
     const blob = getFrame();
-    if (!blob) return;
+    if (!blob || blob.size === 0) return;
     try {
-      await fetch(
+      const r = await fetch(
         `${sdkUrl()}/stream/${session.streamId}/publish?seq=${session.publishSeq++}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "image/jpeg", ...sdkHeaders() },
-          body: blob,
-        }
+        { method: "POST", headers, body: blob }
       );
+      if (r.ok) session.publishOk++;
+      else session.publishErr++;
     } catch {
-      // Publish errors are non-fatal
+      session.publishErr++;
     }
   }, intervalMs);
 }
 
+/**
+ * Poll for output frames + dead stream detection.
+ * Matches the original storyboard's polling logic.
+ */
 export function startPolling(session: Lv2vSession, intervalMs = 200) {
   session.pollTimer = setInterval(async () => {
     if (session.stopped) return;
@@ -104,7 +152,7 @@ export function startPolling(session: Lv2vSession, intervalMs = 200) {
       );
       if (
         resp.status === 200 &&
-        resp.headers.get("content-type")?.includes("image")
+        (resp.headers.get("content-type") || "").includes("image")
       ) {
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
@@ -114,7 +162,48 @@ export function startPolling(session: Lv2vSession, intervalMs = 200) {
         );
         session.pollSeq = seq;
         session.frameCount++;
+        session.totalRecv++;
+        session.consecutiveEmpty = 0;
         session.onFrame?.(url);
+
+        // FPS reporting every 3s
+        const now = Date.now();
+        if (now - session.lastFpsTime > 3000) {
+          const fps = (
+            session.frameCount /
+            ((now - session.lastFpsTime) / 1000)
+          ).toFixed(1);
+          session.onStatus?.(
+            `${fps}fps | recv:${session.totalRecv} | pub:${session.publishOk}${session.publishErr ? " err:" + session.publishErr : ""}`
+          );
+          session.frameCount = 0;
+          session.lastFpsTime = now;
+        }
+
+        if (session.totalRecv === 1) {
+          session.onStatus?.("First output frame received!");
+        }
+      } else {
+        session.consecutiveEmpty++;
+
+        // Status update every ~3s while waiting
+        if (session.consecutiveEmpty % 15 === 0) {
+          session.onStatus?.(
+            `waiting for output\u2026 | pub:${session.publishOk}${session.publishErr ? " err:" + session.publishErr : ""}`
+          );
+        }
+
+        // Dead stream detection: publishing but never receiving after 60s
+        if (
+          session.consecutiveEmpty > 300 &&
+          session.publishOk > 100 &&
+          session.totalRecv === 0
+        ) {
+          session.onError?.(
+            `Stream appears dead \u2014 published ${session.publishOk} frames but received none`
+          );
+          session.consecutiveEmpty = 0; // don't spam
+        }
       }
     } catch {
       // Poll errors are non-fatal
@@ -127,7 +216,8 @@ export async function controlStream(
   prompt: string,
   params?: Record<string, unknown>
 ): Promise<void> {
-  const payload: Record<string, unknown> = { prompts: prompt, ...params };
+  const payload: Record<string, unknown> = { ...params };
+  if (prompt) payload.prompts = prompt;
   await fetch(`${sdkUrl()}/stream/${session.streamId}/control`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...sdkHeaders() },
