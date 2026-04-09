@@ -4,6 +4,7 @@ import { useCallback, useRef } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { Card } from "./Card";
 import { ArrowLayer } from "./ArrowEdge";
+import { EdgeInfoPopup } from "./EdgeInfoPopup";
 
 export function InfiniteCanvas() {
   const { viewport, cards, setViewport, zoomTo, selectCard, selectEdge } =
@@ -84,6 +85,7 @@ export function InfiniteCanvas() {
             <Card card={card} />
           </div>
         ))}
+        <EdgeInfoPopup />
       </div>
     </div>
   );

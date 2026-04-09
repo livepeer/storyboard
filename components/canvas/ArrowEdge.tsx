@@ -1,9 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 
 export function ArrowLayer() {
   const { cards, edges, selectedEdgeIdx, selectEdge } = useCanvasStore();
+  const [hoveredIdx, setHoveredIdx] = useState(-1);
 
   const cardByRef = new Map(cards.map((c) => [c.refId, c]));
 
@@ -26,6 +28,32 @@ export function ArrowLayer() {
             fill="rgba(255,255,255,0.25)"
           />
         </marker>
+        <marker
+          id="arrowhead-hover"
+          markerWidth="8"
+          markerHeight="6"
+          refX="8"
+          refY="3"
+          orient="auto"
+        >
+          <polygon
+            points="0 0, 8 3, 0 6"
+            fill="rgba(139,92,246,0.6)"
+          />
+        </marker>
+        <marker
+          id="arrowhead-selected"
+          markerWidth="8"
+          markerHeight="6"
+          refX="8"
+          refY="3"
+          orient="auto"
+        >
+          <polygon
+            points="0 0, 8 3, 0 6"
+            fill="rgba(139,92,246,0.85)"
+          />
+        </marker>
       </defs>
       {edges.map((edge, idx) => {
         const from = cardByRef.get(edge.fromRefId);
@@ -43,35 +71,51 @@ export function ArrowLayer() {
         const d = `M ${x1} ${y1} C ${x1 + pull} ${y1}, ${x2 - pull} ${y2}, ${x2} ${y2}`;
 
         const isSelected = selectedEdgeIdx === idx;
+        const isHovered = hoveredIdx === idx;
+
+        const stroke = isSelected
+          ? "rgba(139,92,246,0.85)"
+          : isHovered
+            ? "rgba(139,92,246,0.5)"
+            : "rgba(255,255,255,0.18)";
+        const strokeWidth = isSelected ? 3 : isHovered ? 2.5 : 2;
+        const marker = isSelected
+          ? "url(#arrowhead-selected)"
+          : isHovered
+            ? "url(#arrowhead-hover)"
+            : "url(#arrowhead)";
 
         return (
           <g key={`${edge.fromRefId}-${edge.toRefId}`}>
-            {/* Hit area — wide invisible path for click/hover */}
+            {/* Hit area */}
             <path
               d={d}
               fill="none"
               stroke="transparent"
               strokeWidth={24}
               className="pointer-events-stroke cursor-pointer"
-              onClick={() => selectEdge(idx)}
+              onMouseEnter={() => setHoveredIdx(idx)}
+              onMouseLeave={() => setHoveredIdx(-1)}
+              onClick={(e) => {
+                e.stopPropagation();
+                selectEdge(isSelected ? -1 : idx);
+              }}
             />
             {/* Visible path */}
             <path
               d={d}
               fill="none"
-              stroke={
-                isSelected
-                  ? "rgba(139,92,246,0.85)"
-                  : "rgba(255,255,255,0.18)"
-              }
-              strokeWidth={isSelected ? 3 : 2}
-              strokeDasharray={isSelected ? "none" : "6 4"}
-              markerEnd="url(#arrowhead)"
+              stroke={stroke}
+              strokeWidth={strokeWidth}
+              strokeDasharray={isSelected || isHovered ? "none" : "6 4"}
+              markerEnd={marker}
               className="pointer-events-none transition-[stroke,stroke-width] duration-75"
               style={
                 isSelected
                   ? { filter: "drop-shadow(0 0 6px rgba(139,92,246,0.4))" }
-                  : undefined
+                  : isHovered
+                    ? { filter: "drop-shadow(0 0 4px rgba(139,92,246,0.2))" }
+                    : undefined
               }
             />
           </g>
