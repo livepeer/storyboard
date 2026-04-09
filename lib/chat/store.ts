@@ -26,7 +26,7 @@ export const useChatStore = create<ChatState>((set) => ({
       id: "0",
       role: "system",
       text: "Connected — describe what you want to create",
-      timestamp: Date.now(),
+      timestamp: 0, // Static to avoid SSR hydration mismatch
     },
   ],
   isProcessing: false,
@@ -51,7 +51,7 @@ export const useChatStore = create<ChatState>((set) => ({
           id: String(++nextMsgId),
           role: "system",
           text: "Cleared — describe what you want to create",
-          timestamp: Date.now(),
+          timestamp: 0,
         },
       ],
     }),
