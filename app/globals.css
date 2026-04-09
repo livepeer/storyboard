@@ -40,6 +40,38 @@ body {
   cursor: default;
 }
 
+/* Arrow SVG — matching original storyboard's CSS exactly */
+.arrows-svg {
+  pointer-events: none;
+  z-index: 0;
+  overflow: visible;
+}
+.arrows-svg .arrow-visible {
+  fill: none;
+  stroke: rgba(255,255,255,0.18);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+  transition: stroke 0.05s, stroke-width 0.05s, filter 0.05s;
+}
+.arrows-svg .arrow-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 24;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.arrows-svg .arrow-visible.arrow-hover {
+  stroke: rgba(255,255,255,0.6);
+  stroke-width: 3;
+}
+.arrows-svg .arrow-visible.arrow-selected {
+  stroke: rgba(139,92,246,0.85);
+  stroke-width: 3;
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 6px rgba(139,92,246,0.4));
+}
+
 /* Agent thinking dots */
 .thinking-dot {
   display: inline-block;
