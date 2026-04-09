@@ -4,7 +4,7 @@ import { useCallback, useRef } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { Card } from "./Card";
 import { ArrowLayer } from "./ArrowEdge";
-import { EdgeInfoPopup } from "./EdgeInfoPopup";
+// EdgeInfoPopup is now inline in ArrowLayer (no separate component)
 
 export function InfiniteCanvas() {
   const { viewport, cards, setViewport, zoomTo, selectCard, selectEdge } =
@@ -86,8 +86,7 @@ export function InfiniteCanvas() {
           </div>
         ))}
       </div>
-      {/* Edge info popup — rendered outside transform so it's not affected by pan/zoom */}
-      <EdgeInfoPopup />
+      {/* Edge popup is inline in ArrowLayer */}
     </div>
   );
 }

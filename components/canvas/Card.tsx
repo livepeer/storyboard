@@ -130,16 +130,10 @@ export function Card({ card }: { card: CardData }) {
         onPointerUp={onDragEnd}
       >
         <span
-          className="group/badge relative shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+          className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
           style={{ color: colors.text, background: colors.bg }}
         >
           {card.type}
-          {/* Tooltip on hover — shows model info if card was created by a transformation */}
-          {tooltipText && (
-            <div className="pointer-events-none absolute left-0 top-full z-[3000] mt-1 hidden w-[200px] rounded-lg border border-[var(--border)] bg-[rgba(16,16,16,0.97)] px-3 py-2 text-[10px] font-normal normal-case tracking-normal shadow-[var(--shadow-lg)] group-hover/badge:block">
-              <div className="whitespace-pre-wrap text-[var(--text-muted)]">{tooltipText}</div>
-            </div>
-          )}
         </span>
         <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--text-muted)]">
           {card.title}
@@ -190,6 +184,29 @@ export function Card({ card }: { card: CardData }) {
               <span className="font-mono text-[11px] text-[var(--text-dim)]">
                 Generating…
               </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Model info bar — shows when card is selected and has an incoming transformation */}
+      {isSelected && incomingEdge?.meta && !card.minimized && (
+        <div style={{
+          borderTop: "1px solid rgba(139,92,246,0.3)",
+          background: "rgba(139,92,246,0.08)",
+          padding: "6px 10px",
+          fontSize: 10,
+          color: "#c4b5fd",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+            <span style={{ fontWeight: 600 }}>{incomingEdge.meta.capability || "transform"}</span>
+            <span style={{ color: "#34d399" }}>
+              {incomingEdge.meta.elapsed ? `${(incomingEdge.meta.elapsed / 1000).toFixed(1)}s` : ""}
+            </span>
+          </div>
+          {incomingEdge.meta.prompt && (
+            <div style={{ color: "var(--text-muted)", fontSize: 9, lineHeight: 1.4 }}>
+              {incomingEdge.meta.prompt.length > 80 ? incomingEdge.meta.prompt.slice(0, 80) + "\u2026" : incomingEdge.meta.prompt}
             </div>
           )}
         </div>

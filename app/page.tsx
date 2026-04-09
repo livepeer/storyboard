@@ -37,6 +37,11 @@ export default function Home() {
       setActivePlugin("built-in");
     }
 
+    // Expose store for testing/debugging
+    import("@/lib/canvas/store").then(m => {
+      (window as any).__canvas = m.useCanvasStore;
+    });
+
     setMounted(true);
   }, []);
 
