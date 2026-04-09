@@ -12,7 +12,7 @@ export function ArrowLayer() {
   return (
     <svg
       className="absolute left-0 top-0 h-full w-full overflow-visible"
-      style={{ zIndex: 1 }}
+      style={{ zIndex: 1, pointerEvents: "none" }}
     >
       <defs>
         <marker
