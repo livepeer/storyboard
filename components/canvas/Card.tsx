@@ -112,7 +112,6 @@ export function Card({ card }: { card: CardData }) {
         width: card.w,
         height: card.minimized ? 36 : card.h,
       }}
-      title={tooltipText}
       onPointerDown={() => selectCard(card.id)}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -131,10 +130,16 @@ export function Card({ card }: { card: CardData }) {
         onPointerUp={onDragEnd}
       >
         <span
-          className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+          className="group/badge relative shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
           style={{ color: colors.text, background: colors.bg }}
         >
           {card.type}
+          {/* Tooltip on hover — shows model info if card was created by a transformation */}
+          {tooltipText && (
+            <div className="pointer-events-none absolute left-0 top-full z-[3000] mt-1 hidden w-[200px] rounded-lg border border-[var(--border)] bg-[rgba(16,16,16,0.97)] px-3 py-2 text-[10px] font-normal normal-case tracking-normal shadow-[var(--shadow-lg)] group-hover/badge:block">
+              <div className="whitespace-pre-wrap text-[var(--text-muted)]">{tooltipText}</div>
+            </div>
+          )}
         </span>
         <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--text-muted)]">
           {card.title}

@@ -85,8 +85,9 @@ export function InfiniteCanvas() {
             <Card card={card} />
           </div>
         ))}
-        <EdgeInfoPopup />
       </div>
+      {/* Edge info popup — rendered outside transform so it's not affected by pan/zoom */}
+      <EdgeInfoPopup />
     </div>
   );
 }

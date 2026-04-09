@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 
 export function EdgeInfoPopup() {
-  const { edges, cards, selectedEdgeIdx, selectEdge } = useCanvasStore();
+  const { edges, cards, viewport, selectedEdgeIdx, selectEdge } = useCanvasStore();
   const popupRef = useRef<HTMLDivElement>(null);
 
   const edge = selectedEdgeIdx >= 0 ? edges[selectedEdgeIdx] : null;
@@ -19,7 +19,7 @@ export function EdgeInfoPopup() {
         selectEdge(-1);
       }
     };
-    const timer = setTimeout(() => window.addEventListener("click", dismiss), 10);
+    const timer = setTimeout(() => window.addEventListener("click", dismiss), 50);
     return () => {
       clearTimeout(timer);
       window.removeEventListener("click", dismiss);
@@ -34,18 +34,20 @@ export function EdgeInfoPopup() {
   const action = m.action || "transform";
   const prompt = m.prompt || "";
 
-  // Position near the midpoint of the edge
-  const midX = (fromCard.x + fromCard.w + toCard.x) / 2;
-  const midY = (fromCard.y + fromCard.h / 2 + toCard.y + toCard.h / 2) / 2;
+  // Convert world coordinates to screen coordinates using viewport transform
+  const worldMidX = (fromCard.x + fromCard.w + toCard.x) / 2;
+  const worldMidY = (fromCard.y + fromCard.h / 2 + toCard.y + toCard.h / 2) / 2;
+  const screenX = worldMidX * viewport.scale + viewport.panX + 20;
+  const screenY = worldMidY * viewport.scale + viewport.panY - 60;
 
   return (
     <div
       ref={popupRef}
-      className="absolute z-[2000] w-[320px] overflow-hidden rounded-xl border border-[var(--border)] bg-[rgba(16,16,16,0.97)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
-      style={{ left: midX + 20, top: midY - 60 }}
+      className="fixed z-[2500] w-[320px] overflow-hidden rounded-xl border border-[var(--border)] bg-[rgba(16,16,16,0.97)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
+      style={{ left: screenX, top: screenY }}
       onClick={(e) => e.stopPropagation()}
     >
-      {/* Header: icon + capability + type */}
+      {/* Header */}
       <div className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-3">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-500/15 text-sm text-purple-300">
           {action === "animate" ? "\u25B6" : action === "tts" ? "\u266B" : "\u25A2"}
@@ -67,7 +69,7 @@ export function EdgeInfoPopup() {
         </div>
       </div>
 
-      {/* Stats: model + latency */}
+      {/* Stats */}
       <div className="flex border-b border-white/[0.06]">
         <div className="flex-1 border-r border-white/[0.06] px-4 py-2.5">
           <div className="text-[9px] font-medium uppercase tracking-wider text-[var(--text-dim)]">Model</div>
@@ -81,7 +83,7 @@ export function EdgeInfoPopup() {
 
       {/* Prompt */}
       {prompt && (
-        <div className="border-b border-white/[0.06] px-4 py-2.5">
+        <div className="px-4 py-2.5">
           <div className="text-[9px] font-medium uppercase tracking-wider text-[var(--text-dim)]">Prompt</div>
           <div className="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">
             {prompt.length > 200 ? prompt.slice(0, 200) + "\u2026" : prompt}
