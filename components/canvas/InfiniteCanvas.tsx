@@ -61,13 +61,14 @@ export function InfiniteCanvas() {
       onPointerUp={onPointerUp}
       onWheel={onWheel}
     >
-      {/* Dot grid background */}
+      {/* Dot grid — moves with pan/zoom to give sense of scale */}
       <div
-        className="pointer-events-none absolute inset-0 opacity-15"
+        className="pointer-events-none absolute inset-0"
         style={{
           backgroundImage:
-            "radial-gradient(circle at 1px 1px, var(--text-dim) 0.5px, transparent 0)",
-          backgroundSize: "40px 40px",
+            "radial-gradient(circle at 1px 1px, rgba(255,255,255,0.12) 0.8px, transparent 0)",
+          backgroundSize: `${40 * viewport.scale}px ${40 * viewport.scale}px`,
+          backgroundPosition: `${viewport.panX}px ${viewport.panY}px`,
         }}
       />
       {/* Transformed canvas layer */}
