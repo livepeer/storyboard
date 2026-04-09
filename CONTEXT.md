@@ -26,7 +26,7 @@ Storyboard A3 is a Next.js 16 app that migrates the 4,007-line `storyboard.html`
 | Service | URL |
 |---------|-----|
 | **Vercel app** | https://storyboard-rust.vercel.app |
-| **SDK service** | https://sdk-a3-staging-1.daydream.monster |
+| **SDK service** | https://sdk.daydream.monster |
 | **BYOC orchestrator** | https://byoc-a3-staging-1.daydream.monster:8935 |
 | **GitHub repo** | https://github.com/livepeer/storyboard |
 

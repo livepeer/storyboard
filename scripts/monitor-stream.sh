@@ -3,7 +3,7 @@
 # Usage: ./scripts/monitor-stream.sh <stream_id> [sdk_url] [api_key]
 
 STREAM_ID="${1:?Usage: $0 <stream_id> [sdk_url] [api_key]}"
-SDK_URL="${2:-https://sdk-a3-staging-1.daydream.monster}"
+SDK_URL="${2:-https://sdk.daydream.monster}"
 API_KEY="${3:-}"
 
 AUTH=""

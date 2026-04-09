@@ -11,7 +11,7 @@ test("Gemini makes tool calls for simple image generation", async ({ page }) => 
   let geminiCalled = false;
 
   // Mock SDK inference
-  await page.route("**/sdk-a3-staging-1.daydream.monster/inference", async (route) => {
+  await page.route("**/sdk.daydream.monster/inference", async (route) => {
     const body = route.request().postData() || "";
     try {
       const parsed = JSON.parse(body);
@@ -24,7 +24,7 @@ test("Gemini makes tool calls for simple image generation", async ({ page }) => 
     });
   });
 
-  await page.route("**/sdk-a3-staging-1.daydream.monster/capabilities", (route) => route.continue());
+  await page.route("**/sdk.daydream.monster/capabilities", (route) => route.continue());
 
   // Track Gemini calls
   await page.route("**/api/agent/gemini", async (route) => {

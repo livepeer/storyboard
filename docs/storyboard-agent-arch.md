@@ -55,7 +55,7 @@
             │  │         ▼
             │  │  ┌─────────────────────────────┐
             │  │  │ SDK Service                  │
-            │  │  │ sdk-a3-staging-1.daydream.monster │
+            │  │  │ sdk.daydream.monster │
             │  │  │                               │
             │  │  │ /capabilities → live model list│
             │  │  │ /inference   → run model       │

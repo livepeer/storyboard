@@ -16,7 +16,7 @@ describe("SDK Client", () => {
   describe("loadConfig", () => {
     it("returns defaults when localStorage is empty", () => {
       const config = loadConfig();
-      expect(config.serviceUrl).toBe("https://sdk-a3-staging-1.daydream.monster");
+      expect(config.serviceUrl).toBe("https://sdk.daydream.monster");
       expect(config.apiKey).toBe("");
       expect(config.orchUrl).toBe("");
     });

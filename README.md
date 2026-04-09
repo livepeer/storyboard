@@ -155,7 +155,7 @@ Open http://localhost:3000. The app connects to the staging SDK service by defau
 ### Configuration
 
 Click the gear icon (top right) to configure:
-- **SDK Service URL** — defaults to `https://sdk-a3-staging-1.daydream.monster`
+- **SDK Service URL** — defaults to `https://sdk.daydream.monster`
 - **API Key** — optional, for authenticated access
 
 Settings are saved to localStorage.

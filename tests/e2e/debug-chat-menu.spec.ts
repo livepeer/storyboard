@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 test.describe("Debug: Chat + Context Menu", () => {
   test("Context menu appears on right-click", async ({ page }) => {
     // Mock SDK
-    await page.route("**/sdk-a3-staging-1.daydream.monster/**", async (route) => {
+    await page.route("**/sdk.daydream.monster/**", async (route) => {
       const url = route.request().url();
       if (url.includes("/inference")) {
         await route.fulfill({

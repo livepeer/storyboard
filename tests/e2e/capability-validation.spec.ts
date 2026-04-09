@@ -24,7 +24,7 @@ test.describe("Capability Validation", () => {
     const sdkRequests: Array<{ url: string; body: string }> = [];
 
     // Intercept all requests to the SDK
-    await page.route("**/sdk-a3-staging-1.daydream.monster/**", async (route) => {
+    await page.route("**/sdk.daydream.monster/**", async (route) => {
       const request = route.request();
       const body = request.postData() || "";
       sdkRequests.push({ url: request.url(), body });

@@ -25,14 +25,14 @@ test("Debug Gemini full flow", async ({ page }) => {
   });
 
   // Mock SDK to avoid real inference
-  await page.route("**/sdk-a3-staging-1.daydream.monster/inference", async (route) => {
+  await page.route("**/sdk.daydream.monster/inference", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ image_url: "https://example.com/test.png" }),
     });
   });
-  await page.route("**/sdk-a3-staging-1.daydream.monster/capabilities", (route) => route.continue());
+  await page.route("**/sdk.daydream.monster/capabilities", (route) => route.continue());
 
   await page.goto("/");
   await page.evaluate(() => localStorage.setItem("storyboard_active_agent", "gemini"));

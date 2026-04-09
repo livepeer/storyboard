@@ -147,7 +147,7 @@ User types "create a dragon" in ChatPanel
 
 ### Infrastructure ready
 
-- SDK: `https://sdk-a3-staging-1.daydream.monster` (healthy, 12 capabilities)
+- SDK: `https://sdk.daydream.monster` (healthy, 12 capabilities)
 - Vercel: `https://storyboard-rust.vercel.app` (deployed)
 - API route: `app/api/agent/chat/route.ts` (exists, needs Anthropic proxy implementation)
 - Env var needed: `ANTHROPIC_API_KEY` (set via `vercel env add`)

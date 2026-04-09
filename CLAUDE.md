@@ -96,7 +96,7 @@ Phases 0-7 complete. Build passes. All tests pass (110 unit + 6 E2E). 15 tools, 
 ## Infrastructure — Deployed
 | VM | Type | IP | Domain |
 |----|------|-----|--------|
-| `sdk-a3-staging-1` | e2-small | 34.83.203.245 | sdk-a3-staging-1.daydream.monster |
+| `sdk-a3-staging-1` | e2-small | 34.83.203.245 | sdk.daydream.monster |
 | `byoc-a3-staging-1` | e2-medium | 136.109.56.80 | byoc-a3-staging-1.daydream.monster |
 
 Config: `/Users/qiang.han/Documents/mycodespace/simple-infra/environments/staging/byoc-a3.yaml`

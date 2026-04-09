@@ -44,7 +44,7 @@ test.describe("Gemini Workflow E2E", () => {
       const toolsCalled: string[] = [];
 
       // Intercept SDK requests — mock success
-      await page.route("**/sdk-a3-staging-1.daydream.monster/inference", async (route) => {
+      await page.route("**/sdk.daydream.monster/inference", async (route) => {
         const body = route.request().postData() || "";
         try {
           const parsed = JSON.parse(body);
@@ -62,7 +62,7 @@ test.describe("Gemini Workflow E2E", () => {
       });
 
       // Let capabilities through
-      await page.route("**/sdk-a3-staging-1.daydream.monster/capabilities", async (route) => {
+      await page.route("**/sdk.daydream.monster/capabilities", async (route) => {
         await route.continue();
       });
 

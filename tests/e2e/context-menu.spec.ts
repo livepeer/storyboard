@@ -19,14 +19,14 @@ test.describe("Context Menu & Card Transformations", () => {
     await page.waitForTimeout(2000);
 
     // Mock SDK so inference returns immediately
-    await page.route("**/sdk-a3-staging-1.daydream.monster/inference", async (route) => {
+    await page.route("**/sdk.daydream.monster/inference", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({ image_url: "https://example.com/test.png" }),
       });
     });
-    await page.route("**/sdk-a3-staging-1.daydream.monster/enrich**", async (route) => {
+    await page.route("**/sdk.daydream.monster/enrich**", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -41,7 +41,7 @@ test.describe("Context Menu & Card Transformations", () => {
         }),
       });
     });
-    await page.route("**/sdk-a3-staging-1.daydream.monster/capabilities", (r) => r.continue());
+    await page.route("**/sdk.daydream.monster/capabilities", (r) => r.continue());
 
     // Send a message to create a card
     const input = page.locator("textarea");
@@ -90,7 +90,7 @@ test.describe("Context Menu & Card Transformations", () => {
     await page.waitForTimeout(2000);
 
     // Mock capabilities
-    await page.route("**/sdk-a3-staging-1.daydream.monster/capabilities", async (route) => {
+    await page.route("**/sdk.daydream.monster/capabilities", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",

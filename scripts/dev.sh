@@ -55,7 +55,7 @@ cmd_dev() {
   check_prereqs
   install_deps
   log "Starting dev server on http://localhost:3000"
-  dim "SDK: https://sdk-a3-staging-1.daydream.monster"
+  dim "SDK: https://sdk.daydream.monster"
   dim "Press Ctrl+C to stop"
   echo ""
   npm run dev
