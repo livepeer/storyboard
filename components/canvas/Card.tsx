@@ -161,16 +161,14 @@ export function Card({ card }: { card: CardData }) {
           ) : card.url ? (
             card.type === "audio" ? (
               <audio src={card.url} controls className="mx-3 h-10 w-[calc(100%-24px)]" />
-            ) : card.type === "video" || card.type === "stream" ? (
+            ) : card.type === "video" ? (
               <video
                 src={card.url}
-                controls={card.type === "video"}
-                autoPlay={card.type === "stream"}
-                muted={card.type === "stream"}
-                loop={card.type === "stream"}
+                controls
                 className="h-full w-full object-contain"
               />
             ) : (
+              // Images AND streams use <img> — LV2V streams are JPEG frames, not video URLs
               // eslint-disable-next-line @next/next/no-img-element
               <img src={card.url} alt={card.title} className="h-full w-full object-contain" />
             )
