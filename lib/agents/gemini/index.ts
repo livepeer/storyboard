@@ -110,7 +110,7 @@ export const geminiPlugin: AgentPlugin = {
   id: "gemini",
   name: "Gemini Agent",
   description:
-    "Google Gemini 2.5 Pro with function calling — best reasoning, multimodal, 1M context.",
+    "Google Gemini 2.5 Flash with function calling — fast, multimodal, 1M context.",
   configFields: [
     {
       key: "gemini_api_key",
@@ -143,6 +143,7 @@ export const geminiPlugin: AgentPlugin = {
       messages.push({ role: "user", parts: [{ text }] });
 
       // Tool-use loop
+      let lastRoundHadToolCalls = false;
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         if (stopped) {
           yield { type: "text", content: "Stopped." };
@@ -178,12 +179,18 @@ export const geminiPlugin: AgentPlugin = {
         }
 
         const candidate = response.candidates?.[0];
-        if (!candidate) {
-          yield { type: "error", content: "No response from Gemini" };
+        if (!candidate?.content?.parts) {
+          const reason = candidate?.finishReason || "No response";
+          if (lastRoundHadToolCalls) {
+            say("Check Settings — Daydream API key may be missing or inference failed.", "system");
+            yield { type: "error", content: "Tool execution may have failed. Check Daydream API key in Settings." };
+          } else {
+            yield { type: "error", content: `Gemini: ${reason}` };
+          }
           break;
         }
 
-        const parts = candidate.content.parts || [];
+        const parts = candidate.content.parts;
         const functionCalls: Array<{ name: string; id?: string; args: Record<string, unknown> }> = [];
 
         // Process response parts
@@ -209,6 +216,7 @@ export const geminiPlugin: AgentPlugin = {
         });
 
         // If no function calls, we're done
+        lastRoundHadToolCalls = functionCalls.length > 0;
         if (functionCalls.length === 0) {
           break;
         }

@@ -12,6 +12,7 @@ export interface Lv2vSession {
   publishOk: number;
   publishErr: number;
   consecutiveEmpty: number;
+  consecutivePublishFail: number;
   lastFpsTime: number;
   onFrame?: (url: string) => void;
   onStatus?: (msg: string) => void;
@@ -32,9 +33,16 @@ function sdkUrl(): string {
 }
 
 export async function startStream(prompt: string): Promise<Lv2vSession> {
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...sdkHeaders() };
+  const hasAuth = !!headers["Authorization"];
+  const url = sdkUrl();
+  console.log(`[LV2V] Starting stream: sdk=${url}, auth=${hasAuth}, prompt="${prompt.slice(0, 30)}"`);
+  if (!hasAuth) {
+    console.warn("[LV2V] WARNING: No Daydream API key — signer will reject, stream will die");
+  }
   const resp = await fetch(`${sdkUrl()}/stream/start`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...sdkHeaders() },
+    headers,
     body: JSON.stringify({ model_id: "scope", params: { prompt } }),
   });
   if (!resp.ok) throw new Error(`Stream start failed: ${resp.status}`);
@@ -53,6 +61,7 @@ export async function startStream(prompt: string): Promise<Lv2vSession> {
     publishOk: 0,
     publishErr: 0,
     consecutiveEmpty: 0,
+    consecutivePublishFail: 0,
     lastFpsTime: Date.now(),
   };
   sessions.set(streamId, session);
@@ -98,7 +107,6 @@ export async function waitForReady(
         throw new Error(`Pipeline error: ${st.error || phase}`);
       }
 
-      // The original uses st.ready (boolean) as the definitive check
       if (st.ready || phase === "ready" || phase === "running") return;
     } catch (e) {
       if (e instanceof Error && e.message.startsWith("Pipeline error:")) throw e;
@@ -119,7 +127,9 @@ export function startPublishing(
   getFrame: () => Blob | null,
   intervalMs = 100
 ) {
-  const headers = { "Content-Type": "image/jpeg", ...sdkHeaders() };
+  // Capture headers ONCE at start time (matches original storyboard pattern)
+  const headers: Record<string, string> = { "Content-Type": "image/jpeg", ...sdkHeaders() };
+  console.log(`[LV2V] Publishing started: auth=${!!headers["Authorization"]}, interval=${intervalMs}ms`);
 
   session.publishTimer = setInterval(async () => {
     if (session.stopped) return;
@@ -130,8 +140,26 @@ export function startPublishing(
         `${sdkUrl()}/stream/${session.streamId}/publish?seq=${session.publishSeq++}`,
         { method: "POST", headers, body: blob }
       );
-      if (r.ok) session.publishOk++;
-      else session.publishErr++;
+      if (r.ok) {
+        session.publishOk++;
+        session.consecutivePublishFail = 0;
+        if (session.publishOk <= 3) {
+          console.log(`[LV2V] Published frame #${session.publishOk}, seq=${session.publishSeq - 1}, blob=${blob.size}B`);
+        }
+      } else {
+        session.publishErr++;
+        session.consecutivePublishFail = (session.consecutivePublishFail || 0) + 1;
+        if (session.publishErr <= 5) {
+          console.log(`[LV2V] Publish error: HTTP ${r.status}, seq=${session.publishSeq - 1}`);
+        }
+        // Auto-stop if publish fails consistently (stream is dead server-side)
+        if (session.consecutivePublishFail > 30) {
+          console.warn(`[LV2V] Stream dead — ${session.consecutivePublishFail} consecutive publish failures. Auto-stopping.`);
+          session.onError?.("Stream died — publish failures. Stopping.");
+          stopStream(session);
+          return;
+        }
+      }
     } catch {
       session.publishErr++;
     }
@@ -165,6 +193,11 @@ export function startPolling(session: Lv2vSession, intervalMs = 200) {
         session.totalRecv++;
         session.consecutiveEmpty = 0;
         session.onFrame?.(url);
+
+        // Log first few frames to console for debugging
+        if (session.totalRecv <= 3) {
+          console.log(`[LV2V] Frame #${session.totalRecv} received, seq=${seq}, blob=${blob.size}B`);
+        }
 
         // FPS reporting every 3s
         const now = Date.now();

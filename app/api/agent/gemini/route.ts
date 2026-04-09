@@ -8,7 +8,7 @@ export async function POST(req: Request) {
   }
 
   const { contents, tools, model, system_instruction } = await req.json();
-  const modelId = model || "gemini-2.5-pro";
+  const modelId = model || "gemini-2.5-flash";
 
   const body: Record<string, unknown> = {
     contents,

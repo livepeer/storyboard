@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { startWebcam, stopWebcam, captureFrame } from "@/lib/stream/webcam";
 import {
   startStream,
@@ -27,6 +27,20 @@ export function CameraWidget() {
   const promptRef = useRef<HTMLInputElement>(null);
   const { addCard, updateCard } = useCanvasStore();
   const addMessage = useChatStore((s) => s.addMessage);
+
+  // Clean up stream on page unload to prevent orphaned streams on the SDK
+  useEffect(() => {
+    const cleanup = () => {
+      if (sessionRef.current && !sessionRef.current.stopped) {
+        stopStream(sessionRef.current);
+      }
+    };
+    window.addEventListener("beforeunload", cleanup);
+    return () => {
+      window.removeEventListener("beforeunload", cleanup);
+      cleanup(); // also clean on component unmount (HMR, navigation)
+    };
+  }, []);
 
   const handleStart = useCallback(async () => {
     if (!videoRef.current) return;
