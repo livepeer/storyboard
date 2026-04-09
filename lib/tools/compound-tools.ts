@@ -11,6 +11,7 @@ interface MediaStep {
   style_hint?: string;
   model_override?: string;
   depends_on?: number;
+  source_url?: string;
 }
 
 /**
@@ -95,6 +96,10 @@ export const createMediaTool: ToolDefinition = {
               type: "number",
               description: "Index of a prior step whose output is used as input (0-based)",
             },
+            source_url: {
+              type: "string",
+              description: "URL of an existing canvas card to use as input (for restyle/animate/upscale/remove_bg). Get URLs from canvas_get.",
+            },
           },
           required: ["action", "prompt"],
         },
@@ -135,7 +140,7 @@ export const createMediaTool: ToolDefinition = {
       // Create card (spinner shows while generating)
       const card = canvas.addCard({ type, title, refId });
 
-      // Build params — inject dependency URL
+      // Build params — inject source URL from depends_on or source_url
       const params: Record<string, unknown> = {};
       if (step.depends_on !== undefined && results[step.depends_on]) {
         const dep = results[step.depends_on];
@@ -147,6 +152,9 @@ export const createMediaTool: ToolDefinition = {
           prompt: step.prompt,
           action: step.action,
         });
+      } else if (step.source_url) {
+        // Source from existing canvas card (agent passes URL from canvas_get)
+        params.image_url = step.source_url;
       }
 
       // Run inference with the validated capability

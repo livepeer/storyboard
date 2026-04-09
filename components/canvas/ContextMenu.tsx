@@ -240,14 +240,23 @@ export function ContextMenu() {
 
         const r = result as Record<string, unknown>;
         const data = (r.data ?? r) as Record<string, unknown>;
+        const image = data.image as { url: string } | undefined;
+        const images = data.images as Array<{ url: string }> | undefined;
+        const video = data.video as { url: string } | undefined;
+        const audio = data.audio as { url: string } | undefined;
         const url =
           (r.image_url as string) ??
+          images?.[0]?.url ??
+          image?.url ??
           (r.video_url as string) ??
+          video?.url ??
           (r.audio_url as string) ??
+          audio?.url ??
           (data.url as string);
 
-        if (r.error) {
-          updateCard(card.id, { error: r.error as string });
+        const effectiveError = (r.error as string) || (data.error as string);
+        if (effectiveError) {
+          updateCard(card.id, { error: effectiveError });
         } else if (url) {
           updateCard(card.id, { url });
           addMessage(`${action.label.replace("\u2026", "")} — ${resolved} (${(elapsed / 1000).toFixed(1)}s)`, "agent");
