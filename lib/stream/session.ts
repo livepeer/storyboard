@@ -20,6 +20,8 @@ export interface Lv2vSession {
 }
 
 const sessions = new Map<string, Lv2vSession>();
+// Map canvas card refId → SDK stream ID (so agent can use either)
+const refIdToStreamId = new Map<string, string>();
 
 function sdkHeaders(): Record<string, string> {
   const config = loadConfig();
@@ -274,6 +276,20 @@ export async function stopStream(session: Lv2vSession): Promise<void> {
   }
 }
 
-export function getSession(streamId: string): Lv2vSession | undefined {
-  return sessions.get(streamId);
+export function getSession(id: string): Lv2vSession | undefined {
+  // Accept either SDK stream ID or canvas card refId
+  return sessions.get(id) || sessions.get(refIdToStreamId.get(id) || "");
+}
+
+/** Link a canvas card refId to an SDK stream ID so the agent can use either. */
+export function linkRefIdToStream(refId: string, streamId: string) {
+  refIdToStreamId.set(refId, streamId);
+}
+
+/** Get the active stream (if exactly one is running). */
+export function getActiveSession(): Lv2vSession | undefined {
+  for (const session of sessions.values()) {
+    if (!session.stopped) return session;
+  }
+  return undefined;
 }

@@ -9,6 +9,7 @@ import {
   startPolling,
   controlStream,
   stopStream,
+  linkRefIdToStream,
   type Lv2vSession,
 } from "@/lib/stream/session";
 import { useCanvasStore } from "@/lib/canvas/store";
@@ -80,11 +81,15 @@ export function CameraWidget() {
       const session = await startStream(prompt);
       sessionRef.current = session;
 
+      const cardRefId = `lv2v_${Date.now()}`;
       const card = addCard({
         type: "stream",
         title: `LV2V: ${prompt.slice(0, 30)}`,
-        refId: `lv2v_${Date.now()}`,
+        refId: cardRefId,
       });
+
+      // Link card refId to SDK stream ID so agent can use either
+      linkRefIdToStream(cardRefId, session.streamId);
 
       setStatus("Waiting for pipeline (2-5 min cold start)\u2026");
       addMessage("Waiting for pipeline to be ready (2-5 min on cold start)\u2026", "system");

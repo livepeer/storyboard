@@ -6,6 +6,7 @@ import {
   controlStream,
   stopStream,
   getSession,
+  getActiveSession,
 } from "@/lib/stream/session";
 
 /**
@@ -119,14 +120,22 @@ export const streamControlTool: ToolDefinition = {
         },
       },
     },
-    required: ["stream_id"],
+    required: [],
   },
   execute: async (input) => {
-    const session = getSession(input.stream_id as string);
+    // Accept SDK stream ID, canvas card refId, or auto-detect the active stream
+    let session = input.stream_id
+      ? getSession(input.stream_id as string)
+      : undefined;
+    if (!session) {
+      session = getActiveSession();
+    }
     if (!session) {
       return {
         success: false,
-        error: `Stream ${input.stream_id} not found`,
+        error: input.stream_id
+          ? `Stream ${input.stream_id} not found. Is an LV2V stream active?`
+          : "No active LV2V stream. Start one from the Camera widget first.",
       };
     }
     const { stream_id, prompt, ...params } = input;
@@ -150,14 +159,19 @@ export const streamStopTool: ToolDefinition = {
     properties: {
       stream_id: { type: "string", description: "Stream session ID" },
     },
-    required: ["stream_id"],
+    required: [],
   },
   execute: async (input) => {
-    const session = getSession(input.stream_id as string);
+    let session = input.stream_id
+      ? getSession(input.stream_id as string)
+      : undefined;
+    if (!session) {
+      session = getActiveSession();
+    }
     if (!session) {
       return {
         success: false,
-        error: `Stream ${input.stream_id} not found`,
+        error: "No active LV2V stream to stop.",
       };
     }
     await stopStream(session);
