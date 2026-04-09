@@ -1,92 +1,111 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
+import type { ArrowEdge } from "@/lib/canvas/types";
 
+/**
+ * EdgeInfoPopup — shows on arrow click. Uses window event pattern
+ * (same as ContextMenu) for maximum simplicity.
+ */
 export function EdgeInfoPopup() {
-  const { edges, cards, viewport, selectedEdgeIdx, selectEdge } = useCanvasStore();
-  const popupRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [edge, setEdge] = useState<ArrowEdge | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  const cards = useCanvasStore((s) => s.cards);
 
-  const edge = selectedEdgeIdx >= 0 ? edges[selectedEdgeIdx] : null;
-  const fromCard = edge ? cards.find((c) => c.refId === edge.fromRefId) : null;
-  const toCard = edge ? cards.find((c) => c.refId === edge.toRefId) : null;
-
-  // Dismiss on click outside
+  // Listen for edge-click events
   useEffect(() => {
-    if (!edge) return;
-    const dismiss = (e: MouseEvent) => {
-      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
-        selectEdge(-1);
-      }
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      setEdge(d.edge);
+      setPos({ x: d.x + 12, y: d.y - 20 });
+      setVisible(true);
     };
-    const timer = setTimeout(() => window.addEventListener("click", dismiss), 50);
+    window.addEventListener("edge-click", handler);
+    return () => window.removeEventListener("edge-click", handler);
+  }, []);
+
+  // Dismiss on click outside (with delay, same as context menu)
+  useEffect(() => {
+    if (!visible) return;
+    const dismiss = () => setVisible(false);
+    const timer = setTimeout(() => {
+      window.addEventListener("click", dismiss);
+    }, 50);
     return () => {
       clearTimeout(timer);
       window.removeEventListener("click", dismiss);
     };
-  }, [edge, selectEdge]);
+  }, [visible]);
 
-  if (!edge || !fromCard || !toCard) return null;
+  if (!visible || !edge) return null;
 
   const m = edge.meta || {};
+  const from = cards.find((c) => c.refId === edge.fromRefId);
+  const to = cards.find((c) => c.refId === edge.toRefId);
   const elapsed = m.elapsed ? `${(m.elapsed / 1000).toFixed(1)}s` : "\u2014";
-  const capability = m.capability || "\u2014";
-  const action = m.action || "transform";
-  const prompt = m.prompt || "";
-
-  // Convert world coordinates to screen coordinates using viewport transform
-  const worldMidX = (fromCard.x + fromCard.w + toCard.x) / 2;
-  const worldMidY = (fromCard.y + fromCard.h / 2 + toCard.y + toCard.h / 2) / 2;
-  const screenX = worldMidX * viewport.scale + viewport.panX + 20;
-  const screenY = worldMidY * viewport.scale + viewport.panY - 60;
 
   return (
     <div
-      ref={popupRef}
-      className="fixed z-[2500] w-[320px] overflow-hidden rounded-xl border border-[var(--border)] bg-[rgba(16,16,16,0.97)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
-      style={{ left: screenX, top: screenY }}
+      ref={ref}
       onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "fixed",
+        left: pos.x,
+        top: pos.y,
+        zIndex: 2500,
+        width: 300,
+        background: "rgba(16,16,16,0.97)",
+        border: "1px solid var(--border)",
+        borderRadius: 12,
+        boxShadow: "0 4px 24px rgba(0,0,0,0.5)",
+        backdropFilter: "blur(16px)",
+        fontSize: 12,
+        color: "var(--text-muted)",
+      }}
     >
       {/* Header */}
-      <div className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-500/15 text-sm text-purple-300">
-          {action === "animate" ? "\u25B6" : action === "tts" ? "\u266B" : "\u25A2"}
+      <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(139,92,246,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "#c4b5fd", fontSize: 14 }}>
+          {m.action === "animate" ? "\u25B6" : m.action === "tts" ? "\u266B" : "\u25A2"}
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-semibold text-purple-300">{capability}</div>
-          <div className="text-[10px] text-[var(--text-dim)]">{action}</div>
+        <div>
+          <div style={{ fontWeight: 600, color: "#c4b5fd", fontSize: 12 }}>{m.capability || "\u2014"}</div>
+          <div style={{ fontSize: 10, color: "var(--text-dim)" }}>{m.action || "transform"}</div>
         </div>
       </div>
 
-      {/* Flow: from → to */}
-      <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-2.5">
-        <div className="min-w-0 flex-1 truncate rounded-md border-l-[3px] border-blue-400 bg-white/[0.03] px-2 py-1 text-[10px] text-[var(--text-muted)]">
-          {fromCard.title}
+      {/* Flow */}
+      <div style={{ padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ flex: 1, padding: "4px 8px", background: "rgba(255,255,255,0.03)", borderLeft: "3px solid #60a5fa", borderRadius: 4, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {from?.title || edge.fromRefId}
         </div>
-        <span className="text-[var(--text-dim)]">{"\u27F6"}</span>
-        <div className="min-w-0 flex-1 truncate rounded-md border-l-[3px] border-emerald-400 bg-white/[0.03] px-2 py-1 text-[10px] text-[var(--text-muted)]">
-          {toCard.title}
+        <span style={{ color: "var(--text-dim)" }}>{"\u2192"}</span>
+        <div style={{ flex: 1, padding: "4px 8px", background: "rgba(255,255,255,0.03)", borderLeft: "3px solid #34d399", borderRadius: 4, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {to?.title || edge.toRefId}
         </div>
       </div>
 
       {/* Stats */}
-      <div className="flex border-b border-white/[0.06]">
-        <div className="flex-1 border-r border-white/[0.06] px-4 py-2.5">
-          <div className="text-[9px] font-medium uppercase tracking-wider text-[var(--text-dim)]">Model</div>
-          <div className="mt-0.5 text-xs font-medium text-purple-300">{capability}</div>
+      <div style={{ display: "flex", borderBottom: m.prompt ? "1px solid rgba(255,255,255,0.06)" : "none" }}>
+        <div style={{ flex: 1, padding: "8px 14px", borderRight: "1px solid rgba(255,255,255,0.06)" }}>
+          <div style={{ fontSize: 9, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: "var(--text-dim)" }}>Model</div>
+          <div style={{ marginTop: 2, fontWeight: 500, color: "#c4b5fd" }}>{m.capability || "\u2014"}</div>
         </div>
-        <div className="flex-1 px-4 py-2.5">
-          <div className="text-[9px] font-medium uppercase tracking-wider text-[var(--text-dim)]">Latency</div>
-          <div className="mt-0.5 text-xs font-medium text-emerald-400">{elapsed}</div>
+        <div style={{ flex: 1, padding: "8px 14px" }}>
+          <div style={{ fontSize: 9, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: "var(--text-dim)" }}>Latency</div>
+          <div style={{ marginTop: 2, fontWeight: 500, color: "#34d399" }}>{elapsed}</div>
         </div>
       </div>
 
       {/* Prompt */}
-      {prompt && (
-        <div className="px-4 py-2.5">
-          <div className="text-[9px] font-medium uppercase tracking-wider text-[var(--text-dim)]">Prompt</div>
-          <div className="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">
-            {prompt.length > 200 ? prompt.slice(0, 200) + "\u2026" : prompt}
+      {m.prompt && (
+        <div style={{ padding: "8px 14px" }}>
+          <div style={{ fontSize: 9, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: "var(--text-dim)" }}>Prompt</div>
+          <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: "var(--text-muted)" }}>
+            {m.prompt.length > 200 ? m.prompt.slice(0, 200) + "\u2026" : m.prompt}
           </div>
         </div>
       )}
