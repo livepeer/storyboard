@@ -181,9 +181,14 @@ export const createMediaTool: ToolDefinition = {
           (data.url as string) ??
           undefined;
 
-        if (r.error) {
-          canvas.updateCard(card.id, { error: r.error as string });
-          results.push({ refId, cardId: card.id, error: r.error as string, capability, elapsed });
+        // Check both top-level and nested errors
+        const topError = r.error as string | undefined;
+        const dataError = data.error as string | undefined;
+        const effectiveError = topError || dataError;
+
+        if (effectiveError) {
+          canvas.updateCard(card.id, { error: effectiveError });
+          results.push({ refId, cardId: card.id, error: effectiveError, capability, elapsed });
         } else if (url) {
           canvas.updateCard(card.id, { url });
           results.push({ refId, cardId: card.id, url, capability, elapsed });

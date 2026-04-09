@@ -11,7 +11,7 @@ describe("Phase 4: Canvas Awareness", () => {
     state.cards.forEach((c) => state.removeCard(c.id));
   });
 
-  it("canvas_get returns compact summaries with has_media field", async () => {
+  it("canvas_get returns summaries with URLs for combining", async () => {
     useCanvasStore.getState().addCard({ type: "image", title: "Dragon", url: "https://example.com/img.png" });
     useCanvasStore.getState().addCard({ type: "video", title: "Flying" });
 
@@ -19,10 +19,9 @@ describe("Phase 4: Canvas Awareness", () => {
     expect(result.success).toBe(true);
     expect(result.data.total).toBe(2);
     expect(result.data.cards).toHaveLength(2);
-    expect(result.data.cards[0].has_media).toBe(true);
-    expect(result.data.cards[1].has_media).toBe(false);
-    // Should NOT include full url or id (compact format)
-    expect(result.data.cards[0].url).toBeUndefined();
+    // URLs included so agent can reference cards for restyle/combine
+    expect(result.data.cards[0].url).toBe("https://example.com/img.png");
+    expect(result.data.cards[1].url).toBeUndefined();
   });
 
   it("canvas_get supports filter_type", async () => {

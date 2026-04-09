@@ -121,7 +121,7 @@ export const canvasGetTool: ToolDefinition = {
     if (input.filter_type) {
       cards = cards.filter((c) => c.type === input.filter_type);
     }
-    // Compact format: ~10 tokens per card
+    // Include URLs so the agent can reference cards for restyle/combine/animate
     return {
       success: true,
       data: {
@@ -130,7 +130,7 @@ export const canvasGetTool: ToolDefinition = {
           refId: c.refId,
           type: c.type,
           title: c.title,
-          has_media: !!c.url,
+          url: c.url || undefined,
           error: c.error || undefined,
         })),
         edge_count: state.edges.length,
