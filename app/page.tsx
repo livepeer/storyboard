@@ -16,6 +16,7 @@ import { initializeTools } from "@/lib/tools";
 import { fetchCapabilities } from "@/lib/sdk/capabilities";
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
   const [trainingOpen, setTrainingOpen] = useState(false);
 
   useEffect(() => {
@@ -29,16 +30,19 @@ export default function Home() {
     registerPlugin(geminiPlugin);
 
     // Restore saved agent preference or default to gemini
-    const saved =
-      typeof window !== "undefined"
-        ? localStorage.getItem("storyboard_active_agent")
-        : null;
+    const saved = localStorage.getItem("storyboard_active_agent");
     try {
       setActivePlugin(saved || "gemini");
     } catch {
       setActivePlugin("built-in");
     }
+
+    setMounted(true);
   }, []);
+
+  // Render nothing on server — avoids all hydration mismatches from
+  // localStorage, Zustand stores, and plugin state
+  if (!mounted) return null;
 
   return (
     <>
