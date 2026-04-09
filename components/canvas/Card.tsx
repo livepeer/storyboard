@@ -13,7 +13,7 @@ const TYPE_COLORS: Record<string, { text: string; bg: string }> = {
 };
 
 export function Card({ card }: { card: CardData }) {
-  const { viewport, selectedCardId, updateCard, removeCard, selectCard } =
+  const { viewport, selectedCardId, updateCard, removeCard, selectCard, edges } =
     useCanvasStore();
   const dragRef = useRef<{
     startX: number;
@@ -30,6 +30,12 @@ export function Card({ card }: { card: CardData }) {
 
   const isSelected = selectedCardId === card.id;
   const colors = TYPE_COLORS[card.type] || TYPE_COLORS.image;
+
+  // Find incoming edge for this card (shows what transformation created it)
+  const incomingEdge = edges.find((e) => e.toRefId === card.refId);
+  const tooltipText = incomingEdge?.meta
+    ? `${incomingEdge.meta.capability || "transform"}${incomingEdge.meta.elapsed ? ` (${(incomingEdge.meta.elapsed / 1000).toFixed(1)}s)` : ""}${incomingEdge.meta.prompt ? `\n${incomingEdge.meta.prompt.slice(0, 60)}` : ""}`
+    : undefined;
 
   // --- Drag ---
   const onDragStart = useCallback(
@@ -106,6 +112,7 @@ export function Card({ card }: { card: CardData }) {
         width: card.w,
         height: card.minimized ? 36 : card.h,
       }}
+      title={tooltipText}
       onPointerDown={() => selectCard(card.id)}
       onContextMenu={(e) => {
         e.preventDefault();

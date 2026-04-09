@@ -5,6 +5,15 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { useChatStore } from "@/lib/chat/store";
 import { runInference } from "@/lib/sdk/client";
 import { resolveCapability } from "@/lib/sdk/capabilities";
+import {
+  startStream,
+  waitForReady,
+  startPublishing,
+  startPolling,
+  stopStream,
+  linkRefIdToStream,
+  type Lv2vSession,
+} from "@/lib/stream/session";
 import type { Card } from "@/lib/canvas/types";
 
 interface MenuAction {
@@ -25,10 +34,11 @@ const ACTIONS: MenuAction[] = [
   { id: "animate", label: "Animate\u2026", icon: "\u25B6", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "restyle", label: "Restyle\u2026", icon: "\u2728", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "transform-video", label: "Transform Video\u2026", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true, mode: "direct" },
+  // --- LV2V from card ---
+  { id: "lv2v-from-card", label: "Start LV2V Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
   // --- Agent-assisted (routes to chat) ---
   { id: "agent-restyle", label: "Restyle with AI\u2026", icon: "\uD83E\uDD16", forTypes: ["image"], requiresMedia: true, mode: "chat" },
   { id: "agent-animate", label: "Animate with AI\u2026", icon: "\uD83E\uDD16", forTypes: ["image"], requiresMedia: true, mode: "chat" },
-  { id: "agent-lv2v", label: "Live Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "chat" },
   { id: "agent-ask", label: "Ask Claude\u2026", icon: "\uD83D\uDCAC", forTypes: ["image", "video", "audio"], requiresMedia: false, mode: "chat" },
 ];
 
@@ -104,6 +114,86 @@ export function ContextMenu() {
           case "agent-ask":
             prefillChat(`Describe "${title}" and suggest next steps`);
             return;
+        }
+        return;
+      }
+
+      // --- LV2V from card ---
+      if (action.id === "lv2v-from-card") {
+        const prompt = window.prompt("LV2V style prompt:", "transform into a cyberpunk scene with neon lights");
+        if (!prompt) return;
+
+        addMessage(`Starting LV2V from "${targetCard.title}"\u2026`, "system");
+
+        try {
+          const session = await startStream(prompt);
+          const cardRefId = `lv2v_${Date.now()}`;
+          const streamCard = addCard({
+            type: "stream",
+            title: `LV2V: ${prompt.slice(0, 25)}`,
+            refId: cardRefId,
+          });
+          linkRefIdToStream(cardRefId, session.streamId);
+          addEdge(targetCard.refId, cardRefId, {
+            capability: "scope",
+            prompt,
+            action: "lv2v",
+          });
+
+          addMessage("Waiting for pipeline\u2026", "system");
+          await waitForReady(session, (phase) => {
+            addMessage(`LV2V: ${phase}`, "system");
+          });
+
+          // Capture source image as blob for publishing
+          let cachedBlob: Blob | null = null;
+          const captureSourceFrame = (): Blob | null => {
+            if (cachedBlob) return cachedBlob;
+            return null;
+          };
+
+          // Fetch the source image and cache it
+          if (targetCard.url) {
+            try {
+              const resp = await fetch(targetCard.url);
+              cachedBlob = await resp.blob();
+            } catch {
+              // Try canvas capture as fallback
+            }
+          }
+          if (!cachedBlob) {
+            // Create a placeholder frame
+            const canvas = document.createElement("canvas");
+            canvas.width = 320;
+            canvas.height = 240;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.fillStyle = "#333";
+              ctx.fillRect(0, 0, 320, 240);
+            }
+            cachedBlob = await new Promise<Blob>((resolve) => {
+              canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.8);
+            });
+          }
+
+          // Publish source frame at 2fps (image) or 10fps (video)
+          const interval = targetCard.type === "video" ? 100 : 500;
+          startPublishing(session, captureSourceFrame, interval);
+
+          session.onFrame = (url) => {
+            updateCard(streamCard.id, { url });
+          };
+          session.onStatus = (msg) => {
+            // Status updates handled silently
+          };
+          session.onError = (err) => {
+            addMessage(`LV2V: ${err}`, "system");
+          };
+
+          startPolling(session, 200);
+          addMessage(`LV2V stream started from "${targetCard.title}"`, "agent");
+        } catch (e) {
+          addMessage(`LV2V error: ${e instanceof Error ? e.message : "Unknown"}`, "system");
         }
         return;
       }

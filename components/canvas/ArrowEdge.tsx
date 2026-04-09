@@ -11,8 +11,8 @@ export function ArrowLayer() {
 
   return (
     <svg
-      className="pointer-events-none absolute left-0 top-0 h-full w-full overflow-visible"
-      style={{ zIndex: 0 }}
+      className="absolute left-0 top-0 h-full w-full overflow-visible"
+      style={{ zIndex: 1 }}
     >
       <defs>
         <marker
@@ -87,13 +87,13 @@ export function ArrowLayer() {
 
         return (
           <g key={`${edge.fromRefId}-${edge.toRefId}`}>
-            {/* Hit area */}
+            {/* Hit area — wide invisible path for hover + click */}
             <path
               d={d}
               fill="none"
               stroke="transparent"
               strokeWidth={24}
-              className="pointer-events-stroke cursor-pointer"
+              style={{ pointerEvents: "stroke", cursor: "pointer" }}
               onMouseEnter={() => setHoveredIdx(idx)}
               onMouseLeave={() => setHoveredIdx(-1)}
               onClick={(e) => {
