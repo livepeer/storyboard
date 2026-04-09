@@ -180,13 +180,13 @@ export const geminiPlugin: AgentPlugin = {
 
         const candidate = response.candidates?.[0];
         if (!candidate?.content?.parts) {
-          const reason = candidate?.finishReason || "No response";
-          if (lastRoundHadToolCalls) {
-            say("Check Settings — Daydream API key may be missing or inference failed.", "system");
-            yield { type: "error", content: "Tool execution may have failed. Check Daydream API key in Settings." };
-          } else {
+          // Gemini sometimes returns empty content after tool results — this is normal
+          // Only show error if there were no tool calls at all (nothing happened)
+          if (!lastRoundHadToolCalls) {
+            const reason = candidate?.finishReason || "No response";
             yield { type: "error", content: `Gemini: ${reason}` };
           }
+          // If tools ran, the results are already on the canvas — just end quietly
           break;
         }
 

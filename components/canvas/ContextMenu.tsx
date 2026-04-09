@@ -61,10 +61,15 @@ export function ContextMenu() {
 
   useEffect(() => {
     if (!visible) return;
+    // Delay attaching dismiss listeners so the opening right-click
+    // event doesn't immediately close the menu (same event cycle)
     const dismiss = () => setVisible(false);
-    window.addEventListener("click", dismiss);
-    window.addEventListener("contextmenu", dismiss);
+    const timer = setTimeout(() => {
+      window.addEventListener("click", dismiss);
+      window.addEventListener("contextmenu", dismiss);
+    }, 10);
     return () => {
+      clearTimeout(timer);
       window.removeEventListener("click", dismiss);
       window.removeEventListener("contextmenu", dismiss);
     };
