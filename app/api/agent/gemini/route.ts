@@ -10,13 +10,14 @@ export async function POST(req: Request) {
   const { contents, tools, model, system_instruction } = await req.json();
   const modelId = model || "gemini-2.5-flash";
 
-  const body: Record<string, unknown> = {
-    contents,
-    tools,
-    toolConfig: {
+  const body: Record<string, unknown> = { contents };
+  // Only include tools/toolConfig if tools are actually provided
+  if (tools && Array.isArray(tools) && tools.length > 0) {
+    body.tools = tools;
+    body.toolConfig = {
       functionCallingConfig: { mode: "AUTO" },
-    },
-  };
+    };
+  }
   if (system_instruction) {
     body.system_instruction = system_instruction;
   }

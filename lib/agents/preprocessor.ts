@@ -447,15 +447,39 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
   const totalScenes = data.total_scenes as number;
 
   // --- Extract Creative DNA (SYNC — must complete before user asks for "8 more") ---
+  console.log("[Preprocessor] Starting Creative DNA extraction...");
   try {
     const ctx = await extractCreativeContext(text);
+    console.log("[Preprocessor] Extraction result:", ctx);
     if (ctx) {
       useSessionContext.getState().setContext(ctx);
       const summary = useSessionContext.getState().summary;
+      console.log("[Preprocessor] Context saved, summary:", summary);
       say(`Creative context saved: ${summary}`, "system");
-      console.log("[Preprocessor] Creative DNA extracted:", ctx);
     } else {
-      console.warn("[Preprocessor] Creative DNA extraction returned null");
+      console.warn("[Preprocessor] Creative DNA extraction returned null — Gemini may not have returned structured format");
+      // Fallback: build context from the style guide we already extracted
+      const fallbackCtx = {
+        style: style.visual_style || "illustrated storyboard",
+        palette: style.color_palette || "",
+        characters: "",
+        setting: "",
+        rules: "",
+        mood: style.mood || "",
+      };
+      // Try to extract character/setting from the brief's first paragraph
+      const firstPara = text.split("\n\n")[0] || text.slice(0, 300);
+      const charMatch = firstPara.match(/(?:follows?|about|featuring|with)\s+(?:a\s+)?([^,.]+(?:girl|boy|woman|man|child|character)[^,.]*)/i);
+      if (charMatch) fallbackCtx.characters = charMatch[1].trim().slice(0, 100);
+      const settingMatch = firstPara.match(/(?:through|in|at|across)\s+(?:a\s+)?([^,.]+(?:village|city|town|forest|mountain|world|land)[^,.]*)/i);
+      if (settingMatch) fallbackCtx.setting = settingMatch[1].trim().slice(0, 100);
+
+      if (fallbackCtx.style || fallbackCtx.characters) {
+        useSessionContext.getState().setContext(fallbackCtx);
+        const summary = useSessionContext.getState().summary;
+        say(`Creative context saved: ${summary}`, "system");
+        console.log("[Preprocessor] Fallback context saved:", fallbackCtx);
+      }
     }
   } catch (e) {
     console.warn("[Preprocessor] Creative DNA extraction failed:", e);
