@@ -26,8 +26,30 @@ export function CameraWidget() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const sessionRef = useRef<Lv2vSession | null>(null);
   const promptRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const { addCard, updateCard } = useCanvasStore();
   const addMessage = useChatStore((s) => s.addMessage);
+
+  // --- Drag to reposition ---
+  const onDragStart = useCallback((e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest("button, input")) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: rect.left, origY: rect.top };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }, []);
+  const onDragMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current || !panelRef.current) return;
+    const { startX, startY, origX, origY } = dragRef.current;
+    const panel = panelRef.current;
+    panel.style.left = `${origX + (e.clientX - startX)}px`;
+    panel.style.top = `${origY + (e.clientY - startY)}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+  }, []);
+  const onDragEnd = useCallback(() => { dragRef.current = null; }, []);
 
   // Clean up stream on page unload to prevent orphaned streams on the SDK
   useEffect(() => {
@@ -200,12 +222,18 @@ export function CameraWidget() {
 
   return (
     <div
+      ref={panelRef}
       className={`fixed bottom-4 left-4 z-[1500] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-lg)] ${
         active ? "w-[280px]" : "w-auto"
       }`}
     >
-      {/* Header */}
-      <div className="flex h-9 items-center gap-2 border-b border-[var(--border)] bg-white/[0.02] px-2.5">
+      {/* Header — draggable */}
+      <div
+        className="flex h-9 cursor-move items-center gap-2 border-b border-[var(--border)] bg-white/[0.02] px-2.5"
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+      >
         <span
           className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
           style={{ color: "#10b981", background: "rgba(16,185,129,0.1)" }}
@@ -217,13 +245,24 @@ export function CameraWidget() {
         </span>
         {active && (
           <>
-            <button
-              onClick={handleLv2v}
-              disabled={streaming}
-              className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold text-[#ec4899] transition-colors hover:bg-white/[0.1] disabled:opacity-50"
-            >
-              {streaming ? status : "LV2V"}
-            </button>
+            {streaming ? (
+              <button
+                onClick={handleStop}
+                className="rounded bg-red-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-red-400 transition-colors hover:bg-red-500/25"
+              >
+                Stop
+              </button>
+            ) : (
+              <button
+                onClick={handleLv2v}
+                className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold text-[#ec4899] transition-colors hover:bg-white/[0.1]"
+              >
+                LV2V
+              </button>
+            )}
+            {streaming && (
+              <span className="text-[8px] text-[var(--text-dim)]">{status}</span>
+            )}
             <button
               onClick={() => setMinimized(!minimized)}
               className="flex h-[22px] w-[22px] items-center justify-center rounded bg-transparent text-xs text-[var(--text-dim)] hover:bg-white/[0.08]"

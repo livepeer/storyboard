@@ -7,6 +7,7 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { MessageBubble } from "./MessageBubble";
 import { ToolPill } from "./ToolPill";
 import { QuickActions } from "./QuickActions";
+import { parseCommand, executeCommand } from "@/lib/skills/commands";
 import type { AgentEvent, CanvasContext } from "@/lib/agents/types";
 
 /** Tracked tool call with status and optional result summary */
@@ -157,10 +158,18 @@ export function ChatPanel() {
     [addMessage, consumeEvents]
   );
 
-  // --- Send: always accepts, runs concurrently ---
+  // --- Send: handle /commands or send to agent ---
   const sendMessage = useCallback(
     (text: string) => {
       if (!text.trim()) return;
+
+      // Check for /command
+      const cmd = parseCommand(text.trim());
+      if (cmd) {
+        addMessage(text.trim(), "user");
+        executeCommand(cmd).then((result) => addMessage(result, "system"));
+        return;
+      }
       setInput("");
       // Fire concurrently — no queue, no blocking
       processOne(text.trim());
@@ -238,8 +247,9 @@ export function ChatPanel() {
   return (
     <div
       ref={panelRef}
+      style={{ resize: minimized ? "none" : "both", minWidth: 300, minHeight: 200 }}
       className={`fixed bottom-4 right-4 z-[1500] flex w-[380px] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[rgba(20,20,20,0.95)] shadow-[var(--shadow-lg)] backdrop-blur-xl backdrop-saturate-[1.2] ${
-        minimized ? "max-h-10" : "max-h-[560px]"
+        minimized ? "max-h-10" : "h-[520px]"
       }`}
     >
       {/* Header */}
@@ -268,7 +278,7 @@ export function ChatPanel() {
       {/* Messages */}
       {!minimized && (
         <>
-          <div className="flex max-h-[360px] flex-1 flex-col gap-1.5 overflow-y-auto p-3 scrollbar-thin">
+          <div className="flex flex-1 flex-col gap-1.5 overflow-y-auto p-3 scrollbar-thin">
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} />
             ))}

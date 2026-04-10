@@ -2,7 +2,28 @@ import type { ToolDefinition } from "./types";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { runInference } from "@/lib/sdk/client";
 import { resolveCapability, isValidCapability } from "@/lib/sdk/capabilities";
+import { useSkillStore } from "@/lib/skills/store";
 import type { CardType } from "@/lib/canvas/types";
+
+/** Apply active style-override skills to a prompt */
+function applyStyleOverrides(prompt: string, action: string): { prompt: string; modelHint?: string } {
+  const overrides = useSkillStore.getState().getActiveStyleOverrides();
+  if (overrides.length === 0) return { prompt };
+
+  let modified = prompt;
+  let modelHint: string | undefined;
+
+  for (const style of overrides) {
+    if (style.prompt_prefix) modified = style.prompt_prefix + modified;
+    if (style.prompt_suffix) modified = modified + style.prompt_suffix;
+    if (action === "animate" && style.video_prompt_addition) {
+      modified += ", " + style.video_prompt_addition;
+    }
+    if (style.model_hint && !modelHint) modelHint = style.model_hint;
+  }
+
+  return { prompt: modified, modelHint };
+}
 
 interface MediaStep {
   action: "generate" | "restyle" | "animate" | "upscale" | "remove_bg" | "tts";
@@ -127,15 +148,21 @@ export const createMediaTool: ToolDefinition = {
     for (let i = 0; i < rawSteps.length; i++) {
       const step = rawSteps[i];
 
+      // Apply active style-override skills (inject prompt prefix/suffix)
+      const styled = step.action !== "tts"
+        ? applyStyleOverrides(step.prompt, step.action)
+        : { prompt: step.prompt }; // TTS: don't style-wrap narration text
+      const effectivePrompt = styled.prompt;
+
       // Resolve capability through live registry (fuzzy-matches invalid names)
       const { capability, type } = selectCapability(
         step.action,
         step.style_hint,
-        step.model_override
+        step.model_override || ("modelHint" in styled ? styled.modelHint : undefined) as string | undefined
       );
 
       const refId = `media_${Date.now()}_${i}`;
-      const title = step.title || step.prompt.slice(0, 40);
+      const title = step.title || step.prompt.slice(0, 40); // Use original prompt for title
 
       // Create card (spinner shows while generating)
       const card = canvas.addCard({ type, title, refId });
@@ -157,12 +184,12 @@ export const createMediaTool: ToolDefinition = {
         params.image_url = step.source_url;
       }
 
-      // Run inference with the validated capability
+      // Run inference with the validated capability and styled prompt
       const t0 = performance.now();
       try {
         const result = await runInference({
           capability,
-          prompt: step.prompt,
+          prompt: effectivePrompt,
           params,
         });
         const elapsed = performance.now() - t0;

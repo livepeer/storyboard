@@ -14,14 +14,16 @@ import { openaiPlugin } from "@/lib/agents/openai";
 import { geminiPlugin } from "@/lib/agents/gemini";
 import { initializeTools } from "@/lib/tools";
 import { fetchCapabilities } from "@/lib/sdk/capabilities";
+import { useSkillStore } from "@/lib/skills/store";
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [trainingOpen, setTrainingOpen] = useState(false);
 
   useEffect(() => {
-    // Fetch live capabilities from SDK (single source of truth for model names)
+    // Fetch live capabilities and skill registry
     fetchCapabilities();
+    useSkillStore.getState().initRegistry();
     // Initialize tool registry and agent plugins
     initializeTools();
     registerPlugin(builtInPlugin);

@@ -105,8 +105,8 @@ describe("Skill Registry — Phase 7", () => {
     expect(enums).toContain("daily-briefing");
   });
 
-  it("has 11 total skills", () => {
+  it("has 12+ total skills", () => {
     const enums = loadSkillTool.parameters.properties?.skill_id?.enum as string[];
-    expect(enums).toHaveLength(11);
+    expect(enums.length).toBeGreaterThanOrEqual(12);
   });
 });

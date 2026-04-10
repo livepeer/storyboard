@@ -1,0 +1,16 @@
+[
+  {"id": "text-to-image", "category": "creation", "description": "Model selection guide, prompt engineering, size rules", "tags": ["image"]},
+  {"id": "image-editing", "category": "creation", "description": "kontext-edit usage, style transfer, composition", "tags": ["image", "edit"]},
+  {"id": "video", "category": "creation", "description": "i2v/t2v pipeline selection, motion prompts", "tags": ["video"]},
+  {"id": "style-presets", "category": "creation", "description": "15 built-in style presets with optimized prompts", "tags": ["style"]},
+  {"id": "storyboard", "category": "workflow", "description": "Multi-shot storyboard from a script", "tags": ["multi-step"]},
+  {"id": "refinement", "category": "workflow", "description": "Iterative refinement: generate, evaluate, upscale", "tags": ["quality"]},
+  {"id": "remix", "category": "workflow", "description": "Combine multiple canvas cards into composites", "tags": ["combine"]},
+  {"id": "scope-lv2v", "category": "live", "description": "Scope LV2V parameters: noise, transitions, denoising", "tags": ["lv2v", "stream"]},
+  {"id": "live-director", "category": "live", "description": "Chat commands to LV2V stream_control mapping", "tags": ["lv2v", "control"]},
+  {"id": "scope-graphs", "category": "live", "description": "Scope pipeline graphs and selection", "tags": ["lv2v", "pipeline"]},
+  {"id": "lora-training", "category": "integration", "description": "LoRA training: images, trigger words, steps", "tags": ["training"]},
+  {"id": "daily-briefing", "category": "integration", "description": "Daily briefing videos from email/calendar via MCP", "tags": ["mcp"]},
+  {"id": "studio-ghibli", "category": "style", "type": "style-override", "path": "styles/studio-ghibli.md", "description": "Studio Ghibli aesthetic for all generations", "prompt_prefix": "studio ghibli style, hand-painted watercolor, soft pastel colors, whimsical, Miyazaki inspired, ", "prompt_suffix": ", ghibli aesthetic, warm gentle lighting, detailed background art", "model_hint": "flux-dev", "video_prompt_addition": "gentle camera movement, dreamy animation, ghibli film quality", "tags": ["style", "anime", "ghibli"]},
+  {"id": "kids-drawing", "category": "style", "type": "style-override", "path": "styles/kids-drawing.md", "description": "Childlike crayon drawing style for all generations", "prompt_prefix": "children's crayon drawing style, simple colorful shapes, thick wobbly lines, naive art, ", "prompt_suffix": ", kid's artwork, construction paper texture, bright primary colors", "model_hint": "flux-dev", "video_prompt_addition": "playful animation, bouncy movement, cartoon style", "tags": ["style", "kids", "drawing"]}
+]
