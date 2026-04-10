@@ -92,13 +92,14 @@ function selectCapability(
 export const createMediaTool: ToolDefinition = {
   name: "create_media",
   description:
-    "Create media and add to canvas. Model selection is AUTOMATIC — just specify the action (generate/restyle/animate/upscale/remove_bg/tts) and prompt. Do NOT set model_override; the system picks the best available model. Use this for ALL media creation.",
+    "Create media and add to canvas. Model selection is AUTOMATIC. For large storyboards (6+ scenes), call this tool MULTIPLE TIMES with up to 5 steps each. Keep prompts concise (under 40 words).",
   parameters: {
     type: "object",
     properties: {
       steps: {
         type: "array",
-        description: "Array of media creation steps. Steps with depends_on execute after their dependency.",
+        maxItems: 5,
+        description: "1-5 media creation steps. For more, call create_media multiple times.",
         items: {
           type: "object",
           properties: {
