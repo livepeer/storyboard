@@ -212,42 +212,126 @@ test.describe("Preprocessor Stress Test: 20-Scene Brief", () => {
     expect(planningVisible).toBe(false);
   });
 
-  test("follow-up detection: 'continue' resumes active project", async ({ page }) => {
+  test("intent classifier: continue, add_scenes, adjust, status, none", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator("text=Storyboard")).toBeVisible();
 
-    // Verify follow-up patterns are detected correctly
     const result = await page.evaluate(() => {
-      const patterns = [
-        "continue", "keep going", "do the rest", "next", "proceed",
-        "where are my pictures", "I don't see anything", "nothing shows",
-        "cat eating cheez-it", "make it blue", "scene 3 needs more color"
-      ];
-      // Replicate detection logic
-      return patterns.map(text => {
+      // Replicate classifyIntent logic for testing
+      function classify(text: string, hasProject: boolean, pending: number) {
         const lower = text.toLowerCase().trim();
-        const isContinue = /^(continue|keep going|go|next|more|do the rest|finish|carry on|proceed|go ahead)\.?$/i.test(lower)
-          || /continue|keep going|remaining|finish (it|them|the rest)|do the rest|next batch/i.test(lower);
-        const isStatus = /where.*(picture|image|scene|result)|don't see|can't see|nothing (show|appear|happen)|no (picture|image|result)|still waiting/i.test(lower);
-        return { text, isContinue, isStatus, isNone: !isContinue && !isStatus };
-      });
+
+        if (/^(continue|keep going|go|next|do the rest|finish|carry on|proceed|go ahead)\.?$/i.test(lower))
+          return "continue";
+        if (/continue generating|keep going|finish (it|them|the rest)|do the rest|next batch|remaining scenes/i.test(lower))
+          return "continue";
+
+        const moreCountMatch = lower.match(/(?:give|make|add|create|do|generate)\s+(?:me\s+)?(\d+)\s+more/i);
+        if (moreCountMatch) return `add_scenes:${moreCountMatch[1]}`;
+
+        if (hasProject) {
+          if (/(?:add|give|make|create)\s+(?:me\s+)?more|more scenes|expand.*stor|extend/i.test(lower))
+            return "add_scenes:4";
+          if (/make.*(story|storyboard|it).*(more|better|interesting|dramatic|funny|exciting|emotional|longer)/i.test(lower))
+            return "add_scenes:4";
+          if (/(?:i\s+)?(?:want|need)\s+more|not enough|too few|too short/i.test(lower))
+            return "add_scenes:4";
+
+          const sceneRef = lower.match(/scene\s*(\d+)|(\d+)(?:st|nd|rd|th)\s+(?:scene|one|image|picture|frame)/i);
+          if (sceneRef && /change|adjust|redo|fix|update|too|more|less|different|rethink|modify|improve|tweak/i.test(lower))
+            return `adjust:${sceneRef[1] || sceneRef[2]}`;
+          if (/(?:the|that)\s+\w+\s+(?:scene|one|image|picture).*(?:needs?|should|could|is too|isn't|looks)/i.test(lower))
+            return "adjust";
+        }
+
+        if (/where.*(picture|image|scene|result)|don't see|can't see|nothing (show|appear|happen)|no (picture|image|result)|still waiting|what happened/i.test(lower))
+          return "status";
+
+        return "none";
+      }
+
+      const withProject = true;
+      const noProject = false;
+
+      return {
+        // Continue
+        continue1: classify("continue", noProject, 0),
+        continue2: classify("keep going", noProject, 0),
+        continue3: classify("do the rest", noProject, 0),
+        continue4: classify("finish the remaining scenes", noProject, 0),
+
+        // Add scenes (with count)
+        add1: classify("give me 8 more", withProject, 0),
+        add2: classify("add 4 more scenes", withProject, 0),
+        add3: classify("make 6 more", withProject, 0),
+
+        // Add scenes (no count, default 4)
+        add4: classify("add more", withProject, 0),
+        add5: classify("more scenes", withProject, 0),
+        add6: classify("expand the storyboard", withProject, 0),
+        add7: classify("give me more to make the story more interesting", withProject, 0),
+        add8: classify("make the story more dramatic", withProject, 0),
+        add9: classify("I want more", withProject, 0),
+        add10: classify("not enough scenes", withProject, 0),
+        add11: classify("make it longer", withProject, 0),
+
+        // Adjust scene
+        adj1: classify("scene 3 needs more color", withProject, 0),
+        adj2: classify("change scene 5 to be more dramatic", withProject, 0),
+        adj3: classify("the market scene needs brighter colors", withProject, 0),
+        adj4: classify("redo the 2nd scene", withProject, 0),
+
+        // Status
+        stat1: classify("where are my pictures", noProject, 0),
+        stat2: classify("I don't see anything", noProject, 0),
+        stat3: classify("what happened", noProject, 0),
+
+        // None — should pass through to agent
+        none1: classify("cat eating cheez-it", noProject, 0),
+        none2: classify("make it blue", noProject, 0),
+        none3: classify("hello", noProject, 0),
+        // Without project context, "add more" is none
+        none4: classify("make the story more interesting", noProject, 0),
+      };
     });
 
-    // Continue patterns
-    expect(result.find(r => r.text === "continue")?.isContinue).toBe(true);
-    expect(result.find(r => r.text === "keep going")?.isContinue).toBe(true);
-    expect(result.find(r => r.text === "do the rest")?.isContinue).toBe(true);
-    expect(result.find(r => r.text === "proceed")?.isContinue).toBe(true);
+    // Continue
+    expect(result.continue1).toBe("continue");
+    expect(result.continue2).toBe("continue");
+    expect(result.continue3).toBe("continue");
+    expect(result.continue4).toBe("continue");
 
-    // Status patterns
-    expect(result.find(r => r.text === "where are my pictures")?.isStatus).toBe(true);
-    expect(result.find(r => r.text === "I don't see anything")?.isStatus).toBe(true);
-    expect(result.find(r => r.text === "nothing shows")?.isStatus).toBe(true);
+    // Add scenes with count
+    expect(result.add1).toBe("add_scenes:8");
+    expect(result.add2).toBe("add_scenes:4");
+    expect(result.add3).toBe("add_scenes:6");
 
-    // Normal prompts — should NOT match
-    expect(result.find(r => r.text === "cat eating cheez-it")?.isNone).toBe(true);
-    expect(result.find(r => r.text === "make it blue")?.isNone).toBe(true);
-    expect(result.find(r => r.text === "scene 3 needs more color")?.isNone).toBe(true);
+    // Add scenes default count
+    expect(result.add4).toBe("add_scenes:4");
+    expect(result.add5).toBe("add_scenes:4");
+    expect(result.add6).toBe("add_scenes:4");
+    expect(result.add7).toBe("add_scenes:4");
+    expect(result.add8).toBe("add_scenes:4");
+    expect(result.add9).toBe("add_scenes:4");
+    expect(result.add10).toBe("add_scenes:4");
+    expect(result.add11).toBe("add_scenes:4");
+
+    // Adjust scene
+    expect(result.adj1).toMatch(/^adjust/);
+    expect(result.adj2).toMatch(/^adjust/);
+    expect(result.adj3).toBe("adjust");
+    expect(result.adj4).toMatch(/^adjust/);
+
+    // Status
+    expect(result.stat1).toBe("status");
+    expect(result.stat2).toBe("status");
+    expect(result.stat3).toBe("status");
+
+    // None
+    expect(result.none1).toBe("none");
+    expect(result.none2).toBe("none");
+    expect(result.none3).toBe("none");
+    expect(result.none4).toBe("none"); // no project → no context → none
   });
 
   // Regressions

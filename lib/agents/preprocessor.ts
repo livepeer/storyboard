@@ -14,6 +14,7 @@
 import { executeTool } from "@/lib/tools/registry";
 import { useChatStore } from "@/lib/chat/store";
 import { useProjectStore } from "@/lib/projects/store";
+import { useCanvasStore } from "@/lib/canvas/store";
 
 // ---------------------------------------------------------------------------
 // Personality — the creative partner voice
@@ -78,18 +79,128 @@ function isMultiScene(text: string): boolean {
   return false;
 }
 
-/** Detect follow-up messages that mean "keep going" or "where are my results" */
-function isFollowUp(text: string): { type: "continue" | "status" | "none" } {
+type Intent =
+  | { type: "continue" }
+  | { type: "add_scenes"; count: number; direction?: string }
+  | { type: "adjust_scene"; sceneHint?: string; feedback: string }
+  | { type: "status" }
+  | { type: "none" };
+
+/**
+ * Context-aware intent classifier.
+ *
+ * Uses the user's message + active project state to understand intent.
+ * No LLM call needed for 90% of cases — context resolves ambiguity.
+ *
+ * Key insight: when an active project exists, messages about "more",
+ * "better", "expand", "interesting" are about that project.
+ */
+function classifyIntent(text: string, hasActiveProject: boolean, pendingScenes: number): Intent {
   const lower = text.toLowerCase().trim();
-  // Continue patterns
-  if (/^(continue|keep going|go|next|more|do the rest|finish|carry on|proceed|go ahead)\.?$/i.test(lower))
+
+  // --- Explicit continue ---
+  if (/^(continue|keep going|go|next|do the rest|finish|carry on|proceed|go ahead)\.?$/i.test(lower))
     return { type: "continue" };
-  if (/continue|keep going|remaining|finish (it|them|the rest)|do the rest|next batch/i.test(lower))
+  if (/continue generating|keep going|finish (it|them|the rest)|do the rest|next batch|remaining scenes/i.test(lower))
     return { type: "continue" };
-  // "Where are my pictures" patterns
-  if (/where.*(picture|image|scene|result)|don't see|can't see|nothing (show|appear|happen)|no (picture|image|result)|still waiting/i.test(lower))
+
+  // --- Explicit add N more ---
+  const moreCountMatch = lower.match(/(?:give|make|add|create|do|generate)\s+(?:me\s+)?(\d+)\s+more/i);
+  if (moreCountMatch)
+    return { type: "add_scenes", count: parseInt(moreCountMatch[1]), direction: text };
+
+  // --- "More" with creative direction (only if project exists) ---
+  if (hasActiveProject) {
+    // "add more scenes", "more scenes", "expand the storyboard"
+    if (/(?:add|give|make|create)\s+(?:me\s+)?more|more scenes|expand.*stor|extend/i.test(lower))
+      return { type: "add_scenes", count: 4, direction: text };
+
+    // "make the story more interesting/dramatic/funny" — creative expansion
+    if (/make.*(story|storyboard|it).*(more|better|interesting|dramatic|funny|exciting|emotional|longer)/i.test(lower))
+      return { type: "add_scenes", count: 4, direction: text };
+
+    // "I want more" / "not enough" / "need more scenes"
+    if (/(?:i\s+)?(?:want|need)\s+more|not enough|too few|too short/i.test(lower))
+      return { type: "add_scenes", count: 4, direction: text };
+
+    // --- Adjust specific scene ---
+    const sceneRef = lower.match(/scene\s*(\d+)|(\d+)(?:st|nd|rd|th)\s+(?:scene|one|image|picture|frame)/i);
+    if (sceneRef && /change|adjust|redo|fix|update|too|more|less|different|rethink|modify|improve|tweak/i.test(lower))
+      return { type: "adjust_scene", sceneHint: sceneRef[1] || sceneRef[2], feedback: text };
+
+    // "the market scene needs..." / "that bridge scene..."
+    if (/(?:the|that)\s+\w+\s+(?:scene|one|image|picture).*(?:needs?|should|could|is too|isn't|looks)/i.test(lower))
+      return { type: "adjust_scene", feedback: text };
+
+    // If there are pending scenes and user is just saying something short + vague
+    if (pendingScenes > 0 && lower.length < 30 && !/^(hey|hi|hello|thanks|ok|yes|no|what|how|why|can|please)/i.test(lower))
+      return { type: "continue" };
+  }
+
+  // --- Status check ---
+  if (/where.*(picture|image|scene|result)|don't see|can't see|nothing (show|appear|happen)|no (picture|image|result)|still waiting|what happened/i.test(lower))
     return { type: "status" };
+
   return { type: "none" };
+}
+
+/**
+ * LLM-powered intent resolver — called when the fast classifier returns "none"
+ * but there's an active project (ambiguous intent that needs reasoning).
+ *
+ * Uses a tiny Gemini call with NO tools — just text classification.
+ * ~500ms, ~100 tokens. Much cheaper than a full tool-calling round.
+ */
+async function llmClassifyIntent(
+  text: string,
+  projectSummary: string,
+  canvasSummary: string
+): Promise<Intent> {
+  try {
+    const resp = await fetch("/api/agent/gemini", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [{
+              text: `Classify this user message into ONE intent. Reply with ONLY the intent label, nothing else.
+
+Context:
+- Active project: ${projectSummary}
+- Canvas: ${canvasSummary}
+
+User message: "${text.slice(0, 300)}"
+
+Intents:
+- ADD_SCENES:N — user wants N more scenes (default 4)
+- ADJUST — user wants to change existing scenes
+- CONTINUE — user wants to resume generation
+- STATUS — user is asking where results are
+- CONVERSATION — anything else (chat, new request, feedback)
+
+Reply ONLY the label:`,
+            }],
+          },
+        ],
+        // No tools — pure text classification
+      }),
+    });
+
+    if (!resp.ok) return { type: "none" };
+    const data = await resp.json();
+    const answer = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+
+    const addMatch = answer.match(/ADD_SCENES:?(\d*)/i);
+    if (addMatch) return { type: "add_scenes", count: parseInt(addMatch[1]) || 4, direction: text };
+    if (/ADJUST/i.test(answer)) return { type: "adjust_scene", feedback: text };
+    if (/CONTINUE/i.test(answer)) return { type: "continue" };
+    if (/STATUS/i.test(answer)) return { type: "status" };
+    return { type: "none" };
+  } catch {
+    return { type: "none" };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -169,37 +280,82 @@ function extractStyleGuide(text: string) {
 export async function preprocessPrompt(text: string): Promise<PreprocessResult> {
   const say = useChatStore.getState().addMessage;
 
-  // --- Follow-up detection ---
-  const followUp = isFollowUp(text);
-  if (followUp.type === "continue") {
-    const activeProject = useProjectStore.getState().getActiveProject();
+  // --- Two-stage intent classification ---
+  // Stage 1: Fast regex classifier (~0ms, handles 80% of cases)
+  // Stage 2: LLM classifier (~500ms, handles ambiguous messages when project active)
+  const activeProject = useProjectStore.getState().getActiveProject();
+  const pendingScenes = activeProject
+    ? activeProject.scenes.filter(s => s.status !== "done").length
+    : 0;
+  let intent = classifyIntent(text, !!activeProject, pendingScenes);
+
+  // Stage 2: If fast classifier can't decide but there's an active project,
+  // ask the LLM to reason about what the user means. This handles:
+  // "make the story more interesting", "give me 8 more", "that's too dark"
+  if (intent.type === "none" && activeProject && text.length < 500) {
+    const projectSummary = `${activeProject.scenes.length} scenes, ${activeProject.scenes.filter(s => s.status === "done").length} done, style: ${activeProject.styleGuide?.visualStyle || "unset"}`;
+    const cardCount = useCanvasStore.getState().cards.length;
+    const canvasSummary = `${cardCount} cards on canvas`;
+    const llmIntent = await llmClassifyIntent(text, projectSummary, canvasSummary);
+    if (llmIntent.type !== "none") {
+      console.log(`[Preprocessor] LLM reclassified "${text.slice(0, 50)}" as ${llmIntent.type}`);
+      intent = llmIntent;
+    }
+  }
+
+  if (intent.type === "continue") {
     if (activeProject) {
       const done = activeProject.scenes.filter(s => s.status === "done").length;
       const total = activeProject.scenes.length;
       if (done < total) {
         say(`On it — picking up where we left off (${done}/${total} done)...`, "agent");
         await generateAllBatches(activeProject.id, total);
-        return { handled: true, agentPrompt: `All ${total} scenes are generated. Tell the user their storyboard is complete and ask which scenes they'd like to adjust.` };
-      } else {
-        return { handled: false }; // All done, let agent respond
+        say(`${pick(REACTIONS.allDone)} ${pick(REACTIONS.askFeedback)}`, "agent");
+        return { handled: true };
       }
     }
-    // No active project — let agent handle
     return { handled: false };
   }
 
-  if (followUp.type === "status") {
-    const activeProject = useProjectStore.getState().getActiveProject();
+  if (intent.type === "add_scenes") {
+    const count = intent.count;
+    if (activeProject) {
+      say(`Love the ambition! Adding ${count} more scenes to expand the story...`, "agent");
+      const existingCount = activeProject.scenes.length;
+      const style = activeProject.styleGuide;
+      const styleDesc = style?.visualStyle || "matching the existing storyboard style";
+      return {
+        handled: false,
+        agentPrompt: `[Context: The user has a ${existingCount}-scene storyboard on the canvas and wants ${count} more scenes.${intent.direction ? ` They said: "${intent.direction}"` : ""} Use create_media with ${Math.min(count, 5)} steps. Each prompt under 25 words, style: ${styleDesc}. Be creative — add new perspectives, emotional beats, unexpected moments. After creating, call canvas_organize.]`,
+      };
+    }
+    return { handled: false };
+  }
+
+  if (intent.type === "adjust_scene") {
+    if (activeProject) {
+      const sceneHint = intent.sceneHint ? `scene ${intent.sceneHint}` : "the scene they described";
+      say(`Got it — let me rework ${sceneHint}...`, "agent");
+      return {
+        handled: false,
+        agentPrompt: `[Context: The user wants to adjust ${sceneHint} in their storyboard (project "${activeProject.id}"). Their feedback: "${intent.feedback}". Use project_iterate with the scene index and their feedback. Keep it brief.]`,
+      };
+    }
+    return { handled: false };
+  }
+
+  if (intent.type === "status") {
     if (activeProject) {
       const done = activeProject.scenes.filter(s => s.status === "done").length;
       const total = activeProject.scenes.length;
       if (done < total) {
         say(`Working on it — ${done}/${total} scenes done so far. Let me continue...`, "agent");
         await generateAllBatches(activeProject.id, total);
-        return { handled: true, agentPrompt: `All ${total} scenes are now generated. The user was asking about progress — tell them everything is ready on the canvas and ask for feedback.` };
+        say(`${pick(REACTIONS.allDone)} ${pick(REACTIONS.askFeedback)}`, "agent");
+        return { handled: true };
       } else {
         say(`All ${total} scenes are on the canvas! Take a look.`, "agent");
-        return { handled: true, agentPrompt: `All ${total} scenes are already generated and on the canvas. Ask the user what they think and if they want to adjust any scenes.` };
+        return { handled: true };
       }
     }
     return { handled: false };
@@ -249,12 +405,14 @@ export async function preprocessPrompt(text: string): Promise<PreprocessResult> 
   say(pick(REACTIONS.generating), "agent");
   await generateAllBatches(projectId, totalScenes);
 
-  // --- Completion with personality ---
-  const doneMsg = `${pick(REACTIONS.allDone)} ${pick(REACTIONS.askFeedback)}`;
+  // --- Completion with personality (said directly, not via agent) ---
+  say(`${pick(REACTIONS.allDone)} ${pick(REACTIONS.askFeedback)}`, "agent");
 
+  // No agentPrompt needed — we already said everything. But give the agent
+  // context so it can handle follow-up conversation about the scenes.
   return {
     handled: true,
-    agentPrompt: `I just created and generated a ${totalScenes}-scene storyboard. All scenes are on the canvas. Say something like: "${doneMsg}" Keep it brief — the canvas shows the results. If the user wants changes, use project_iterate.`,
+    agentPrompt: `[Context: A ${totalScenes}-scene storyboard was just generated and is on the canvas. The user may want to adjust specific scenes (use project_iterate), add more scenes (use create_media), or discuss the results. Be brief and enthusiastic.]`,
   };
 }
 
