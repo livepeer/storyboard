@@ -57,27 +57,38 @@ export const inferenceTool: ToolDefinition = {
 };
 
 /**
- * stream_start — start an LV2V streaming session.
+ * stream_start — start an LV2V streaming session from webcam.
+ * Auto-starts camera + LV2V pipeline. Creates stream card on canvas.
  */
 export const streamStartTool: ToolDefinition = {
   name: "stream_start",
-  description: "Start a live video-to-video (LV2V) streaming session.",
+  description:
+    "Start a live video-to-video (LV2V) stream from the webcam. Auto-starts camera if needed. Creates a stream card on canvas showing real-time transformed video.",
   parameters: {
     type: "object",
     properties: {
       prompt: {
         type: "string",
-        description: "Initial prompt for the LV2V stream",
+        description: "Style prompt for the LV2V transformation (e.g. 'cyberpunk neon city', 'oil painting warm colors')",
       },
     },
     required: ["prompt"],
   },
   execute: async (input) => {
-    const session = await startStream(input.prompt as string);
-    return {
-      success: true,
-      data: { stream_id: session.streamId },
-    };
+    const prompt = input.prompt as string;
+    // Dispatch event to CameraWidget which handles webcam + LV2V lifecycle
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("lv2v-start", { detail: { prompt } })
+      );
+      return {
+        success: true,
+        data: {
+          message: `LV2V starting with prompt: "${prompt.slice(0, 50)}". Camera and pipeline initializing...`,
+        },
+      };
+    }
+    return { success: false, error: "LV2V requires browser environment" };
   },
 };
 

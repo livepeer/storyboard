@@ -79,6 +79,65 @@ export function CameraWidget() {
     }
   }, [addMessage]);
 
+  // Listen for agent-triggered LV2V start (from chat)
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail as { prompt: string };
+      if (!detail?.prompt) return;
+      // Auto-start webcam if not active
+      if (!active && videoRef.current) {
+        try {
+          await startWebcam(videoRef.current);
+          setActive(true);
+          addMessage("Camera auto-started for LV2V", "system");
+        } catch {
+          addMessage("Camera failed to start", "system");
+          return;
+        }
+        // Wait for video to initialize
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      // Start LV2V with the prompt
+      if (!streaming && videoRef.current) {
+        setStreaming(true);
+        setStatus("Starting stream\u2026");
+        setCurrentPrompt(detail.prompt);
+        try {
+          const session = await startStream(detail.prompt);
+          sessionRef.current = session;
+          const cardRefId = `lv2v_${Date.now()}`;
+          const card = addCard({ type: "stream", title: `LV2V: ${detail.prompt.slice(0, 25)}`, refId: cardRefId });
+          linkRefIdToStream(cardRefId, session.streamId);
+
+          setStatus("Waiting for pipeline\u2026");
+          addMessage("Waiting for LV2V pipeline\u2026", "system");
+          await waitForReady(session, (phase) => setStatus(phase));
+
+          const video = videoRef.current!;
+          if (!video.srcObject || video.videoWidth === 0) {
+            await startWebcam(video);
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+
+          startPublishing(session, () => captureFrame(video), 100);
+          session.onFrame = (url) => updateCard(card.id, { url });
+          session.onStatus = (msg) => setStatus(msg);
+          session.onError = (err) => addMessage(`LV2V: ${err}`, "system");
+          startPolling(session, 200);
+
+          setStatus("Streaming");
+          addMessage(`LV2V started: ${detail.prompt}`, "agent");
+        } catch (e) {
+          setStreaming(false);
+          setStatus("");
+          addMessage(`LV2V error: ${e instanceof Error ? e.message : "Unknown"}`, "system");
+        }
+      }
+    };
+    window.addEventListener("lv2v-start", handler);
+    return () => window.removeEventListener("lv2v-start", handler);
+  }, [active, streaming, addCard, updateCard, addMessage]);
+
   const handleStop = useCallback(() => {
     stopWebcam();
     setActive(false);
