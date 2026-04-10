@@ -8,7 +8,53 @@ import { MessageBubble } from "./MessageBubble";
 import { ToolPill } from "./ToolPill";
 import { QuickActions } from "./QuickActions";
 import { parseCommand, executeCommand } from "@/lib/skills/commands";
+import { preprocessPrompt } from "@/lib/agents/preprocessor";
 import type { AgentEvent, CanvasContext } from "@/lib/agents/types";
+
+/** Map tool name + input to a human-friendly present-progressive verb */
+function toolVerb(name: string, input?: Record<string, unknown>): string {
+  switch (name) {
+    case "create_media": {
+      const steps = input?.steps as Array<{ action: string }> | undefined;
+      const count = steps?.length || 1;
+      const action = steps?.[0]?.action || "generate";
+      const actionVerb: Record<string, string> = {
+        generate: "Generating",
+        restyle: "Restyling",
+        animate: "Animating",
+        upscale: "Upscaling",
+        remove_bg: "Removing background",
+        tts: "Creating narration",
+      };
+      const verb = actionVerb[action] || "Creating";
+      return count > 1 ? `${verb} ${count} images` : `${verb} image`;
+    }
+    case "project_create": return "Planning project";
+    case "project_generate": return "Generating scenes";
+    case "project_iterate": return "Revising scenes";
+    case "project_status": return "Checking progress";
+    case "scope_start": return "Starting stream";
+    case "scope_control": return "Updating stream";
+    case "scope_stop": return "Stopping stream";
+    case "scope_preset": return "Loading preset";
+    case "scope_graph": return "Building graph";
+    case "scope_status": return "Checking stream";
+    case "inference": return "Running inference";
+    case "canvas_get": return "Reading canvas";
+    case "canvas_create": return "Adding to canvas";
+    case "canvas_update": return "Updating card";
+    case "canvas_remove": return "Removing card";
+    case "canvas_organize": return "Organizing canvas";
+    case "load_skill": return `Loading ${input?.skill_id || "skill"}`;
+    case "capabilities": return "Checking models";
+    case "memory_style": return "Saving style";
+    case "memory_rate": return "Rating result";
+    case "stream_start": return "Starting stream";
+    case "stream_control": return "Updating stream";
+    case "stream_stop": return "Stopping stream";
+    default: return "Working";
+  }
+}
 
 /** Tracked tool call with status and optional result summary */
 export interface TrackedTool {
@@ -38,22 +84,48 @@ function buildCanvasContext(): CanvasContext {
 
 /** Summarize a tool result for display in the pill */
 function summarizeResult(name: string, result: unknown): string {
-  if (!result || typeof result !== "object") return "done";
+  if (!result || typeof result !== "object") return "";
   const r = result as Record<string, unknown>;
-  if (r.error) return `error: ${String(r.error).slice(0, 60)}`;
+  if (r.error) return String(r.error).slice(0, 60);
   const data = (r.data ?? r) as Record<string, unknown>;
-  if (data.cards_created) {
-    const cards = data.cards_created as string[];
-    return `${cards.length} card${cards.length > 1 ? "s" : ""} created`;
+
+  switch (name) {
+    case "create_media": {
+      const cards = data.cards_created as string[] | undefined;
+      const results = data.results as Array<{ capability?: string; elapsed_ms?: number }> | undefined;
+      if (!cards) return "";
+      const cap = results?.[0]?.capability;
+      const time = results?.[0]?.elapsed_ms;
+      const parts = [`${cards.length} card${cards.length > 1 ? "s" : ""}`];
+      if (cap) parts.push(cap);
+      if (time) parts.push(`${(time / 1000).toFixed(1)}s`);
+      return parts.join(" · ");
+    }
+    case "project_create":
+      return data.total_scenes ? `${data.total_scenes} scenes planned` : "";
+    case "project_generate": {
+      const completed = data.completed as number | undefined;
+      const total = data.total as number | undefined;
+      return completed !== undefined && total ? `${completed}/${total} done` : "";
+    }
+    case "project_iterate":
+      return data.completed ? `${data.completed}/${data.total} done` : "";
+    case "scope_start":
+      return data.message ? String(data.message).slice(0, 50) : "";
+    case "scope_control": {
+      const applied = data.applied as string[] | undefined;
+      return applied ? applied.join(", ") : "";
+    }
+    case "canvas_get": {
+      const cards = data.cards as unknown[] | undefined;
+      return cards ? `${cards.length} cards` : "";
+    }
+    case "load_skill":
+      return data.skill_id ? `${data.skill_id}` : "";
+    default:
+      if (data.summary) return String(data.summary).slice(0, 60);
+      return "";
   }
-  if (data.summary) return String(data.summary).slice(0, 80);
-  if (data.skill_id) return `loaded ${data.skill_id}`;
-  if (data.url) return "media ready";
-  if (name === "canvas_get") {
-    const cards = data.cards as unknown[] | undefined;
-    return cards ? `${cards.length} cards` : "canvas data";
-  }
-  return "done";
 }
 
 export function ChatPanel() {
@@ -61,6 +133,7 @@ export function ChatPanel() {
   const [input, setInput] = useState("");
   const [trackedTools, setTrackedTools] = useState<TrackedTool[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [thinkingVerb, setThinkingVerb] = useState("Thinking");
   const [minimized, setMinimized] = useState(false);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -82,12 +155,12 @@ export function ChatPanel() {
   const consumeEvents = useCallback(
     async (gen: AsyncGenerator<AgentEvent>) => {
       const tools: TrackedTool[] = [];
+      setThinkingVerb("Thinking");
       setIsThinking(true);
       try {
         for await (const event of gen) {
           switch (event.type) {
             case "text":
-              // First text means thinking is done
               setIsThinking(false);
               break;
             case "tool_call":
@@ -99,6 +172,8 @@ export function ChatPanel() {
                   input: event.input,
                 });
                 setTrackedTools([...tools]);
+                // Update thinking verb based on what tool is running
+                setThinkingVerb(toolVerb(event.name, event.input));
               }
               break;
             case "tool_result": {
@@ -147,10 +222,26 @@ export function ChatPanel() {
     async (text: string) => {
       activeCount.current++;
       addMessage(text, "user");
+
+      // Preprocess: detect multi-scene briefs and break them down
+      // before they reach the LLM agent. This prevents overwhelming
+      // Gemini with 800-word storyboard prompts.
+      let agentText = text;
+      try {
+        setThinkingVerb("Analyzing");
+        setIsThinking(true);
+        const pre = await preprocessPrompt(text);
+        if (pre.handled && pre.agentPrompt) {
+          agentText = pre.agentPrompt;
+        }
+      } catch {
+        // Preprocessing failed — send original to agent
+      }
+
       const plugin = getActivePlugin();
       if (plugin) {
         const context = buildCanvasContext();
-        const gen = plugin.sendMessage(text, context);
+        const gen = plugin.sendMessage(agentText, context);
         await consumeEvents(gen);
       }
       activeCount.current--;
@@ -283,12 +374,11 @@ export function ChatPanel() {
               <MessageBubble key={msg.id} message={msg} />
             ))}
 
-            {/* Thinking indicator */}
+            {/* Status indicator — shows verb like "Thinking...", "Generating 3 images..." */}
             {isThinking && (
-              <div className="flex items-center gap-1.5 self-start px-1 py-1">
-                <span className="thinking-dot" />
-                <span className="thinking-dot [animation-delay:0.15s]" />
-                <span className="thinking-dot [animation-delay:0.3s]" />
+              <div className="flex items-center gap-2 self-start px-2 py-1.5">
+                <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-purple-400/30 border-t-purple-400" />
+                <span className="text-[11px] text-purple-300/80">{thinkingVerb}…</span>
               </div>
             )}
 

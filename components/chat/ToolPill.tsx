@@ -4,18 +4,32 @@ import { useState } from "react";
 import type { TrackedTool } from "./ChatPanel";
 
 const TOOL_LABELS: Record<string, string> = {
-  create_media: "Media",
+  create_media: "Creating",
   inference: "Inference",
-  canvas_create: "Card",
-  canvas_update: "Update",
-  canvas_get: "Canvas",
-  canvas_remove: "Remove",
-  load_skill: "Skill",
-  capabilities: "Caps",
+  canvas_create: "Adding card",
+  canvas_update: "Updating",
+  canvas_get: "Reading canvas",
+  canvas_remove: "Removing",
+  canvas_organize: "Organizing",
+  load_skill: "Loading skill",
+  capabilities: "Models",
   stream_start: "Stream",
   stream_control: "Control",
-  stream_stop: "Stop",
-  train_lora: "Train",
+  stream_stop: "Stopping",
+  train_lora: "Training",
+  project_create: "Planning",
+  project_generate: "Generating",
+  project_iterate: "Revising",
+  project_status: "Progress",
+  scope_start: "Starting LV2V",
+  scope_control: "Updating LV2V",
+  scope_stop: "Stopping LV2V",
+  scope_preset: "Preset",
+  scope_graph: "Graph",
+  scope_status: "Stream status",
+  memory_style: "Saving style",
+  memory_rate: "Rating",
+  memory_preference: "Preference",
 };
 
 function statusIcon(status: TrackedTool["status"]) {
@@ -35,11 +49,27 @@ function inputSummary(tool: TrackedTool): string | null {
   if (!tool.input) return null;
   const inp = tool.input;
   if (tool.name === "create_media") {
-    const steps = inp.steps as Array<{ action: string }> | undefined;
-    return steps ? `${steps.length} step${steps.length > 1 ? "s" : ""}` : null;
+    const steps = inp.steps as Array<{ action: string; prompt?: string }> | undefined;
+    if (!steps) return null;
+    if (steps.length === 1 && steps[0].prompt) return steps[0].prompt.slice(0, 35);
+    return `${steps.length} items`;
+  }
+  if (tool.name === "project_create") {
+    const scenes = inp.scenes as unknown[] | undefined;
+    return scenes ? `${scenes.length} scenes` : null;
+  }
+  if (tool.name === "project_generate") return null; // auto-batches, no useful summary
+  if (tool.name === "scope_start") {
+    const preset = inp.preset as string | undefined;
+    const template = inp.graph_template as string | undefined;
+    return [preset, template].filter(Boolean).join(", ") || null;
+  }
+  if (tool.name === "scope_control") {
+    const keys = Object.keys(inp).filter(k => k !== "stream_id");
+    return keys.length > 0 ? keys.join(", ") : null;
   }
   if (tool.name === "load_skill") return String(inp.skill_id || "");
-  if (inp.prompt) return String(inp.prompt).slice(0, 30);
+  if (inp.prompt) return String(inp.prompt).slice(0, 35);
   return null;
 }
 
@@ -67,8 +97,8 @@ export function ToolPill({ tool }: { tool: TrackedTool }) {
           <span className="text-[var(--text-dim)]">: {summary}</span>
         )}
         {tool.resultSummary && tool.status !== "running" && (
-          <span className="text-[var(--text-dim)]">
-            {tool.resultSummary.slice(0, 40)}
+          <span className={tool.status === "error" ? "text-red-300/80" : "text-[var(--text-dim)]"}>
+            {tool.resultSummary.slice(0, 50)}
           </span>
         )}
         {hasDetail && (

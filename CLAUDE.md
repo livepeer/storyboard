@@ -6,7 +6,7 @@ A Next.js 16 app that transforms the single-file `storyboard.html` prototype (fr
 
 ## Current State
 
-Phases 0-7 complete. 15 tools, 11 skills, 4 agent plugins (Built-in, Claude, OpenAI, Gemini). Default agent: Gemini 2.5 Flash. Default SDK: `sdk.daydream.monster`.
+Phases 0-7 + Scope Advanced Integration complete. 21 tools, 17 skills, 4 agent plugins (Built-in, Claude, OpenAI, Gemini). Default agent: Gemini 2.5 Flash. Default SDK: `sdk.daydream.monster`.
 
 ## GitHub
 - **Repo:** `livepeer/storyboard` — https://github.com/livepeer/storyboard
@@ -264,13 +264,174 @@ LLMs hallucinate model names (e.g., `flux-pro`, `kling-i2v`, `lux-tts`). The sto
 | Gemini | gemini-2.5-flash | /api/agent/gemini | functionDeclarations |
 
 ### Common Patterns
-- All plugins share the same 15-tool registry
+- All plugins share the same 21-tool registry
 - System prompt loaded from `skills/base.md` + live capabilities + memory + canvas context
 - Tool-use loop: LLM calls tool → execute → send result → loop until done
 - Concurrent prompt execution (no queue unless depends_on)
 
 ### Gemini Quirk
 Gemini sometimes returns empty `content` (no `parts`) after tool execution. This is normal — the tool results are on the canvas. Don't show an error.
+
+---
+
+## SKILL: Scope Domain Agent (Advanced LV2V)
+
+### Architecture
+The Scope Domain Agent is an expert subsystem that translates natural language into precise Scope configurations. It runs as a tool layer accessible by all agent plugins (Gemini, Claude, OpenAI) — NOT a standalone plugin.
+
+```
+User: "stream my image with anime style"
+  → Agent loads scope-agent skill (domain knowledge)
+  → Agent calls scope_start tool (graph=simple-lv2v, preset=anime, source.ref_id=card)
+  → scope_start builds ScopeStreamParams (graph, pipeline_ids, noise_scale, etc.)
+  → session.ts passes scopeParams to SDK /stream/start
+  → SDK passes full params through to fal runner (cloud/livepeer_app.py)
+  → Scope validates graph, loads pipeline, starts stream
+```
+
+### Key Principle: SDK as Passthrough
+The SDK does NOT validate Scope params. It passes them through to the fal runner which validates against Scope's `graph_schema.py`. This means:
+- **Adding new Scope features requires zero SDK changes** — just send the right params
+- **SDK only needs changes when the transport protocol changes** (new channel types, etc.)
+- **feat branch `feat/scope-advanced-params`** in simple-infra contains the passthrough change
+
+### 6 Scope Tools
+| Tool | Purpose |
+|------|---------|
+| `scope_start` | Start LV2V with full config (graph, preset, LoRA, VACE, source) |
+| `scope_control` | Update params mid-stream (prompt, noise, denoising, LoRA scale) |
+| `scope_stop` | Stop a stream |
+| `scope_preset` | List/apply named presets (dreamy, cinematic, anime, etc.) |
+| `scope_graph` | List/build graph templates |
+| `scope_status` | Stream health, FPS, frames published/received |
+
+### 6 Graph Templates
+| Template | Graph | Use Case |
+|----------|-------|----------|
+| `simple-lv2v` | source→longlive→sink | Default webcam/video transform |
+| `depth-guided` | source→depth_anything→longlive→sink | Preserve depth/structure |
+| `scribble-guided` | source→scribble→longlive→sink | Edge-guided generation |
+| `interpolated` | source→longlive→rife→sink | 2x frame interpolation |
+| `text-only` | longlive→sink | Pure text-to-video (no input) |
+| `multi-pipeline` | source→pipeline_a→pipeline_b→sink | Chained transforms |
+
+### 7 Presets
+dreamy (noise=0.7), cinematic (0.5), anime (0.6), abstract (0.95), faithful (0.2), painterly (0.65), psychedelic (0.9)
+
+### Key Scope Parameters (runtime, change mid-stream)
+- `noise_scale` (0.0-1.0): creativity level. 0=faithful, 1=ignore input
+- `kv_cache_attention_bias` (0.01-1.0): temporal consistency. Low=responsive, high=stable
+- `denoising_step_list` [1000,750,500,250]: quality vs speed
+- `reset_cache`: one-shot flush for dramatic style change
+- `lora_scales`: adjust LoRA strength without restart
+- `prompts`: string or [{text, weight}] for spatial blending
+
+### Scope Source Code Reference
+- **Graph schema:** `Scope/scope/src/scope/server/graph_schema.py` — node types, edge format, validation
+- **Graph executor:** `Scope/scope/src/scope/server/graph_executor.py` — builds queues, wires processors
+- **Pipeline registry:** `Scope/scope/src/scope/core/pipelines/registry.py` — auto-registration by VRAM
+- **LongLive config:** `Scope/scope/src/scope/core/pipelines/longlive/schema.py` — all params with ranges
+- **Server schema:** `Scope/scope/src/scope/server/schema.py` — Parameters model, VACE, transitions
+- **LoRA manager:** `Scope/scope/src/scope/core/pipelines/wan2_1/lora/manager.py` — 3 merge strategies
+- **Cloud runner:** `Scope/scope/src/scope/cloud/livepeer_app.py` — fal.ai WebSocket + trickle I/O
+- **Modulation:** `Scope/scope/src/scope/server/modulation.py` — beat-synced param oscillation
+
+### Multi-Source Input
+FrameExtractor (`lib/stream/frame-extractor.ts`) supports: webcam, image, video, URL. All produce JPEG blobs at configurable FPS for trickle publish.
+
+### Stream Card Controls
+Stream-type cards have: run/stop buttons, pub/recv stats, inline agent input (type natural language to control stream in real-time). Video cards have fullscreen button.
+
+---
+
+## SKILL: Canvas Layout & BatchId Grouping
+
+### BatchId System
+Each `create_media` call tags all its cards with a shared `batchId` (`batch_<timestamp>`). This groups cards by the prompt that created them.
+
+### Layout Modes
+- **`autoLayout()`** — Grid layout. Cards with the same batchId stay contiguous in the grid.
+- **`narrativeLayout()`** — **One row per batchId**. Cards from the same prompt flow horizontally; different prompts stack as separate rows.
+- **`layoutTimeline()`** — Arrange specific refIds in grid order (used by project_generate).
+
+### Layout Commands
+- `/organize` or `/organize grid` — autoLayout (grid, grouped by batch)
+- `/organize narrative` or `/organize flow` — narrativeLayout (one row per prompt batch)
+
+---
+
+## SKILL: Long Prompt Handling & Preprocessor
+
+### The Core Problem
+Gemini (and other LLMs) choke on large prompts combined with many tool schemas. A 800-word storyboard brief + 500-char system prompt + 21 tool schemas = empty STOP or MALFORMED_FUNCTION_CALL. This is **not fixable by prompt engineering** — the model is token-overwhelmed.
+
+### The Solution: Client-Side Preprocessor (`lib/agents/preprocessor.ts`)
+Multi-scene prompts are intercepted BEFORE reaching the LLM:
+1. **Detect** multi-scene: regex for `Scene N —`, numbered lists, or >1500 chars with "storyboard"/"scenes"
+2. **Extract** scenes client-side: title + first-sentence summary (≤25 words each)
+3. **Extract** style guide: visual_style, color_palette, mood → prompt_prefix
+4. **Call `project_create` directly** — no LLM needed for parsing
+5. **Send 1-line instruction** to agent: "Project created. Call project_generate."
+6. Agent just manages the generation loop (small context per call)
+
+**The LLM never sees the full brief.** It gets a 50-word instruction instead of 800 words.
+
+### Stress-Tested
+- 20-scene, 8,651-char, 1,399-word prompt → all 20 scenes extracted, all prompts ≤25 words
+- Style guide correctly parsed (visual_style, color_palette, mood)
+- Preprocessing takes <50ms (pure regex, no LLM)
+- Short prompts ("cat eating cheez-it") bypass preprocessor correctly
+
+### Key Design Rules
+- **System prompt must stay under ~500 chars.** Don't list tool descriptions in base.md — Gemini sees them in function declarations already. Just routing rules.
+- **Never send raw user text >500 words to Gemini.** Preprocess or summarize first.
+- **Empty STOP handler must detect prompt type.** Multi-scene → route to project_create. Single image → enhance creatively. Don't try to "create a stunning image" from a storyboard brief.
+- **MALFORMED_FUNCTION_CALL retry must be short.** One sentence, not 4 lines of instructions.
+- **Auto-continuation nudges must merge into the function response message** (same user turn). Consecutive user messages cause Gemini 400 "function call turn" errors.
+
+### MALFORMED_FUNCTION_CALL Recovery
+Gemini hits this when function calls are too large. Recovery: short 1-line instruction to use project_create or fewer steps.
+
+### Empty STOP Recovery
+- Multi-scene detected → replace with project_create instruction (from preprocessor)
+- Single image → enhance creatively into 30-word prompt
+- Round limit: 2 retries max, then show error
+
+### Gemini Turn Ordering
+Gemini requires strict user/model alternation. The agent sanitizes messages before each API call — merges consecutive same-role messages. On 400 "function call turn" error, resets conversation and retries.
+
+### Completion Summary
+After all tool calls finish, if Gemini didn't provide text, an auto-summary appears:
+- `Done in 4.2s — media: 3 created (flux-dev)`
+- `2/5 succeeded (12.1s) — media: 2 ok, 3 failed`
+
+### Error Humanization
+Raw errors are mapped to friendly messages in `compound-tools.ts`:
+- "Failed to fetch" → "Can't reach SDK — check connection & API key"
+- "503 / no orchestrator" → "No GPU available — try again in a moment"
+- Error messages show as red-bordered bubbles in chat, red icons on cards
+
+### Network Retry
+`sdkFetch()` retries once after 2s on network errors (Failed to fetch, CORS, timeout). HTTP errors (4xx, 5xx) are NOT retried.
+
+---
+
+## SKILL: VM Health & Auto-Recovery
+
+### SDK VM Health Check
+`/opt/sdk/healthcheck.sh` runs every 2 minutes via cron on sdk-staging-1:
+1. Checks `http://localhost:8000/capabilities`
+2. If unhealthy: restarts `sdk-service` Docker container
+3. If 3 consecutive Docker restarts fail: reboots the VM
+4. Logs to `/var/log/sdk-healthcheck.log`
+
+### GCP Monitoring
+- Uptime check every 5 minutes on `https://sdk.daydream.monster/capabilities`
+- Alert policy emails `sean@livepeer.org` if check fails for 5+ minutes
+- Alert policy ID: `projects/livepeer-simple-infra/alertPolicies/10364248248890653369`
+
+### Common VM Failure Mode
+GCP metadata server (`169.254.169.254`) becomes unreachable → snapd crash-loops → SSH hangs → all services degrade. Fix: `gcloud compute instances reset sdk-staging-1 --zone=us-west1-b --project=livepeer-simple-infra`
 
 ---
 
@@ -312,26 +473,51 @@ The page renders `null` on server and defers all UI to client-side `useEffect`. 
 
 ### Canvas
 - `components/canvas/InfiniteCanvas.tsx` — Pan/zoom, dot grid, card/arrow rendering
-- `components/canvas/Card.tsx` — Drag, resize, media display, info bar on click
+- `components/canvas/Card.tsx` — Drag, resize, media display, info bar, stream controls + inline agent, video fullscreen
 - `components/canvas/ArrowEdge.tsx` — SVG arrows + HTML click targets + inline popup
 - `components/canvas/ContextMenu.tsx` — Right-click actions (direct + agent)
-- `components/canvas/CameraWidget.tsx` — Webcam + LV2V with prompt control bar
+- `components/canvas/CameraWidget.tsx` — Webcam + LV2V with prompt control, info bar (FPS/pub/recv), 5 preset buttons
 
 ### Agent & Tools
-- `lib/agents/gemini/index.ts` — Gemini plugin (default)
+- `lib/agents/gemini/index.ts` — Gemini plugin (default), MALFORMED_FUNCTION_CALL recovery, auto-continuation
 - `lib/agents/claude/index.ts` — Claude plugin
-- `lib/tools/compound-tools.ts` — `create_media` (main tool for all media creation)
-- `lib/tools/canvas-tools.ts` — `canvas_get/create/update/remove`
+- `lib/tools/compound-tools.ts` — `create_media` (main tool for all media creation), batchId tagging
+- `lib/tools/canvas-tools.ts` — `canvas_get/create/update/remove/organize`
+- `lib/tools/scope-tools.ts` — `scope_start/control/stop/preset/graph/status` (Scope Domain Agent)
+- `lib/tools/project-tools.ts` — `project_create/generate/iterate/status` (Director)
 - `lib/sdk/capabilities.ts` — Live capability registry + resolveCapability
+
+### Stream & Scope
+- `lib/stream/session.ts` — LV2V session lifecycle (start, publish, poll, control, stop), scopeParams passthrough
+- `lib/stream/scope-params.ts` — Scope TypeScript types, presets, validation
+- `lib/stream/scope-graphs.ts` — 6 graph templates (simple-lv2v, depth-guided, etc.)
+- `lib/stream/frame-extractor.ts` — Multi-source frame extraction (webcam, image, video, URL)
+
+### Skills (17 total)
+- `skills/scope-agent.md` — Scope Domain Agent: full parameter reference + natural language mapping
+- `skills/director.md` — Director workflow + Scope integration for multi-stream orchestration
+- `skills/base.md` — Base system prompt (rules for create_media, project_create routing)
+- `skills/scope-lv2v.md`, `skills/live-director.md`, `skills/scope-graphs.md` — LV2V reference
 
 ### Infrastructure
 - `simple-infra/sdk-service-build/app.py` — SDK service code
 - `simple-infra/environments/staging/byoc-a3.yaml` — BYOC config
 - `simple-infra/environments/staging/fleet.yaml` — Orch fleet config
 
+### Plans & Docs
+- `docs/scope-adv-plan.md` — Scope Advanced Integration plan (6 phases, architecture, parameter reference)
+- `docs/key-insights-scope.md` — LV2V debugging guide
+
+### E2E Tests
+- `tests/e2e/scope-phase{1-6}.spec.ts` — Scope integration tests (58 tests total)
+- `tests/e2e/storyboard.spec.ts` — Core app tests
+- Run: `npx playwright test tests/e2e/scope-phase*.spec.ts tests/e2e/storyboard.spec.ts`
+
 ## Source Material
 - **Original storyboard:** `/Users/qiang.han/Documents/mycodespace/simple-infra/storyboard.html`
 - **SDK service:** `/Users/qiang.han/Documents/mycodespace/simple-infra/sdk-service-build/app.py`
+- **SDK feat branch:** `feat/scope-advanced-params` in simple-infra (Scope param passthrough)
+- **Scope source:** `/Users/qiang.han/Documents/mycodespace/Scope/scope/src/scope/`
 - **Scope client:** `/Users/qiang.han/Documents/mycodespace/Scope/scope/src/scope/server/livepeer_client.py`
 - **Scope cloud app:** `/Users/qiang.han/Documents/mycodespace/Scope/scope/src/scope/cloud/livepeer_app.py`
 - **go-livepeer LV2V:** `/Users/qiang.han/Documents/mycodespace/livepeer/go-livepeer/server/ai_live_video.go`

@@ -37,33 +37,57 @@ export async function sdkFetch<T = unknown>(
   timeout = 300_000
 ): Promise<T> {
   const config = loadConfig();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
 
-  try {
-    const headers: Record<string, string> = {};
-    if (body) headers["Content-Type"] = "application/json";
-    if (config.apiKey) headers["Authorization"] = `Bearer ${config.apiKey}`;
+  // Retry once on network errors (connection refused, DNS flap, timeout).
+  // HTTP errors (4xx, 5xx) are NOT retried — they're deterministic.
+  const MAX_RETRIES = 1;
+  let lastError: unknown;
 
-    const resp = await fetch(config.serviceUrl + path, {
-      method: body ? "POST" : "GET",
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    });
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
 
-    clearTimeout(timer);
+    try {
+      const headers: Record<string, string> = {};
+      if (body) headers["Content-Type"] = "application/json";
+      if (config.apiKey) headers["Authorization"] = `Bearer ${config.apiKey}`;
 
-    if (!resp.ok) {
-      const err = await resp.text();
-      throw new Error(`HTTP ${resp.status}: ${err.slice(0, 200)}`);
+      const resp = await fetch(config.serviceUrl + path, {
+        method: body ? "POST" : "GET",
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timer);
+
+      if (!resp.ok) {
+        const err = await resp.text();
+        throw new Error(`HTTP ${resp.status}: ${err.slice(0, 200)}`);
+      }
+
+      return (await resp.json()) as T;
+    } catch (e) {
+      clearTimeout(timer);
+      lastError = e;
+
+      // Only retry on network errors, not HTTP errors
+      const msg = e instanceof Error ? e.message : "";
+      const isNetworkError = msg.includes("Failed to fetch")
+        || msg.includes("NetworkError")
+        || msg.includes("ERR_CONNECTION")
+        || msg.includes("abort")
+        || msg.includes("CORS");
+
+      if (isNetworkError && attempt < MAX_RETRIES) {
+        console.warn(`[SDK] ${path} network error, retrying in 2s (attempt ${attempt + 1}):`, msg.slice(0, 80));
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+      throw e;
     }
-
-    return (await resp.json()) as T;
-  } catch (e) {
-    clearTimeout(timer);
-    throw e;
   }
+  throw lastError;
 }
 
 export function checkHealth(): Promise<HealthResponse> {

@@ -45,6 +45,31 @@ const MAX_TOOL_ROUNDS = 20;
 let stopped = false;
 let messages: GeminiMessage[] = [];
 
+/** Produce a brief human-readable result summary for a tool */
+function briefToolResult(name: string, data: unknown): string {
+  if (!data || typeof data !== "object") return "";
+  const d = data as Record<string, unknown>;
+  switch (name) {
+    case "create_media": {
+      const cards = d.cards_created as string[] | undefined;
+      const results = d.results as Array<{ capability?: string; elapsed_ms?: number; error?: string }> | undefined;
+      if (!cards) return "";
+      const ok = results?.filter(r => !r.error).length ?? cards.length;
+      const fail = cards.length - ok;
+      const cap = results?.[0]?.capability || "";
+      if (fail > 0) return `${ok}/${cards.length} created (${cap})`;
+      return `${cards.length} created (${cap})`;
+    }
+    case "project_create": return `${d.total_scenes || "?"} scenes planned`;
+    case "project_generate": return `${d.completed || 0}/${d.total || "?"} done`;
+    case "canvas_get": {
+      const cards = d.cards as unknown[] | undefined;
+      return cards ? `${cards.length} cards` : "";
+    }
+    default: return d.message ? String(d.message).slice(0, 50) : "";
+  }
+}
+
 function say(text: string, role: "agent" | "system" = "agent") {
   useChatStore.getState().addMessage(text, role);
 }
@@ -150,39 +175,79 @@ export const geminiPlugin: AgentPlugin = {
 
       console.log(`[Gemini] Sending: ${messages.length} messages, ${tools.length} tools, system=${system.length} chars`);
 
-      // Tool-use loop
+      // Tool-use loop — track results for completion summary
       let lastRoundHadToolCalls = false;
+      let agentGaveText = false;
+      const completedTools: Array<{ name: string; success: boolean; summary?: string }> = [];
+      const startTime = Date.now();
+
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         if (stopped) {
           yield { type: "text", content: "Stopped." };
           break;
         }
 
-        // Compact old messages (Gemini format: role + parts with text)
-        const compactable = messages.map((m) => ({
-          role: m.role,
-          content: m.parts
-            .map((p) =>
-              p.text || (p.functionResponse ? JSON.stringify(p.functionResponse.response) : "")
-            )
-            .join(""),
-        }));
-        const compacted = compactHistory(compactable, 6);
-        // Rebuild Gemini messages from compacted
-        const apiMessages: GeminiMessage[] = compacted.map((m, i) => {
-          // If original message had functionCall/functionResponse parts, keep them
-          if (i < messages.length && messages[i].parts.some((p) => p.functionCall || p.functionResponse)) {
-            return messages[i];
+        // Sanitize messages: ensure strict user/model alternation.
+        // Gemini requires this — merge consecutive same-role messages.
+        const sanitized: GeminiMessage[] = [];
+        for (const m of messages) {
+          const last = sanitized[sanitized.length - 1];
+          if (last && last.role === m.role) {
+            // Merge into previous message of same role
+            last.parts.push(...m.parts);
+          } else {
+            sanitized.push({ role: m.role, parts: [...m.parts] });
           }
-          return {
-            role: m.role as "user" | "model",
-            parts: [{ text: typeof m.content === "string" ? m.content : "" }],
-          };
-        });
+        }
 
-        const response = await callApi(apiMessages, tools, system);
+        // Use sanitized messages directly (compaction only when > 12 messages)
+        let apiMessages: GeminiMessage[];
+        if (sanitized.length > 12) {
+          // Keep last 8 messages, summarize the rest
+          const kept = sanitized.slice(-8);
+          const dropped = sanitized.slice(0, -8);
+          const summary = dropped
+            .map((m) => m.parts.map((p) => p.text || "").filter(Boolean).join(" "))
+            .filter(Boolean)
+            .join("; ");
+          apiMessages = summary
+            ? [{ role: "user", parts: [{ text: `[Prior context: ${summary.slice(0, 500)}]` }] }, ...kept]
+            : kept;
+          // Ensure first message is user role (Gemini requirement)
+          if (apiMessages[0]?.role !== "user") {
+            apiMessages.unshift({ role: "user", parts: [{ text: "Continue." }] });
+          }
+        } else {
+          apiMessages = sanitized;
+        }
+
+        // Ensure conversation starts with user message
+        if (apiMessages.length > 0 && apiMessages[0].role !== "user") {
+          apiMessages.unshift({ role: "user", parts: [{ text: "Continue." }] });
+        }
+
+        let response: GeminiResponse;
+        try {
+          response = await callApi(apiMessages, tools, system);
+        } catch (e) {
+          const errMsg = e instanceof Error ? e.message : String(e);
+          // Gemini 400 on turn ordering — reset conversation and retry with just the user prompt
+          if (errMsg.includes("function call turn") || errMsg.includes("function response turn")) {
+            console.warn("[Gemini] Turn ordering error — resetting conversation");
+            messages = [{ role: "user", parts: [{ text }] }];
+            response = await callApi(messages, tools, system);
+          } else {
+            throw e;
+          }
+        }
 
         if (response.error) {
+          // Same recovery for turn-ordering errors in response body
+          if (response.error.message?.includes("function call turn")) {
+            console.warn("[Gemini] Turn ordering error in response — resetting");
+            messages = [{ role: "user", parts: [{ text }] }];
+            continue;
+          }
           throw new Error(response.error.message);
         }
 
@@ -191,50 +256,63 @@ export const geminiPlugin: AgentPlugin = {
           const reason = candidate?.finishReason || "No response";
           console.warn(`[Gemini] Empty response: finishReason=${reason}, round=${round}, lastToolCalls=${lastRoundHadToolCalls}, messages=${messages.length}`);
 
-          // MALFORMED_FUNCTION_CALL: auto-retry with smarter guidance
+          // MALFORMED_FUNCTION_CALL: auto-retry with shorter instruction
           if (reason === "MALFORMED_FUNCTION_CALL" && round < MAX_TOOL_ROUNDS - 1) {
-            say("Simplifying request...", "system");
             messages.push({
               role: "user",
-              parts: [{ text: `Your function call was too complex. Follow these rules:
-- For 6+ scenes: call project_create first (with brief, style_guide, and scenes array with SHORT prompts under 25 words each), then call project_generate with the returned project_id. This auto-batches everything.
-- For 1-5 items: call create_media with max 3 steps and short prompts (under 25 words each).
-- CRITICAL: Keep all prompts SHORT. Summarize the visual into a concise prompt. Do not include full scene descriptions in the prompt field.` }],
+              parts: [{ text: "Function call too large. Use project_create for 6+ scenes with prompts UNDER 20 WORDS each. For 1-5 items use create_media with max 3 steps. Summarize — don't copy descriptions." }],
             });
             continue;
           }
 
           // STOP with no content: Gemini didn't act.
-          // Enhance the prompt creatively and execute directly — don't just retry.
-          if (reason === "STOP" && round === 0 && !lastRoundHadToolCalls) {
-            console.warn("[Gemini] Empty STOP — enhancing prompt and executing directly");
-            // Instead of retrying, enhance the vague prompt into something extraordinary
-            // and call create_media directly — surprise the user
-            messages[messages.length - 1] = {
-              role: "user",
-              parts: [{ text: `The user said: "${text}". They gave a brief prompt — this is your chance to be creative. Enhance it into a stunning visual. Add cinematic lighting, composition, mood, and detail. Then call create_media with ONE step using your enhanced prompt. Make it extraordinary — surprise them with something better than what they imagined. Do NOT ask questions, just create.` }],
-            };
+          // Detect multi-scene vs single-image and give appropriate instructions.
+          if (reason === "STOP" && round <= 1 && !lastRoundHadToolCalls) {
+            console.warn("[Gemini] Empty STOP on round", round, "— analyzing prompt type");
+
+            // Detect multi-scene: look for scene/shot numbering patterns
+            const isMultiScene = /scene\s*\d|shot\s*\d|\d\s*scene|\d[.\-)\s]+\w/i.test(text)
+              || (text.match(/scene/gi) || []).length >= 3
+              || text.length > 1500;
+
+            if (isMultiScene) {
+              // Route to project_create — the prompt is a storyboard brief
+              console.warn("[Gemini] Detected multi-scene prompt, routing to project_create");
+              messages[messages.length - 1] = {
+                role: "user",
+                parts: [{ text: `The user wants a multi-scene storyboard. Call project_create with:
+- brief: A 1-sentence summary of the project
+- style_guide: Extract visual_style, color_palette, mood, prompt_prefix from the brief
+- scenes: Array of scenes. For EACH scene: index, title (short), prompt (UNDER 20 WORDS — just the key visual), action: "generate"
+
+CRITICAL: Each scene prompt must be UNDER 20 WORDS. Summarize — do NOT copy the user's description.
+
+Here is the brief:
+${text.slice(0, 2000)}` }],
+              };
+            } else {
+              // Single image — enhance creatively
+              messages[messages.length - 1] = {
+                role: "user",
+                parts: [{ text: `Create a stunning image of: "${text.slice(0, 200)}". Call create_media with ONE step, prompt under 30 words. Be creative. Do NOT ask questions.` }],
+              };
+            }
             continue;
           }
 
           if (!lastRoundHadToolCalls) {
             if (reason === "MALFORMED_FUNCTION_CALL") {
-              say("Function call too complex even after retry. Try a simpler prompt.", "system");
-              yield { type: "error", content: "Gemini: function call too complex. Try fewer scenes." };
+              say("Too complex — try a simpler prompt or fewer scenes.", "system");
             } else if (reason === "STOP") {
-              say("No response from Gemini. Try rephrasing or a shorter prompt.", "system");
-              yield { type: "error", content: "Gemini returned empty. Try again." };
+              say("Couldn't process that. Try rephrasing?", "system");
             } else if (reason === "MAX_TOKENS") {
-              say("Response too long — try a shorter prompt or fewer scenes.", "system");
-              yield { type: "error", content: "Gemini: response exceeded token limit. Try fewer scenes." };
+              say("Response too long — try fewer scenes.", "system");
             } else if (reason === "SAFETY") {
-              say("Content filtered by safety policy.", "system");
-              yield { type: "error", content: "Gemini: blocked by safety filter." };
+              say("Blocked by safety filter.", "system");
             } else if (reason === "RECITATION") {
-              say("Content blocked — try rephrasing.", "system");
-              yield { type: "error", content: "Gemini: recitation filter triggered." };
+              say("Blocked — try rephrasing.", "system");
             } else {
-              yield { type: "error", content: `Gemini: ${reason}` };
+              say(`Error: ${reason}`, "system");
             }
           }
           break;
@@ -248,6 +326,7 @@ export const geminiPlugin: AgentPlugin = {
           if (part.text) {
             yield { type: "text", content: part.text };
             say(part.text, "agent");
+            agentGaveText = true;
           }
           if (part.functionCall) {
             functionCalls.push(part.functionCall);
@@ -287,6 +366,15 @@ export const geminiPlugin: AgentPlugin = {
             result: result.data ?? result.error,
           };
 
+          // Track for completion summary
+          completedTools.push({
+            name: fc.name,
+            success: result.success,
+            summary: result.success
+              ? briefToolResult(fc.name, result.data)
+              : (result.error || "failed"),
+          });
+
           // Track project workflow state for auto-continuation
           if (fc.name === "project_create" && result.success) {
             hasProjectCreate = true;
@@ -309,26 +397,69 @@ export const geminiPlugin: AgentPlugin = {
           });
         }
 
-        // Append tool results as user message
+        // Append tool results as user message.
+        // Merge any continuation nudges INTO the same user message to avoid
+        // consecutive user turns (Gemini requires strict user/model alternation).
+        const userParts: GeminiPart[] = [...responseParts];
+
+        if (hasProjectCreate && projectId && !hasProjectGenerate) {
+          userParts.push({ text: `Project created. Now call project_generate with project_id="${projectId}" to start generating scenes.` });
+        }
+        if (hasProjectGenerate && moreRemaining) {
+          userParts.push({ text: "More scenes remaining. Call project_generate again with the same project_id." });
+        }
+
         messages.push({
           role: "user",
-          parts: responseParts,
+          parts: userParts,
         });
+      }
 
-        // Auto-continuation: after project_create, nudge to generate
-        if (hasProjectCreate && projectId && !hasProjectGenerate) {
-          messages.push({
-            role: "user",
-            parts: [{ text: `Project created. Now call project_generate with project_id="${projectId}" to start generating scenes.` }],
-          });
+      // Completion summary — if agent didn't say anything after finishing tools,
+      // generate a brief summary so the user knows what happened.
+      if (completedTools.length > 0 && !agentGaveText) {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        const ok = completedTools.filter(t => t.success).length;
+        const fail = completedTools.length - ok;
+
+        // Build summary
+        const parts: string[] = [];
+
+        // Group by tool name for concise output
+        const byName = new Map<string, { ok: number; fail: number; summaries: string[] }>();
+        for (const t of completedTools) {
+          const entry = byName.get(t.name) || { ok: 0, fail: 0, summaries: [] };
+          if (t.success) entry.ok++;
+          else entry.fail++;
+          if (t.summary) entry.summaries.push(t.summary);
+          byName.set(t.name, entry);
         }
-        // After project_generate with remaining scenes, nudge to continue
-        if (hasProjectGenerate && moreRemaining) {
-          messages.push({
-            role: "user",
-            parts: [{ text: "More scenes remaining. Call project_generate again with the same project_id." }],
-          });
+
+        for (const [name, info] of byName) {
+          const toolLabel: Record<string, string> = {
+            create_media: "media",
+            project_create: "project",
+            project_generate: "scenes",
+            canvas_get: "canvas lookup",
+            load_skill: "skill",
+            scope_start: "stream",
+          };
+          const label = toolLabel[name] || name;
+          if (info.fail > 0 && info.ok === 0) {
+            parts.push(`${label}: failed`);
+          } else if (info.fail > 0) {
+            parts.push(`${label}: ${info.ok} ok, ${info.fail} failed`);
+          } else if (info.summaries[0]) {
+            parts.push(`${label}: ${info.summaries[0]}`);
+          }
         }
+
+        const summaryText = fail === 0
+          ? `Done in ${elapsed}s${parts.length ? " — " + parts.join(", ") : ""}`
+          : `${ok}/${completedTools.length} succeeded (${elapsed}s)${parts.length ? " — " + parts.join(", ") : ""}`;
+
+        say(summaryText, "system");
+        yield { type: "text", content: summaryText };
       }
 
       yield { type: "done" };

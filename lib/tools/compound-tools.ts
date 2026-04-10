@@ -3,7 +3,31 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { runInference } from "@/lib/sdk/client";
 import { resolveCapability, isValidCapability } from "@/lib/sdk/capabilities";
 import { useSkillStore } from "@/lib/skills/store";
+import { useChatStore } from "@/lib/chat/store";
 import type { CardType } from "@/lib/canvas/types";
+
+/** Convert raw technical errors into short, user-friendly messages */
+function humanizeError(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (lower.includes("failed to fetch") || lower.includes("err_connection") || lower.includes("networkerror"))
+    return "Can't reach SDK — check connection & API key";
+  if (lower.includes("cors"))
+    return "Connection blocked (CORS) — SDK may be down";
+  if (lower.includes("401") || lower.includes("payment failed") || lower.includes("signer"))
+    return "Authentication failed — check your API key";
+  if (lower.includes("503") || lower.includes("no orchestrator"))
+    return "No GPU available — try again in a moment";
+  if (lower.includes("timeout") || lower.includes("abort"))
+    return "Request timed out — model may be overloaded";
+  if (lower.includes("safety") || lower.includes("blocked"))
+    return "Content blocked by safety filter";
+  if (lower.includes("429") || lower.includes("rate"))
+    return "Rate limited — wait a moment";
+  if (lower.includes("500"))
+    return "Server error — try again";
+  // Keep short errors as-is, truncate long ones
+  return raw.length > 80 ? raw.slice(0, 77) + "…" : raw;
+}
 
 /** Apply active style-override skills to a prompt */
 function applyStyleOverrides(prompt: string, action: string): { prompt: string; modelHint?: string } {
@@ -224,8 +248,9 @@ export const createMediaTool: ToolDefinition = {
         const effectiveError = topError || dataError;
 
         if (effectiveError) {
-          canvas.updateCard(card.id, { error: effectiveError });
-          results.push({ refId, cardId: card.id, error: effectiveError, capability, elapsed });
+          const friendly = humanizeError(effectiveError);
+          canvas.updateCard(card.id, { error: friendly });
+          results.push({ refId, cardId: card.id, error: friendly, capability, elapsed });
         } else if (url) {
           canvas.updateCard(card.id, { url });
           results.push({ refId, cardId: card.id, url, capability, elapsed });
@@ -240,8 +265,9 @@ export const createMediaTool: ToolDefinition = {
             canvas.updateCard(card.id, { url: fallbackUrl });
             results.push({ refId, cardId: card.id, url: fallbackUrl, capability, elapsed });
           } else {
-            canvas.updateCard(card.id, { error: `No media returned from ${capability}` });
-            results.push({ refId, cardId: card.id, error: `No media returned from ${capability}`, capability, elapsed });
+            const noMediaMsg = `No output from ${capability} — try a different prompt`;
+            canvas.updateCard(card.id, { error: noMediaMsg });
+            results.push({ refId, cardId: card.id, error: noMediaMsg, capability, elapsed });
           }
         }
 
@@ -255,16 +281,27 @@ export const createMediaTool: ToolDefinition = {
         }
       } catch (e) {
         const elapsed = performance.now() - t0;
-        const error = e instanceof Error ? e.message : "Unknown error";
-        canvas.updateCard(card.id, { error });
-        results.push({ refId, cardId: card.id, error, capability, elapsed });
+        const raw = e instanceof Error ? e.message : "Unknown error";
+        const friendly = humanizeError(raw);
+        canvas.updateCard(card.id, { error: friendly });
+        results.push({ refId, cardId: card.id, error: friendly, capability, elapsed });
       }
+    }
+
+    // Show error summary in agent chat if any steps failed
+    const failures = results.filter((r) => r.error);
+    if (failures.length > 0) {
+      const ok = results.length - failures.length;
+      const errMsg = failures.length === results.length
+        ? `All ${failures.length} failed: ${failures[0].error}`
+        : `${ok}/${results.length} succeeded, ${failures.length} failed: ${failures.map(f => f.error).join("; ")}`;
+      useChatStore.getState().addMessage(errMsg, "system");
     }
 
     const summary = results
       .map(
         (r) =>
-          `${r.refId}: ${r.capability} (${(r.elapsed / 1000).toFixed(1)}s)${r.error ? ` ERROR: ${r.error}` : ""}`
+          `${r.refId}: ${r.capability} (${(r.elapsed / 1000).toFixed(1)}s)${r.error ? ` — ${r.error}` : ""}`
       )
       .join("; ");
 

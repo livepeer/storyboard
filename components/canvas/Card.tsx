@@ -164,8 +164,10 @@ export function Card({ card }: { card: CardData }) {
       {!card.minimized && (
         <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-[var(--bg)]">
           {card.error ? (
-            <div className="p-4 text-center font-mono text-[11px] text-red-500">
-              {card.error}
+            <div className="flex flex-col items-center gap-2 p-4 text-center">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500/10 text-red-400 text-lg">!</div>
+              <div className="font-mono text-[11px] text-red-400 leading-relaxed">{card.error}</div>
+              <div className="text-[9px] text-[var(--text-dim)]">Right-click for options</div>
             </div>
           ) : card.url ? (
             card.type === "audio" ? (

@@ -9,6 +9,14 @@ const roleStyles: Record<string, string> = {
   system: "self-center font-mono text-[10px] text-[var(--text-dim)]",
 };
 
+/** Check if a system message is an error that needs red highlighting */
+function isErrorMessage(text: string): boolean {
+  const lower = text.toLowerCase();
+  return lower.includes("failed") || lower.includes("error") || lower.includes("blocked")
+    || lower.includes("can't reach") || lower.includes("timed out") || lower.includes("too complex")
+    || lower.includes("couldn't") || lower.includes("authentication");
+}
+
 const RATING_RE = /\[rate:([^:]+):([^:]*):([^\]]*)\]/;
 
 // Match /skills/load xxx commands in system messages
@@ -65,10 +73,14 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
     );
   };
 
+  const isError = message.role === "system" && isErrorMessage(message.text);
+
   return (
     <div
       className={`max-w-[90%] break-words rounded-lg px-3 py-2 text-xs ${
-        roleStyles[message.role] || roleStyles.agent
+        isError
+          ? "self-center font-mono text-[10px] bg-red-500/8 border border-red-500/20 text-red-400"
+          : (roleStyles[message.role] || roleStyles.agent)
       }`}
     >
       {ratingMatch ? (
