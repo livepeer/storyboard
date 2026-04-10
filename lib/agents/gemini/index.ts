@@ -180,13 +180,23 @@ export const geminiPlugin: AgentPlugin = {
 
         const candidate = response.candidates?.[0];
         if (!candidate?.content?.parts) {
-          // Gemini sometimes returns empty content after tool results — this is normal
-          // Only show error if there were no tool calls at all (nothing happened)
+          const reason = candidate?.finishReason || "No response";
+          console.warn(`[Gemini] Empty response: finishReason=${reason}, candidates=${response.candidates?.length || 0}`);
           if (!lastRoundHadToolCalls) {
-            const reason = candidate?.finishReason || "No response";
-            yield { type: "error", content: `Gemini: ${reason}` };
+            // Show actionable error based on reason
+            if (reason === "MAX_TOKENS") {
+              say("Response too long — try a shorter prompt or fewer scenes.", "system");
+              yield { type: "error", content: "Gemini: response exceeded token limit. Try fewer scenes." };
+            } else if (reason === "SAFETY") {
+              say("Content filtered by safety policy.", "system");
+              yield { type: "error", content: "Gemini: blocked by safety filter." };
+            } else if (reason === "RECITATION") {
+              say("Content blocked — try rephrasing.", "system");
+              yield { type: "error", content: "Gemini: recitation filter triggered." };
+            } else {
+              yield { type: "error", content: `Gemini: ${reason}` };
+            }
           }
-          // If tools ran, the results are already on the canvas — just end quietly
           break;
         }
 
