@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import type { Card as CardData } from "@/lib/canvas/types";
+import { getSession, getActiveSession, controlStream } from "@/lib/stream/session";
 
 const TYPE_COLORS: Record<string, { text: string; bg: string }> = {
   image: { text: "#8b5cf6", bg: "rgba(139,92,246,0.1)" },
@@ -15,6 +16,8 @@ const TYPE_COLORS: Record<string, { text: string; bg: string }> = {
 export function Card({ card }: { card: CardData }) {
   const { viewport, selectedCardId, updateCard, removeCard, selectCard, edges } =
     useCanvasStore();
+  const [streamInput, setStreamInput] = useState("");
+  const [streamMsg, setStreamMsg] = useState("");
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -209,6 +212,120 @@ export function Card({ card }: { card: CardData }) {
               {incomingEdge.meta.prompt.length > 80 ? incomingEdge.meta.prompt.slice(0, 80) + "\u2026" : incomingEdge.meta.prompt}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Stream controls — run/stop, status, inline agent */}
+      {card.type === "stream" && !card.minimized && (
+        <div style={{
+          borderTop: "1px solid rgba(236,72,153,0.2)",
+          background: "rgba(236,72,153,0.05)",
+          padding: "4px 8px",
+          fontSize: 10,
+        }}>
+          {/* Run/Stop + Status bar */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+            <button
+              className="card-controls"
+              style={{
+                background: "rgba(236,72,153,0.2)",
+                border: "1px solid rgba(236,72,153,0.3)",
+                borderRadius: 4,
+                color: "#ec4899",
+                padding: "2px 8px",
+                fontSize: 10,
+                cursor: "pointer",
+              }}
+              onClick={() => {
+                const session = getSession(card.refId) || getActiveSession();
+                if (session) {
+                  // Toggle publishing
+                  if (session.stopped) {
+                    window.dispatchEvent(new CustomEvent("lv2v-resume", { detail: { streamId: session.streamId } }));
+                  } else {
+                    window.dispatchEvent(new CustomEvent("lv2v-pause", { detail: { streamId: session.streamId } }));
+                  }
+                }
+              }}
+            >
+              {(() => {
+                const session = getSession(card.refId) || getActiveSession();
+                return session && !session.stopped ? "Stop" : "Start";
+              })()}
+            </button>
+            <span style={{ color: "var(--text-dim)", flex: 1 }}>
+              {(() => {
+                const session = getSession(card.refId) || getActiveSession();
+                if (!session) return "No active stream";
+                if (session.stopped) return "Stopped";
+                return `pub:${session.publishOk} recv:${session.totalRecv}`;
+              })()}
+            </span>
+          </div>
+
+          {/* Inline Scope agent input */}
+          <div style={{ display: "flex", gap: 4 }}>
+            <input
+              className="card-controls"
+              type="text"
+              placeholder="Type to control stream..."
+              value={streamInput}
+              onChange={(e) => setStreamInput(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key !== "Enter" || !streamInput.trim()) return;
+                const session = getSession(card.refId) || getActiveSession();
+                if (!session) {
+                  setStreamMsg("No active stream");
+                  return;
+                }
+                try {
+                  await controlStream(session, streamInput.trim());
+                  setStreamMsg(`Updated: prompt`);
+                  setStreamInput("");
+                } catch (err) {
+                  setStreamMsg(`Error: ${err}`);
+                }
+              }}
+              style={{
+                flex: 1,
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 4,
+                padding: "3px 6px",
+                fontSize: 10,
+                color: "var(--text-muted)",
+                outline: "none",
+              }}
+            />
+          </div>
+          {streamMsg && (
+            <div style={{ color: "#34d399", fontSize: 9, marginTop: 2 }}>{streamMsg}</div>
+          )}
+        </div>
+      )}
+
+      {/* Video controls enhancement */}
+      {card.type === "video" && card.url && !card.minimized && (
+        <div style={{
+          borderTop: "1px solid rgba(6,182,212,0.2)",
+          background: "rgba(6,182,212,0.05)",
+          padding: "2px 8px",
+          fontSize: 9,
+          color: "var(--text-dim)",
+          display: "flex",
+          justifyContent: "space-between",
+        }}>
+          <span>Video</span>
+          <button
+            className="card-controls"
+            style={{ background: "none", border: "none", color: "#06b6d4", cursor: "pointer", fontSize: 9 }}
+            onClick={() => {
+              const video = document.querySelector(`video[src="${card.url}"]`) as HTMLVideoElement;
+              if (video) video.requestFullscreen?.();
+            }}
+          >
+            Fullscreen
+          </button>
         </div>
       )}
 

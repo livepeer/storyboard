@@ -137,6 +137,7 @@ export const createMediaTool: ToolDefinition = {
 
     // Client-side model selection and execution — all model names validated
     const canvas = useCanvasStore.getState();
+    const batchId = `batch_${Date.now()}`;
     const results: Array<{
       refId: string;
       cardId: string;
@@ -166,7 +167,7 @@ export const createMediaTool: ToolDefinition = {
       const title = step.title || step.prompt.slice(0, 40); // Use original prompt for title
 
       // Create card (spinner shows while generating)
-      const card = canvas.addCard({ type, title, refId });
+      const card = canvas.addCard({ type, title, refId, batchId });
 
       // Build params — inject source URL from depends_on or source_url
       const params: Record<string, unknown> = {};

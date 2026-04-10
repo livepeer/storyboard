@@ -191,12 +191,15 @@ export const geminiPlugin: AgentPlugin = {
           const reason = candidate?.finishReason || "No response";
           console.warn(`[Gemini] Empty response: finishReason=${reason}, round=${round}, lastToolCalls=${lastRoundHadToolCalls}, messages=${messages.length}`);
 
-          // MALFORMED_FUNCTION_CALL: auto-retry by injecting a simpler instruction
+          // MALFORMED_FUNCTION_CALL: auto-retry with smarter guidance
           if (reason === "MALFORMED_FUNCTION_CALL" && round < MAX_TOOL_ROUNDS - 1) {
             say("Simplifying request...", "system");
             messages.push({
               role: "user",
-              parts: [{ text: "Your function call was too complex. Call create_media with fewer steps (max 3) and shorter prompts (under 30 words each). Do one batch at a time." }],
+              parts: [{ text: `Your function call was too complex. Follow these rules:
+- For 6+ scenes: call project_create first (with brief, style_guide, and scenes array with SHORT prompts under 25 words each), then call project_generate with the returned project_id. This auto-batches everything.
+- For 1-5 items: call create_media with max 3 steps and short prompts (under 25 words each).
+- CRITICAL: Keep all prompts SHORT. Summarize the visual into a concise prompt. Do not include full scene descriptions in the prompt field.` }],
             });
             continue;
           }
@@ -270,6 +273,11 @@ export const geminiPlugin: AgentPlugin = {
 
         // Execute tools and send results back as a user message with functionResponse parts
         const responseParts: GeminiPart[] = [];
+        let hasProjectCreate = false;
+        let projectId: string | null = null;
+        let hasProjectGenerate = false;
+        let moreRemaining = false;
+
         for (const fc of functionCalls) {
           const result = await executeTool(fc.name, fc.args);
 
@@ -278,6 +286,17 @@ export const geminiPlugin: AgentPlugin = {
             name: fc.name,
             result: result.data ?? result.error,
           };
+
+          // Track project workflow state for auto-continuation
+          if (fc.name === "project_create" && result.success) {
+            hasProjectCreate = true;
+            projectId = (result.data as Record<string, unknown>)?.project_id as string;
+          }
+          if (fc.name === "project_generate" && result.success) {
+            hasProjectGenerate = true;
+            const remaining = (result.data as Record<string, unknown>)?.remaining as number;
+            if (remaining > 0) moreRemaining = true;
+          }
 
           responseParts.push({
             functionResponse: {
@@ -295,6 +314,21 @@ export const geminiPlugin: AgentPlugin = {
           role: "user",
           parts: responseParts,
         });
+
+        // Auto-continuation: after project_create, nudge to generate
+        if (hasProjectCreate && projectId && !hasProjectGenerate) {
+          messages.push({
+            role: "user",
+            parts: [{ text: `Project created. Now call project_generate with project_id="${projectId}" to start generating scenes.` }],
+          });
+        }
+        // After project_generate with remaining scenes, nudge to continue
+        if (hasProjectGenerate && moreRemaining) {
+          messages.push({
+            role: "user",
+            parts: [{ text: "More scenes remaining. Call project_generate again with the same project_id." }],
+          });
+        }
       }
 
       yield { type: "done" };

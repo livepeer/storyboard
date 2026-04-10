@@ -12,6 +12,8 @@ export interface Card {
   minimized: boolean;
   url?: string;
   error?: string;
+  /** Cards from the same create_media call share a batchId */
+  batchId?: string;
 }
 
 export interface ArrowEdge {

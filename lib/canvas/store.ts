@@ -33,6 +33,7 @@ interface CanvasState {
     width?: number;
     height?: number;
     url?: string;
+    batchId?: string;
   }) => Card;
   updateCard: (id: string, patch: Partial<Card>) => void;
   removeCard: (id: string) => void;
@@ -125,6 +126,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       h: opts.height || CARD_H,
       minimized: false,
       url: opts.url,
+      batchId: opts.batchId,
     };
     set((s) => ({ cards: [...s.cards, card] }));
     return card;
@@ -192,57 +194,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       return { cards };
     }),
 
-  /** Auto-layout ALL cards in a clean grid — no overlaps */
+  /** Auto-layout ALL cards in a clean grid — groups cards by batchId, no overlaps */
   autoLayout: () =>
     set((s) => {
-      // Group: project scenes first (by edge order), then standalone cards
-      const edgeOrder: string[] = [];
-      const visited = new Set<string>();
-
-      // Find root cards (no incoming edges)
-      const hasIncoming = new Set(s.edges.map((e) => e.toRefId));
-      const roots = s.cards.filter((c) => !hasIncoming.has(c.refId));
-
-      // BFS from roots following edges to get narrative order
-      const queue = [...roots.map((c) => c.refId)];
-      while (queue.length > 0) {
-        const refId = queue.shift()!;
-        if (visited.has(refId)) continue;
-        visited.add(refId);
-        edgeOrder.push(refId);
-        // Find outgoing edges
-        for (const e of s.edges) {
-          if (e.fromRefId === refId && !visited.has(e.toRefId)) {
-            queue.push(e.toRefId);
-          }
-        }
-      }
-
-      // Add any remaining cards not in edge graph
-      for (const c of s.cards) {
-        if (!visited.has(c.refId)) {
-          edgeOrder.push(c.refId);
-        }
-      }
-
-      // Layout in grid following narrative order
-      const cards = s.cards.map((c) => {
-        const idx = edgeOrder.indexOf(c.refId);
-        if (idx < 0) return c;
-        const col = idx % COLS_PER_ROW;
-        const row = Math.floor(idx / COLS_PER_ROW);
-        return {
-          ...c,
-          x: GAP + col * (CARD_W + GAP),
-          y: GAP + 48 + row * (CARD_H + GAP),
-        };
-      });
-      return { cards };
-    }),
-
-  /** Narrative layout: horizontal chain following edge flow, branches below */
-  narrativeLayout: () =>
-    set((s) => {
+      // BFS order for edge-connected cards
       const hasIncoming = new Set(s.edges.map((e) => e.toRefId));
       const roots = s.cards.filter((c) => !hasIncoming.has(c.refId));
       const visited = new Set<string>();
@@ -263,23 +218,95 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         if (!visited.has(c.refId)) order.push(c.refId);
       }
 
-      const positions = new Map<string, { x: number; y: number }>();
-      let nextX = GAP;
-      const baseY = GAP + 48;
-
+      // Group by batchId — each batch stays together in the grid
+      const batches: string[][] = [];
+      const batchMap = new Map<string, number>();
+      const cardByRefId = new Map(s.cards.map((c) => [c.refId, c]));
       for (const refId of order) {
-        const parentEdge = s.edges.find(
-          (e) => e.toRefId === refId && positions.has(e.fromRefId)
-        );
-        const isTransform = parentEdge && parentEdge.meta?.action !== "sequence";
-
-        if (isTransform && parentEdge) {
-          const parentPos = positions.get(parentEdge.fromRefId)!;
-          positions.set(refId, { x: parentPos.x, y: parentPos.y + CARD_H + GAP });
+        const card = cardByRefId.get(refId);
+        if (!card) continue;
+        const bid = card.batchId;
+        if (bid && batchMap.has(bid)) {
+          batches[batchMap.get(bid)!].push(refId);
         } else {
-          positions.set(refId, { x: nextX, y: baseY });
-          nextX += CARD_W + GAP;
+          const idx = batches.length;
+          if (bid) batchMap.set(bid, idx);
+          batches.push([refId]);
         }
+      }
+
+      // Flatten batches back into a single ordered list (batches stay contiguous)
+      const grouped = batches.flat();
+
+      // Layout in grid
+      const cards = s.cards.map((c) => {
+        const idx = grouped.indexOf(c.refId);
+        if (idx < 0) return c;
+        const col = idx % COLS_PER_ROW;
+        const row = Math.floor(idx / COLS_PER_ROW);
+        return {
+          ...c,
+          x: GAP + col * (CARD_W + GAP),
+          y: GAP + 48 + row * (CARD_H + GAP),
+        };
+      });
+      return { cards };
+    }),
+
+  /** Narrative layout: one row per batch/prompt group, cards flow horizontally within each row */
+  narrativeLayout: () =>
+    set((s) => {
+      // Group cards by batchId — each batch = one row
+      // Cards without batchId each get their own row
+      const batches: string[][] = [];
+      const batchMap = new Map<string, number>(); // batchId → row index
+
+      // Order cards by edge flow (BFS from roots)
+      const hasIncoming = new Set(s.edges.map((e) => e.toRefId));
+      const roots = s.cards.filter((c) => !hasIncoming.has(c.refId));
+      const visited = new Set<string>();
+      const order: string[] = [];
+      const queue = [...roots.map((c) => c.refId)];
+      while (queue.length > 0) {
+        const refId = queue.shift()!;
+        if (visited.has(refId)) continue;
+        visited.add(refId);
+        order.push(refId);
+        for (const e of s.edges) {
+          if (e.fromRefId === refId && !visited.has(e.toRefId)) {
+            queue.push(e.toRefId);
+          }
+        }
+      }
+      for (const c of s.cards) {
+        if (!visited.has(c.refId)) order.push(c.refId);
+      }
+
+      // Build batches in order of first appearance
+      const cardByRefId = new Map(s.cards.map((c) => [c.refId, c]));
+      for (const refId of order) {
+        const card = cardByRefId.get(refId);
+        if (!card) continue;
+        const bid = card.batchId;
+        if (bid && batchMap.has(bid)) {
+          batches[batchMap.get(bid)!].push(refId);
+        } else {
+          const rowIdx = batches.length;
+          if (bid) batchMap.set(bid, rowIdx);
+          batches.push([refId]);
+        }
+      }
+
+      // Position: each batch row stacks vertically, cards flow horizontally
+      const positions = new Map<string, { x: number; y: number }>();
+      let currentY = GAP + 48;
+      for (const row of batches) {
+        let currentX = GAP;
+        for (const refId of row) {
+          positions.set(refId, { x: currentX, y: currentY });
+          currentX += CARD_W + GAP;
+        }
+        currentY += CARD_H + GAP;
       }
 
       const cards = s.cards.map((c) => {

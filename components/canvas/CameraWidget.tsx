@@ -320,7 +320,7 @@ export function CameraWidget() {
               </button>
             )}
             {streaming && (
-              <span className="text-[8px] text-[var(--text-dim)]">{status}</span>
+              <span className="max-w-[80px] truncate text-[8px] text-[var(--text-dim)]">{status}</span>
             )}
             <button
               onClick={() => setMinimized(!minimized)}
@@ -354,6 +354,22 @@ export function CameraWidget() {
         playsInline
         className={active && !minimized ? "w-full bg-black" : "hidden"}
       />
+
+      {/* Stream info bar — shows FPS, pipeline, session stats */}
+      {streaming && !minimized && (
+        <div className="flex items-center gap-2 border-t border-[var(--border)] bg-white/[0.02] px-2 py-1 text-[8px] text-[var(--text-dim)]">
+          <span style={{ color: sessionRef.current?.stopped ? "#ef4444" : "#10b981" }}>
+            {sessionRef.current?.stopped ? "Stopped" : "Live"}
+          </span>
+          <span>pub:{sessionRef.current?.publishOk || 0}</span>
+          <span>recv:{sessionRef.current?.totalRecv || 0}</span>
+          {sessionRef.current?.publishErr ? (
+            <span style={{ color: "#f59e0b" }}>err:{sessionRef.current.publishErr}</span>
+          ) : null}
+          <span className="flex-1" />
+          <span>longlive</span>
+        </div>
+      )}
 
       {/* LV2V Prompt Control Bar — visible when streaming */}
       {streaming && !minimized && (
@@ -398,13 +414,14 @@ export function CameraWidget() {
             </button>
           </div>
 
-          {/* Quick presets */}
+          {/* Quick presets — maps to Scope presets + agent commands */}
           <div className="mt-1 flex flex-wrap gap-1">
             {[
               { label: "Dreamy", cmd: useAgent ? "make it dreamy" : "dreamy soft focus ethereal glow" },
-              { label: "Wild", cmd: useAgent ? "go wild" : "psychedelic fractal patterns neon" },
-              { label: "Freeze", cmd: useAgent ? "freeze this" : currentPrompt },
-              { label: "Paint", cmd: useAgent ? "make it look like a painting" : "oil painting warm colors visible brush strokes" },
+              { label: "Cinema", cmd: useAgent ? "cinematic film look" : "cinematic dramatic lighting film grain" },
+              { label: "Anime", cmd: useAgent ? "anime style" : "anime cel shaded vibrant colors" },
+              { label: "Abstract", cmd: useAgent ? "go abstract and wild" : "abstract surreal fractal patterns" },
+              { label: "Paint", cmd: useAgent ? "oil painting style" : "oil painting warm colors thick brush strokes" },
             ].map((p) => (
               <button
                 key={p.label}

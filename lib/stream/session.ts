@@ -34,18 +34,25 @@ function sdkUrl(): string {
   return loadConfig().serviceUrl;
 }
 
-export async function startStream(prompt: string): Promise<Lv2vSession> {
+export async function startStream(
+  prompt: string,
+  scopeParams?: Record<string, unknown>
+): Promise<Lv2vSession> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...sdkHeaders() };
   const hasAuth = !!headers["Authorization"];
   const url = sdkUrl();
-  console.log(`[LV2V] Starting stream: sdk=${url}, auth=${hasAuth}, prompt="${prompt.slice(0, 30)}"`);
+  console.log(`[LV2V] Starting stream: sdk=${url}, auth=${hasAuth}, prompt="${prompt.slice(0, 30)}"${scopeParams ? ", scopeParams=" + Object.keys(scopeParams).join(",") : ""}`);
   if (!hasAuth) {
     console.warn("[LV2V] WARNING: No Daydream API key — signer will reject, stream will die");
   }
+  // Merge prompt into params. If scopeParams provided (from scope_start tool),
+  // pass the full Scope config (graph, pipelines, LoRA, VACE, noise, etc.)
+  // through to the SDK which proxies to the fal runner.
+  const params: Record<string, unknown> = { prompt, ...scopeParams };
   const resp = await fetch(`${sdkUrl()}/stream/start`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ model_id: "scope", params: { prompt } }),
+    body: JSON.stringify({ model_id: "scope", params }),
   });
   if (!resp.ok) throw new Error(`Stream start failed: ${resp.status}`);
   const data = await resp.json();
