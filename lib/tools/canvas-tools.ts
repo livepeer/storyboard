@@ -194,10 +194,25 @@ export const canvasRemoveTool: ToolDefinition = {
   },
 };
 
+/**
+ * canvas_organize — auto-layout all cards in narrative order.
+ */
+export const canvasOrganizeTool: ToolDefinition = {
+  name: "canvas_organize",
+  description: "Auto-organize all cards on the canvas in a clean grid layout following narrative/edge order. Call after creating multiple cards.",
+  parameters: { type: "object", properties: {} },
+  execute: async () => {
+    useCanvasStore.getState().autoLayout();
+    const count = useCanvasStore.getState().cards.length;
+    return { success: true, data: { organized: count, message: `${count} cards organized` } };
+  },
+};
+
 /** All canvas tools */
 export const canvasTools: ToolDefinition[] = [
   canvasCreateTool,
   canvasUpdateTool,
   canvasGetTool,
+  canvasOrganizeTool,
   canvasRemoveTool,
 ];

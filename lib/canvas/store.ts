@@ -22,6 +22,7 @@ interface CanvasState {
 
   // Layout
   layoutTimeline: (refIds: string[], cols?: number) => void;
+  autoLayout: () => void;
 
   // Card actions
   addCard: (opts: {
@@ -43,9 +44,12 @@ interface CanvasState {
 }
 
 function nextPosition(cards: Card[]): { x: number; y: number } {
-  if (cards.length === 0) return { x: GAP, y: GAP + 48 };
-  const col = cards.length % COLS_PER_ROW;
-  const row = Math.floor(cards.length / COLS_PER_ROW);
+  // Simple grid: place at next slot based on card count
+  // Cards placed by autoLayout or layoutTimeline get proper positions;
+  // new cards just go to the next available grid slot.
+  const n = cards.length;
+  const col = n % COLS_PER_ROW;
+  const row = Math.floor(n / COLS_PER_ROW);
   return {
     x: GAP + col * (CARD_W + GAP),
     y: GAP + 48 + row * (CARD_H + GAP),
@@ -178,6 +182,54 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         if (idx < 0) return c;
         const col = idx % cols;
         const row = Math.floor(idx / cols);
+        return {
+          ...c,
+          x: GAP + col * (CARD_W + GAP),
+          y: GAP + 48 + row * (CARD_H + GAP),
+        };
+      });
+      return { cards };
+    }),
+
+  /** Auto-layout ALL cards in a clean grid — no overlaps */
+  autoLayout: () =>
+    set((s) => {
+      // Group: project scenes first (by edge order), then standalone cards
+      const edgeOrder: string[] = [];
+      const visited = new Set<string>();
+
+      // Find root cards (no incoming edges)
+      const hasIncoming = new Set(s.edges.map((e) => e.toRefId));
+      const roots = s.cards.filter((c) => !hasIncoming.has(c.refId));
+
+      // BFS from roots following edges to get narrative order
+      const queue = [...roots.map((c) => c.refId)];
+      while (queue.length > 0) {
+        const refId = queue.shift()!;
+        if (visited.has(refId)) continue;
+        visited.add(refId);
+        edgeOrder.push(refId);
+        // Find outgoing edges
+        for (const e of s.edges) {
+          if (e.fromRefId === refId && !visited.has(e.toRefId)) {
+            queue.push(e.toRefId);
+          }
+        }
+      }
+
+      // Add any remaining cards not in edge graph
+      for (const c of s.cards) {
+        if (!visited.has(c.refId)) {
+          edgeOrder.push(c.refId);
+        }
+      }
+
+      // Layout in grid following narrative order
+      const cards = s.cards.map((c) => {
+        const idx = edgeOrder.indexOf(c.refId);
+        if (idx < 0) return c;
+        const col = idx % COLS_PER_ROW;
+        const row = Math.floor(idx / COLS_PER_ROW);
         return {
           ...c,
           x: GAP + col * (CARD_W + GAP),

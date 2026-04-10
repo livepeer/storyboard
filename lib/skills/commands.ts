@@ -34,10 +34,12 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return createSkill(cmd.args);
     case "capabilities":
       return showCapabilities();
+    case "organize":
+      return organizeCanvas();
     case "export":
       return exportCanvas();
     default:
-      return `Unknown command: /${cmd.command}\nAvailable: /skills, /skills/load, /skills/unload, /skills/clear, /skills/load-by-category, /skills/create, /capabilities, /export`;
+      return `Unknown command: /${cmd.command}\nAvailable: /skills, /skills/load, /skills/unload, /skills/clear, /skills/load-by-category, /skills/create, /capabilities, /organize, /export`;
   }
 }
 
@@ -164,6 +166,13 @@ function showCapabilities(): string {
     }
   }
   return lines.join("\n");
+}
+
+function organizeCanvas(): string {
+  const store = useCanvasStore.getState();
+  if (store.cards.length === 0) return "Canvas is empty — nothing to organize.";
+  store.autoLayout();
+  return `Organized ${store.cards.length} cards in narrative order.`;
 }
 
 function exportCanvas(): string {
