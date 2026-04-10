@@ -51,13 +51,15 @@ function buildSummary(ctx: CreativeContext): string {
 }
 
 function buildPrefixFromContext(ctx: CreativeContext): string {
+  // Build an assertive prefix that models will follow.
+  // Style and characters are the most important for consistency.
   const parts: string[] = [];
   if (ctx.style) parts.push(ctx.style);
-  if (ctx.palette) parts.push(ctx.palette);
   if (ctx.characters) parts.push(ctx.characters);
+  if (ctx.palette) parts.push(ctx.palette);
   if (ctx.setting) parts.push(ctx.setting);
   if (ctx.mood) parts.push(ctx.mood);
-  // Keep under ~50 words — this gets prepended to every prompt
+  // Keep under ~50 words
   const prefix = parts.join(", ");
   const words = prefix.split(/\s+/);
   return (words.length > 60 ? words.slice(0, 60).join(" ") : prefix) + ", ";

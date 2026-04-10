@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "./types";
 import { useProjectStore } from "@/lib/projects/store";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { useSessionContext } from "@/lib/agents/session-context";
 import { executeTool } from "./registry";
 import type { Scene, StyleGuide } from "@/lib/projects/types";
 
@@ -133,8 +134,11 @@ export const projectGenerateTool: ToolDefinition = {
 
     store.updateProjectStatus(projectId, "generating");
 
-    // Apply style guide to prompts
-    const stylePrefix = project.styleGuide?.promptPrefix || "";
+    // Apply session context + project style guide to prompts.
+    // Session context (from Creative DNA extraction) takes priority — it's richer.
+    // Project style guide is the fallback.
+    const sessionPrefix = useSessionContext.getState().buildPrefix();
+    const stylePrefix = sessionPrefix || project.styleGuide?.promptPrefix || "";
     const styleSuffix = project.styleGuide?.promptSuffix || "";
 
     // Build create_media steps from the batch

@@ -185,6 +185,9 @@ export const createMediaTool: ToolDefinition = {
         ? applyStyleOverrides(step.prompt, step.action)
         : { prompt: step.prompt };
       const effectivePrompt = sessionPrefix + styled.prompt;
+      if (sessionPrefix) {
+        console.log(`[create_media] Session context injected (${sessionPrefix.split(/\s+/).length} words): "${sessionPrefix.slice(0, 80)}..."`);
+      }
 
       // Resolve capability through live registry (fuzzy-matches invalid names)
       const { capability, type } = selectCapability(

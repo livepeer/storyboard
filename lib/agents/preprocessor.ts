@@ -332,11 +332,21 @@ export async function preprocessPrompt(text: string): Promise<PreprocessResult> 
     if (activeProject) {
       say(`Love the ambition! Adding ${count} more scenes to expand the story...`, "agent");
       const existingCount = activeProject.scenes.length;
-      const style = activeProject.styleGuide;
-      const styleDesc = style?.visualStyle || "matching the existing storyboard style";
+      const ctx = useSessionContext.getState().context;
+      // Build explicit creative constraints from session context
+      const constraints: string[] = [];
+      if (ctx?.style) constraints.push(`STYLE: ${ctx.style}`);
+      if (ctx?.characters) constraints.push(`CHARACTERS: ${ctx.characters} (keep consistent — do NOT change gender, age, or appearance)`);
+      if (ctx?.setting) constraints.push(`SETTING: ${ctx.setting}`);
+      if (ctx?.palette) constraints.push(`PALETTE: ${ctx.palette}`);
+      if (ctx?.mood) constraints.push(`MOOD: ${ctx.mood}`);
+      const constraintBlock = constraints.length > 0
+        ? `\n\nCRITICAL — every prompt MUST follow these creative rules:\n${constraints.join("\n")}\n`
+        : "";
       return {
         handled: false,
-        agentPrompt: `[Context: The user has a ${existingCount}-scene storyboard on the canvas and wants ${count} more scenes.${intent.direction ? ` They said: "${intent.direction}"` : ""} Use create_media with ${Math.min(count, 5)} steps. Each prompt under 25 words, style: ${styleDesc}. Be creative — add new perspectives, emotional beats, unexpected moments. After creating, call canvas_organize.]`,
+        agentPrompt: `[Context: The user has a ${existingCount}-scene storyboard and wants ${count} more.${intent.direction ? ` They said: "${intent.direction}"` : ""}${constraintBlock}
+Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with the style (e.g., "Studio Ghibli watercolor, ") and mention the main character consistently. Under 25 words each. After creating, call canvas_organize.]`,
       };
     }
     return { handled: false };
@@ -436,15 +446,20 @@ export async function preprocessPrompt(text: string): Promise<PreprocessResult> 
   const projectId = data.project_id as string;
   const totalScenes = data.total_scenes as number;
 
-  // --- Extract Creative DNA (async, don't block generation) ---
-  extractCreativeContext(text).then((ctx) => {
+  // --- Extract Creative DNA (SYNC — must complete before user asks for "8 more") ---
+  try {
+    const ctx = await extractCreativeContext(text);
     if (ctx) {
       useSessionContext.getState().setContext(ctx);
       const summary = useSessionContext.getState().summary;
       say(`Creative context saved: ${summary}`, "system");
       console.log("[Preprocessor] Creative DNA extracted:", ctx);
+    } else {
+      console.warn("[Preprocessor] Creative DNA extraction returned null");
     }
-  });
+  } catch (e) {
+    console.warn("[Preprocessor] Creative DNA extraction failed:", e);
+  }
 
   // --- Generate ALL batches with progress ---
   say(pick(REACTIONS.generating), "agent");
