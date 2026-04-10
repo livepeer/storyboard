@@ -145,39 +145,52 @@ export function ContextMenu() {
             addMessage(`LV2V: ${phase}`, "system");
           });
 
-          // Capture source image as blob for publishing
-          let cachedBlob: Blob | null = null;
-          const captureSourceFrame = (): Blob | null => {
-            if (cachedBlob) return cachedBlob;
-            return null;
-          };
+          // Build frame source based on card type
+          let cachedImageBlob: Blob | null = null;
+          let videoEl: HTMLVideoElement | null = null;
+          const captureCanvas = document.createElement("canvas");
+          const captureCtx = captureCanvas.getContext("2d");
 
-          // Fetch the source image and cache it
-          if (targetCard.url) {
+          if (targetCard.type === "video" && targetCard.url) {
+            // For video cards: create a hidden video element, play it in loop,
+            // capture frames continuously at 10fps
+            videoEl = document.createElement("video");
+            videoEl.src = targetCard.url;
+            videoEl.crossOrigin = "anonymous";
+            videoEl.loop = true;
+            videoEl.muted = true;
+            videoEl.playsInline = true;
+            await videoEl.play().catch(() => {});
+            // Wait for first frame
+            await new Promise((r) => setTimeout(r, 500));
+          } else if (targetCard.url) {
+            // For image cards: fetch once, cache
             try {
               const resp = await fetch(targetCard.url);
-              cachedBlob = await resp.blob();
-            } catch {
-              // Try canvas capture as fallback
-            }
-          }
-          if (!cachedBlob) {
-            // Create a placeholder frame
-            const canvas = document.createElement("canvas");
-            canvas.width = 320;
-            canvas.height = 240;
-            const ctx = canvas.getContext("2d");
-            if (ctx) {
-              ctx.fillStyle = "#333";
-              ctx.fillRect(0, 0, 320, 240);
-            }
-            cachedBlob = await new Promise<Blob>((resolve) => {
-              canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.8);
-            });
+              cachedImageBlob = await resp.blob();
+            } catch { /* fallback below */ }
           }
 
-          // Publish source frame at 2fps (image) or 10fps (video)
-          const interval = targetCard.type === "video" ? 100 : 500;
+          const captureSourceFrame = (): Blob | null => {
+            // Video: capture current frame from video element
+            if (videoEl && videoEl.videoWidth > 0 && captureCtx) {
+              const w = Math.min(videoEl.videoWidth, 640);
+              const h = Math.min(videoEl.videoHeight, 480);
+              captureCanvas.width = w;
+              captureCanvas.height = h;
+              captureCtx.drawImage(videoEl, 0, 0, w, h);
+              const dataUrl = captureCanvas.toDataURL("image/jpeg", 0.8);
+              const bin = atob(dataUrl.split(",")[1]);
+              const arr = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+              return new Blob([arr], { type: "image/jpeg" });
+            }
+            // Image: return cached blob
+            return cachedImageBlob;
+          };
+
+          // Video: 10fps (100ms), Image: 2fps (500ms)
+          const interval = videoEl ? 100 : 500;
           startPublishing(session, captureSourceFrame, interval);
 
           session.onFrame = (url) => {
