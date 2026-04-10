@@ -184,7 +184,10 @@ export const geminiPlugin: AgentPlugin = {
           console.warn(`[Gemini] Empty response: finishReason=${reason}, candidates=${response.candidates?.length || 0}`);
           if (!lastRoundHadToolCalls) {
             // Show actionable error based on reason
-            if (reason === "MAX_TOKENS") {
+            if (reason === "MALFORMED_FUNCTION_CALL") {
+              say("Too many steps for one call — splitting. Try up to 5 scenes per prompt, or I'll retry in batches.", "system");
+              yield { type: "error", content: "Gemini: function call too large. Try fewer scenes (max 5 per prompt)." };
+            } else if (reason === "MAX_TOKENS") {
               say("Response too long — try a shorter prompt or fewer scenes.", "system");
               yield { type: "error", content: "Gemini: response exceeded token limit. Try fewer scenes." };
             } else if (reason === "SAFETY") {
