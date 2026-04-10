@@ -14,6 +14,7 @@ const AVAILABLE_SKILLS = [
   { id: "daily-briefing", description: "Daily briefing videos from email, calendar, Slack, news via MCP" },
   { id: "director", description: "Director workflow: plan→generate→review→iterate for multi-scene projects" },
   { id: "scope-graphs", description: "Scope pipeline graphs: available pipelines, graph format, matching user intent to pipeline" },
+  { id: "advanced-models", description: "Advanced model guide: video gen selection, audio, editing, 3D, export workflows" },
 ];
 
 const skillCache = new Map<string, string>();
