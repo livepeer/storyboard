@@ -30,6 +30,22 @@ function humanizeError(raw: string): string {
   return raw.length > 80 ? raw.slice(0, 77) + "…" : raw;
 }
 
+/** Extract a short 3-5 word title from a prompt */
+function extractShortTitle(prompt: string): string {
+  // Remove style prefixes (session context, style overrides) — they're not the subject
+  const cleaned = prompt
+    .replace(/^[^,]*(?:style|watercolor|ghibli|cinematic|photorealistic|anime)[^,]*,\s*/i, "")
+    .replace(/^[^,]*palette[^,]*,\s*/i, "")
+    .trim();
+  // Take first 4-5 meaningful words
+  const words = (cleaned || prompt)
+    .split(/\s+/)
+    .filter(w => w.length > 2) // skip tiny words
+    .slice(0, 5)
+    .join(" ");
+  return words.length > 0 ? words.charAt(0).toUpperCase() + words.slice(1) : "Untitled";
+}
+
 /** Apply active style-override skills to a prompt */
 function applyStyleOverrides(prompt: string, action: string): { prompt: string; modelHint?: string } {
   const overrides = useSkillStore.getState().getActiveStyleOverrides();
@@ -196,8 +212,15 @@ export const createMediaTool: ToolDefinition = {
         step.model_override || ("modelHint" in styled ? styled.modelHint : undefined) as string | undefined
       );
 
-      const refId = `media_${Date.now()}_${i}`;
-      const title = step.title || step.prompt.slice(0, 40); // Use original prompt for title
+      // Friendly names: short, memorable, easy to reference in chat
+      // "img-1", "vid-2", "aud-3" — type prefix + sequential number
+      const typePrefix: Record<string, string> = {
+        image: "img", video: "vid", audio: "aud", stream: "str",
+      };
+      const cardNum = canvas.cards.length + 1;
+      const refId = `${typePrefix[type] || "med"}-${cardNum}`;
+      // Title: use step.title if agent provided one, else extract 3-5 key words from prompt
+      const title = step.title || extractShortTitle(step.prompt);
 
       // Create card (spinner shows while generating)
       const card = canvas.addCard({ type, title, refId, batchId });

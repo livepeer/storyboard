@@ -138,10 +138,24 @@ export function Card({ card }: { card: CardData }) {
         >
           {card.type}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--text-muted)]">
+        <span
+          className="card-controls min-w-0 flex-1 cursor-pointer truncate text-[11px] font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+          title={`Click to copy "${card.title}" to chat`}
+          onClick={(e) => {
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent("chat-prefill", { detail: { text: card.title } }));
+          }}
+        >
           {card.title}
         </span>
-        <span className="shrink-0 truncate rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[10px] text-[#aaa]">
+        <span
+          className="card-controls shrink-0 cursor-pointer truncate rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[10px] text-[#aaa] transition-colors hover:bg-white/[0.15] hover:text-white"
+          title={`Click to copy "${card.refId}" to chat`}
+          onClick={(e) => {
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent("chat-prefill", { detail: { text: card.refId } }));
+          }}
+        >
           {card.refId}
         </span>
         <div className="card-controls flex shrink-0 gap-0.5">
