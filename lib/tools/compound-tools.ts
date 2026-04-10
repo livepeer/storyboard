@@ -4,6 +4,7 @@ import { runInference } from "@/lib/sdk/client";
 import { resolveCapability, isValidCapability } from "@/lib/sdk/capabilities";
 import { useSkillStore } from "@/lib/skills/store";
 import { useChatStore } from "@/lib/chat/store";
+import { useSessionContext } from "@/lib/agents/session-context";
 import type { CardType } from "@/lib/canvas/types";
 
 /** Convert raw technical errors into short, user-friendly messages */
@@ -174,11 +175,16 @@ export const createMediaTool: ToolDefinition = {
     for (let i = 0; i < rawSteps.length; i++) {
       const step = rawSteps[i];
 
-      // Apply active style-override skills (inject prompt prefix/suffix)
+      // Apply session creative context + style-override skills
+      // Session context = persistent style/character/setting from the original brief
+      // Style overrides = loaded skills (ghibli, kids-drawing, etc.)
+      const sessionPrefix = step.action !== "tts"
+        ? useSessionContext.getState().buildPrefix()
+        : "";
       const styled = step.action !== "tts"
         ? applyStyleOverrides(step.prompt, step.action)
-        : { prompt: step.prompt }; // TTS: don't style-wrap narration text
-      const effectivePrompt = styled.prompt;
+        : { prompt: step.prompt };
+      const effectivePrompt = sessionPrefix + styled.prompt;
 
       // Resolve capability through live registry (fuzzy-matches invalid names)
       const { capability, type } = selectCapability(

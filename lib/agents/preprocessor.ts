@@ -15,6 +15,7 @@ import { executeTool } from "@/lib/tools/registry";
 import { useChatStore } from "@/lib/chat/store";
 import { useProjectStore } from "@/lib/projects/store";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { useSessionContext, extractCreativeContext, updateContextFromFeedback } from "./session-context";
 
 // ---------------------------------------------------------------------------
 // Personality — the creative partner voice
@@ -83,6 +84,7 @@ type Intent =
   | { type: "continue" }
   | { type: "add_scenes"; count: number; direction?: string }
   | { type: "adjust_scene"; sceneHint?: string; feedback: string }
+  | { type: "style_correction"; feedback: string }
   | { type: "status" }
   | { type: "none" };
 
@@ -137,6 +139,12 @@ function classifyIntent(text: string, hasActiveProject: boolean, pendingScenes: 
       return { type: "continue" };
   }
 
+  // --- Style correction (with or without project) ---
+  if (/wrong style|style is wrong|should be|use .*style|not.*right.*style|change.*style|switch.*style|too.*style|style.*wrong/i.test(lower))
+    return { type: "style_correction", feedback: text };
+  if (/do it again.*(?:in|with|using)|redo.*(?:in|with|using)|try again.*(?:in|with|using)/i.test(lower))
+    return { type: "style_correction", feedback: text };
+
   // --- Status check ---
   if (/where.*(picture|image|scene|result)|don't see|can't see|nothing (show|appear|happen)|no (picture|image|result)|still waiting|what happened/i.test(lower))
     return { type: "status" };
@@ -175,7 +183,8 @@ User message: "${text.slice(0, 300)}"
 
 Intents:
 - ADD_SCENES:N — user wants N more scenes (default 4)
-- ADJUST — user wants to change existing scenes
+- ADJUST — user wants to change specific scene content
+- STYLE — user is correcting the visual style/palette/mood
 - CONTINUE — user wants to resume generation
 - STATUS — user is asking where results are
 - CONVERSATION — anything else (chat, new request, feedback)
@@ -195,6 +204,7 @@ Reply ONLY the label:`,
     const addMatch = answer.match(/ADD_SCENES:?(\d*)/i);
     if (addMatch) return { type: "add_scenes", count: parseInt(addMatch[1]) || 4, direction: text };
     if (/ADJUST/i.test(answer)) return { type: "adjust_scene", feedback: text };
+    if (/STYLE/i.test(answer)) return { type: "style_correction", feedback: text };
     if (/CONTINUE/i.test(answer)) return { type: "continue" };
     if (/STATUS/i.test(answer)) return { type: "status" };
     return { type: "none" };
@@ -336,12 +346,37 @@ export async function preprocessPrompt(text: string): Promise<PreprocessResult> 
     if (activeProject) {
       const sceneHint = intent.sceneHint ? `scene ${intent.sceneHint}` : "the scene they described";
       say(`Got it — let me rework ${sceneHint}...`, "agent");
+      const ctxPrefix = useSessionContext.getState().buildPrefix();
       return {
         handled: false,
-        agentPrompt: `[Context: The user wants to adjust ${sceneHint} in their storyboard (project "${activeProject.id}"). Their feedback: "${intent.feedback}". Use project_iterate with the scene index and their feedback. Keep it brief.]`,
+        agentPrompt: `[Context: The user wants to adjust ${sceneHint} in their storyboard (project "${activeProject.id}"). Their feedback: "${intent.feedback}". ${ctxPrefix ? `Style context: ${ctxPrefix}` : ""} Use project_iterate with the scene index and their feedback. Keep it brief.]`,
       };
     }
     return { handled: false };
+  }
+
+  if (intent.type === "style_correction") {
+    // Update the session context based on user feedback
+    const currentCtx = useSessionContext.getState().context;
+    if (currentCtx) {
+      say("Updating the creative direction...", "agent");
+      const patch = await updateContextFromFeedback(currentCtx, intent.feedback);
+      if (patch) {
+        useSessionContext.getState().updateContext(patch);
+        const updated = useSessionContext.getState().context!;
+        const changes = Object.keys(patch).join(", ");
+        say(`Got it — updated ${changes}. New generations will use: ${useSessionContext.getState().summary}`, "agent");
+      }
+    } else {
+      // No context yet — create one from the feedback
+      say("Setting up the creative direction...", "agent");
+    }
+    // Let agent handle the actual regeneration with updated context
+    const ctxPrefix = useSessionContext.getState().buildPrefix();
+    return {
+      handled: false,
+      agentPrompt: `[Context: The user corrected the style. ${ctxPrefix ? `Updated creative context: ${ctxPrefix}` : ""} Their feedback: "${intent.feedback}". Regenerate the problematic scenes with the corrected style. Use create_media or project_iterate. Keep prompts under 25 words but include the style direction.]`,
+    };
   }
 
   if (intent.type === "status") {
@@ -400,6 +435,16 @@ export async function preprocessPrompt(text: string): Promise<PreprocessResult> 
   const data = createResult.data as Record<string, unknown>;
   const projectId = data.project_id as string;
   const totalScenes = data.total_scenes as number;
+
+  // --- Extract Creative DNA (async, don't block generation) ---
+  extractCreativeContext(text).then((ctx) => {
+    if (ctx) {
+      useSessionContext.getState().setContext(ctx);
+      const summary = useSessionContext.getState().summary;
+      say(`Creative context saved: ${summary}`, "system");
+      console.log("[Preprocessor] Creative DNA extracted:", ctx);
+    }
+  });
 
   // --- Generate ALL batches with progress ---
   say(pick(REACTIONS.generating), "agent");

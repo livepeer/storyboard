@@ -1,6 +1,7 @@
 import { useSkillStore } from "./store";
 import { getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { useSessionContext } from "@/lib/agents/session-context";
 
 interface ParsedCommand {
   command: string;
@@ -38,8 +39,10 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return organizeCanvas(cmd.args);
     case "export":
       return exportCanvas();
+    case "context":
+      return showContext(cmd.args);
     default:
-      return `Unknown command: /${cmd.command}\nAvailable: /skills, /skills/load, /skills/unload, /skills/clear, /skills/load-by-category, /skills/create, /capabilities, /organize, /export`;
+      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /capabilities, /organize, /export`;
   }
 }
 
@@ -181,6 +184,34 @@ function organizeCanvas(mode?: string): string {
 
   store.autoLayout();
   return `Organized ${store.cards.length} cards in grid layout.\nTip: /organize narrative \u2014 horizontal story flow`;
+}
+
+function showContext(args?: string): string {
+  const { context, summary, clearContext } = useSessionContext.getState();
+
+  if (args === "clear") {
+    clearContext();
+    return "Creative context cleared. Next generation starts fresh.";
+  }
+
+  if (!context) {
+    return "No active creative context.\nPaste a storyboard brief to auto-extract, or it will be created from your first multi-scene prompt.";
+  }
+
+  const lines = [
+    `Creative Context: ${summary}`,
+    "",
+    `  Style:      ${context.style || "(not set)"}`,
+    `  Palette:    ${context.palette || "(not set)"}`,
+    `  Characters: ${context.characters || "(not set)"}`,
+    `  Setting:    ${context.setting || "(not set)"}`,
+    `  Rules:      ${context.rules || "(not set)"}`,
+    `  Mood:       ${context.mood || "(not set)"}`,
+    "",
+    "This prefix is injected into every generation prompt.",
+    "Say 'wrong style, use X' to update. /context clear to reset.",
+  ];
+  return lines.join("\n");
 }
 
 function exportCanvas(): string {

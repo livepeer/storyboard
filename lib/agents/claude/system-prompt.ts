@@ -3,6 +3,7 @@ import { getMemorySummary, getActiveStyle } from "@/lib/memory/store";
 import { getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { useProjectStore } from "@/lib/projects/store";
 import { useSkillStore } from "@/lib/skills/store";
+import { useSessionContext } from "@/lib/agents/session-context";
 
 let cachedBase: string | null = null;
 
@@ -69,6 +70,12 @@ export async function loadSystemPrompt(
   const overrides = useSkillStore.getState().getActiveStyleOverrides();
   if (overrides.length > 0) {
     parts.push(`\nStyle override active: "${overrides[0].id}" (auto-injected, don't duplicate)`);
+  }
+
+  // Creative session context — auto-injected into all prompts, don't duplicate
+  const sessionCtx = useSessionContext.getState().context;
+  if (sessionCtx) {
+    parts.push(`\nCreative context active (auto-injected): ${sessionCtx.style}, ${sessionCtx.characters || ""}, ${sessionCtx.setting || ""}. Don't repeat this in prompts.`);
   }
 
   return parts.join("\n");

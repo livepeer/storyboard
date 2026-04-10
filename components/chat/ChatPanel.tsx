@@ -9,6 +9,7 @@ import { ToolPill } from "./ToolPill";
 import { QuickActions } from "./QuickActions";
 import { parseCommand, executeCommand } from "@/lib/skills/commands";
 import { preprocessPrompt } from "@/lib/agents/preprocessor";
+import { useSessionContext } from "@/lib/agents/session-context";
 import type { AgentEvent, CanvasContext } from "@/lib/agents/types";
 
 /** Map tool name + input to a human-friendly present-progressive verb */
@@ -366,6 +367,25 @@ export function ChatPanel() {
           {minimized ? "\u25A1" : "\u2014"}
         </button>
       </div>
+
+      {/* Context badge — shows active creative context */}
+      {!minimized && useSessionContext.getState().context && (
+        <div
+          className="flex items-center gap-1.5 border-b border-[var(--border)] bg-purple-500/5 px-3 py-1.5 cursor-pointer"
+          onClick={() => {
+            executeCommand({ command: "context", args: "" }).then(r =>
+              useChatStore.getState().addMessage(r, "system")
+            );
+          }}
+          title="Click to view full context. /context clear to reset."
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-purple-400" />
+          <span className="flex-1 truncate text-[9px] text-purple-300/70">
+            {useSessionContext.getState().summary}
+          </span>
+          <span className="text-[8px] text-purple-300/40">/context</span>
+        </div>
+      )}
 
       {/* Messages */}
       {!minimized && (
