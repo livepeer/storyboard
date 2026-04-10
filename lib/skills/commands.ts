@@ -187,31 +187,76 @@ function organizeCanvas(mode?: string): string {
 }
 
 function showContext(args?: string): string {
-  const { context, summary, clearContext } = useSessionContext.getState();
+  const store = useSessionContext.getState();
 
-  if (args === "clear") {
-    clearContext();
+  if (!args || args.trim() === "") {
+    // /context — show current
+    if (!store.context) {
+      return "No active creative context.\nUse /context edit <field> <value> to set, or paste a storyboard brief to auto-extract.";
+    }
+    const ctx = store.context;
+    return [
+      `Creative Context: ${store.summary}`,
+      "",
+      `  Style:      ${ctx.style || "(not set)"}`,
+      `  Palette:    ${ctx.palette || "(not set)"}`,
+      `  Characters: ${ctx.characters || "(not set)"}`,
+      `  Setting:    ${ctx.setting || "(not set)"}`,
+      `  Rules:      ${ctx.rules || "(not set)"}`,
+      `  Mood:       ${ctx.mood || "(not set)"}`,
+      "",
+      "Commands: /context edit <field> <value> | /context add <field> <value> | /context clear",
+    ].join("\n");
+  }
+
+  const sub = args.trim();
+
+  // /context clear
+  if (sub === "clear") {
+    store.clearContext();
     return "Creative context cleared. Next generation starts fresh.";
   }
 
-  if (!context) {
-    return "No active creative context.\nPaste a storyboard brief to auto-extract, or it will be created from your first multi-scene prompt.";
+  // /context edit <field> <value> — overwrite a field
+  const editMatch = sub.match(/^edit\s+(style|palette|characters|setting|rules|mood)\s+(.+)$/i);
+  if (editMatch) {
+    const field = editMatch[1].toLowerCase() as keyof import("@/lib/agents/session-context").CreativeContext;
+    const value = editMatch[2].trim();
+    if (!store.context) {
+      // Create new context with just this field
+      store.setContext({ style: "", palette: "", characters: "", setting: "", rules: "", mood: "", [field]: value });
+    } else {
+      store.updateContext({ [field]: value });
+    }
+    return `Updated ${field} → "${value}"`;
   }
 
-  const lines = [
-    `Creative Context: ${summary}`,
-    "",
-    `  Style:      ${context.style || "(not set)"}`,
-    `  Palette:    ${context.palette || "(not set)"}`,
-    `  Characters: ${context.characters || "(not set)"}`,
-    `  Setting:    ${context.setting || "(not set)"}`,
-    `  Rules:      ${context.rules || "(not set)"}`,
-    `  Mood:       ${context.mood || "(not set)"}`,
-    "",
-    "This prefix is injected into every generation prompt.",
-    "Say 'wrong style, use X' to update. /context clear to reset.",
-  ];
-  return lines.join("\n");
+  // /context edit (no field) — show usage
+  if (sub === "edit") {
+    return "Usage: /context edit <field> <value>\nFields: style, palette, characters, setting, rules, mood\nExample: /context edit style Studio Ghibli watercolor";
+  }
+
+  // /context add <field> <value> — append to a field
+  const addMatch = sub.match(/^add\s+(style|palette|characters|setting|rules|mood)\s+(.+)$/i);
+  if (addMatch) {
+    const field = addMatch[1].toLowerCase() as keyof import("@/lib/agents/session-context").CreativeContext;
+    const value = addMatch[2].trim();
+    if (!store.context) {
+      store.setContext({ style: "", palette: "", characters: "", setting: "", rules: "", mood: "", [field]: value });
+      return `Set ${field} → "${value}"`;
+    }
+    const existing = store.context[field] || "";
+    const combined = existing ? `${existing}, ${value}` : value;
+    store.updateContext({ [field]: combined });
+    return `Added to ${field} → "${combined}"`;
+  }
+
+  // /context add (no field) — show usage
+  if (sub === "add") {
+    return "Usage: /context add <field> <value>\nFields: style, palette, characters, setting, rules, mood\nExample: /context add characters white cat companion";
+  }
+
+  return `Unknown: /context ${sub}\nCommands: /context | /context edit <field> <value> | /context add <field> <value> | /context clear`;
 }
 
 function exportCanvas(): string {
