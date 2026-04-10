@@ -109,9 +109,59 @@ function createSkill(args: string): string {
 function showCapabilities(): string {
   const caps = getCachedCapabilities();
   if (caps.length === 0) return "No capabilities loaded. SDK may be unreachable.";
-  const lines = ["Available models:"];
+
+  // Categorize by provider and type
+  const categorized: Record<string, Record<string, Array<{ name: string; model_id: string }>>> = {};
+
   for (const c of caps) {
-    lines.push(`  ${c.name} — ${c.model_id}`);
+    const mid = c.model_id;
+    // Provider
+    let provider = "other";
+    if (mid.startsWith("fal-ai/") || mid.startsWith("easel-ai/") || mid.startsWith("bytedance/")) provider = "fal";
+    else if (mid.startsWith("gemini/")) provider = "gemini";
+
+    // Category
+    let category = "utility";
+    const name = c.name.toLowerCase();
+    const model = mid.toLowerCase();
+    if (model.includes("text-to-video") || model.includes("t2v") || name.includes("t2v")) category = "t2v";
+    else if (model.includes("image-to-video") || model.includes("i2v") || name.includes("i2v") || name.includes("transition")) category = "i2v";
+    else if (name.includes("lv2v") || model.includes("scope")) category = "lv2v";
+    else if (model.includes("v2v") || name.includes("v2v")) category = "v2v";
+    else if (model.includes("text-to-image") || model.includes("flux") || model.includes("recraft") || name === "gemini-image" || model.includes("nano-banana")) category = "t2i";
+    else if (model.includes("kontext") || model.includes("fill") || model.includes("edit") || name.includes("face-swap") || name === "bg-remove") category = "i2i";
+    else if (model.includes("tts") || model.includes("speech") || model.includes("music") || model.includes("audio") || name === "sfx") category = "audio";
+    else if (model.includes("lipsync") || model.includes("omnihuman") || name === "talking-head") category = "avatar";
+    else if (model.includes("sam") || model.includes("upscale") || model.includes("sr")) category = "utility";
+    else if (model.includes("gemini") && !model.includes("image")) category = "llm";
+
+    if (!categorized[provider]) categorized[provider] = {};
+    if (!categorized[provider][category]) categorized[provider][category] = [];
+    categorized[provider][category].push({ name: c.name, model_id: c.model_id });
+  }
+
+  const categoryLabels: Record<string, string> = {
+    t2i: "Text \u2192 Image",
+    i2i: "Image \u2192 Image (edit/fill/swap)",
+    t2v: "Text \u2192 Video",
+    i2v: "Image \u2192 Video",
+    v2v: "Video \u2192 Video",
+    lv2v: "Live Video (LV2V)",
+    audio: "Audio / Music / TTS",
+    avatar: "Avatar / Lipsync",
+    llm: "LLM / Text",
+    utility: "Utility (upscale/segment)",
+  };
+
+  const lines: string[] = [`Models (${caps.length}):`];
+  for (const [provider, categories] of Object.entries(categorized).sort()) {
+    lines.push(`\n\u2501\u2501 ${provider.toUpperCase()} \u2501\u2501`);
+    for (const [cat, models] of Object.entries(categories).sort()) {
+      lines.push(`  ${categoryLabels[cat] || cat}:`);
+      for (const m of models) {
+        lines.push(`    \u25CB ${m.name} \u2014 ${m.model_id}`);
+      }
+    }
   }
   return lines.join("\n");
 }
