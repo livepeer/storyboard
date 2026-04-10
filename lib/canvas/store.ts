@@ -20,6 +20,9 @@ interface CanvasState {
   zoomTo: (scale: number, centerX: number, centerY: number) => void;
   fitAll: (viewportWidth: number, viewportHeight: number) => void;
 
+  // Layout
+  layoutTimeline: (refIds: string[], cols?: number) => void;
+
   // Card actions
   addCard: (opts: {
     type: CardType;
@@ -167,4 +170,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })),
 
   selectEdge: (idx) => set({ selectedEdgeIdx: idx, selectedCardId: null }),
+
+  layoutTimeline: (refIds, cols = 5) =>
+    set((s) => {
+      const cards = s.cards.map((c) => {
+        const idx = refIds.indexOf(c.refId);
+        if (idx < 0) return c;
+        const col = idx % cols;
+        const row = Math.floor(idx / cols);
+        return {
+          ...c,
+          x: GAP + col * (CARD_W + GAP),
+          y: GAP + 48 + row * (CARD_H + GAP),
+        };
+      });
+      return { cards };
+    }),
 }));

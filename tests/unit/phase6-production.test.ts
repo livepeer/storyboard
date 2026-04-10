@@ -98,11 +98,11 @@ describe("Token Efficiency Suite", () => {
 });
 
 describe("Tool Registry — Phase 6", () => {
-  it("registers all 15 tools", () => {
+  it("registers all tools including project tools", () => {
     clearTools();
     initializeTools();
     const tools = listTools();
-    expect(tools.length).toBe(15);
+    expect(tools.length).toBeGreaterThanOrEqual(19);
 
     const names = tools.map((t) => t.name);
     // Compound

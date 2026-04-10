@@ -1,6 +1,8 @@
 import type { CanvasContext } from "../types";
 import { getMemorySummary, getActiveStyle } from "@/lib/memory/store";
 import { buildCapabilitySummary, getCachedCapabilities } from "@/lib/sdk/capabilities";
+import { useProjectStore } from "@/lib/projects/store";
+import { useSkillStore } from "@/lib/skills/store";
 
 let cachedBase: string | null = null;
 
@@ -57,6 +59,32 @@ export async function loadSystemPrompt(
 
   if (context.selectedCard) {
     parts.push(`\nThe user has selected card: ${context.selectedCard}`);
+  }
+
+  // Inject active project context
+  const activeProject = useProjectStore.getState().getActiveProject();
+  if (activeProject) {
+    const done = activeProject.scenes.filter((s) => s.status === "done").length;
+    const total = activeProject.scenes.length;
+    const styleDesc = activeProject.styleGuide
+      ? `Style: "${activeProject.styleGuide.visualStyle}" (prefix: "${activeProject.styleGuide.promptPrefix}")`
+      : "";
+    parts.push(
+      `\n## Active Project: ${activeProject.id}\nBrief: ${activeProject.brief.slice(0, 150)}\nStatus: ${activeProject.status} (${done}/${total} scenes done)\n${styleDesc}\nUse project_generate to continue, project_iterate to redo rejected scenes, project_status for details.`
+    );
+  }
+
+  // Inject loaded skill content
+  const loadedSkillContent = useSkillStore.getState().getLoadedContent();
+  if (loadedSkillContent) {
+    parts.push(`\n## Loaded Skills\n${loadedSkillContent.slice(0, 2000)}`);
+  }
+
+  // Inject active style override info
+  const styleOverrides = useSkillStore.getState().getActiveStyleOverrides();
+  if (styleOverrides.length > 0) {
+    const desc = styleOverrides.map((s) => `"${s.id}": prefix="${s.prompt_prefix || ""}" suffix="${s.prompt_suffix || ""}"`).join("\n");
+    parts.push(`\n## Active Style Override (auto-injected into all prompts)\n${desc}\nDo NOT add these style keywords yourself.`);
   }
 
   return parts.join("\n");

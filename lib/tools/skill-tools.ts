@@ -12,6 +12,7 @@ const AVAILABLE_SKILLS = [
   { id: "refinement", description: "Iterative refinement loop: generate, analyze, re-generate, upscale best" },
   { id: "remix", description: "Remix Canvas: combine multiple cards into composites" },
   { id: "daily-briefing", description: "Daily briefing videos from email, calendar, Slack, news via MCP" },
+  { id: "director", description: "Director workflow: plan→generate→review→iterate for multi-scene projects" },
   { id: "scope-graphs", description: "Scope pipeline graphs: available pipelines, graph format, matching user intent to pipeline" },
 ];
 

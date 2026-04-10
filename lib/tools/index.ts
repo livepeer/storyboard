@@ -12,10 +12,12 @@ import { canvasTools } from "./canvas-tools";
 import { skillTools } from "./skill-tools";
 import { compoundTools } from "./compound-tools";
 import { memoryTools } from "./memory-tools";
+import { projectTools } from "./project-tools";
 
 /** Register all built-in tools */
 export function initializeTools(): void {
   registerTools(compoundTools);   // create_media (compound) — listed first for Claude
+  registerTools(projectTools);    // project_create, project_generate, project_iterate, project_status
   registerTools(sdkTools);        // inference, stream_*, capabilities, train_lora
   registerTools(canvasTools);     // canvas_create, canvas_update, canvas_get, canvas_remove
   registerTools(skillTools);      // load_skill
