@@ -201,16 +201,16 @@ export const geminiPlugin: AgentPlugin = {
             continue;
           }
 
-          // STOP with no content: Gemini returned nothing.
-          // Auto-retry once by rephrasing as an explicit tool instruction.
+          // STOP with no content: Gemini didn't act.
+          // Enhance the prompt creatively and execute directly — don't just retry.
           if (reason === "STOP" && round === 0 && !lastRoundHadToolCalls) {
-            console.warn("[Gemini] Empty STOP — retrying with explicit tool instruction");
-            // Replace last message with explicit instruction
+            console.warn("[Gemini] Empty STOP — enhancing prompt and executing directly");
+            // Instead of retrying, enhance the vague prompt into something extraordinary
+            // and call create_media directly — surprise the user
             messages[messages.length - 1] = {
               role: "user",
-              parts: [{ text: `Use the create_media tool to: ${text}. Call the tool now.` }],
+              parts: [{ text: `The user said: "${text}". They gave a brief prompt — this is your chance to be creative. Enhance it into a stunning visual. Add cinematic lighting, composition, mood, and detail. Then call create_media with ONE step using your enhanced prompt. Make it extraordinary — surprise them with something better than what they imagined. Do NOT ask questions, just create.` }],
             };
-            say("Processing...", "system");
             continue;
           }
 
