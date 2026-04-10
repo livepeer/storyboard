@@ -49,17 +49,19 @@ function listSkills(): string {
     if (!categories.has(cat)) categories.set(cat, []);
     categories.get(cat)!.push(s);
   }
-  const lines: string[] = ["Available skills:"];
+  const lines: string[] = ["Skills:"];
   for (const [cat, skills] of categories) {
-    lines.push(`\n[${cat}]`);
+    lines.push(`\n── ${cat.toUpperCase()} ──`);
     for (const s of skills) {
-      const active = loaded.includes(s.id) ? " *" : "";
-      const type = s.type === "style-override" ? " (style)" : "";
-      lines.push(`  ${s.id}${type}${active} — ${s.description}`);
+      const marker = loaded.includes(s.id) ? "\u25CF" : "\u25CB";
+      const tag = s.type === "style-override" ? " [style]" : "";
+      lines.push(`${marker} ${s.id}${tag}`);
+      lines.push(`  ${s.description}`);
+      lines.push(`  \u2192 /skills/load ${s.id}`);
     }
   }
-  lines.push(`\nLoaded: ${loaded.length > 0 ? loaded.join(", ") : "none"}`);
-  lines.push("Use /skills/load <name> to activate");
+  lines.push(`\n\u25CF = loaded  \u25CB = available`);
+  lines.push(`Active: ${loaded.length > 0 ? loaded.join(", ") : "none"}`);
   return lines.join("\n");
 }
 
