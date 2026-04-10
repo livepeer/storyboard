@@ -1,8 +1,8 @@
-# Scope Pipeline Graphs
+# Scope Pipeline Graphs & Workflow Recipes
 
-LV2V streams use pipeline graphs to define the processing chain. The graph tells the fal runner what source, pipeline, and sink nodes to wire together.
+LV2V streams use pipeline graphs to define the processing chain. The agent should select the best workflow based on user intent.
 
-## Graph Format
+## Graph Format (CRITICAL)
 
 ```json
 {
@@ -18,78 +18,87 @@ LV2V streams use pipeline graphs to define the processing chain. The graph tells
 }
 ```
 
-**CRITICAL:** Edges use `from`/`from_port`/`to_node`/`to_port`/`kind` — NOT `source`/`target`.
+Edges MUST use `from`/`from_port`/`to_node`/`to_port`/`kind`.
 
 ## Available Pipelines
 
-### longlive (default)
-Real-time style transfer using diffusion models. Best for creative live effects.
-- Input: webcam video frames
-- Output: stylized video frames at ~15-17fps
-- Parameters: `prompts` (style description), `noise_scale` (0.0-1.0)
-- Use when: user wants to transform webcam/video into artistic styles
+| Pipeline | Type | FPS | Best For |
+|----------|------|-----|----------|
+| longlive | Style transfer (diffusion) | 15-17 | Live webcam transformation, artistic styles |
+| ltx2 | Video generation (LTX) | 5-10 | AI-generated video from text/image |
 
-```json
-{"pipeline_ids": ["longlive"], "prompts": "cyberpunk neon city"}
-```
+## Workflow Recipes
 
-### ltx2
-LTX video generation pipeline. Text/image to video generation.
-- Input: text prompt or image frames
-- Output: generated video frames
-- Parameters: `prompts` (scene description)
-- Use when: user wants AI-generated video content
-- Note: requires `scope-ltx-2` plugin installed on fal runner
+### Recipe 1: Live Style Transfer (default)
+**When:** User wants to transform webcam into a style in real-time.
+**Graph:** Simple (source → longlive → sink)
+**Params:** `prompts` (style description), `noise_scale` 0.5-0.8
 
-```json
-{"pipeline_ids": ["ltx2"], "prompts": "a dragon flying over mountains"}
-```
+Best for: "transform my webcam into cyberpunk", "make me look like an oil painting"
 
-## Graph Patterns
+### Recipe 2: High-Fidelity Style Transfer
+**When:** User wants subtle, faithful transformation — close to original but stylized.
+**Graph:** Simple (source → longlive → sink)
+**Params:** `noise_scale: 0.3`, `denoising_step_list: [1000,750,500,250]`
 
-### Simple (source → pipeline → sink)
-Default for webcam LV2V. One input, one pipeline, one output.
-```
-input (webcam) → longlive (style transfer) → output (display)
-```
+Best for: "enhance my webcam with warm cinematic lighting", "subtle anime filter"
 
-### Chain (source → pre-process → main → post-process → sink)
-For multi-stage processing with pre/post processors.
-```
-input → preprocessor → longlive → postprocessor → output
-```
+### Recipe 3: Creative / Psychedelic
+**When:** User wants wild, creative, heavily transformed output.
+**Graph:** Simple (source → longlive → sink)
+**Params:** `noise_scale: 0.9-1.0`, `prompts` with vivid style descriptors
 
-### Multi-sink (source → pipeline → sink1 + sink2)
-For recording while streaming.
-```
-input → longlive → output (display)
-                  → record (save to file)
-```
+Best for: "trippy psychedelic", "go wild", "abstract art from my webcam"
 
-## Matching User Intent to Pipeline
+### Recipe 4: Storyboard-to-Stream
+**When:** User created a storyboard and wants to enter one of those scenes live via webcam.
+**Graph:** Simple (source → longlive → sink)
+**How:**
+1. Agent reads the scene's prompt from the project
+2. Uses that prompt + style guide as the LV2V prompt
+3. Sets noise_scale based on how faithful vs creative the style needs to be
 
-| User says | Pipeline | Graph |
-|-----------|----------|-------|
-| "make me look like cyberpunk" | longlive | Simple |
-| "transform my webcam into oil painting" | longlive | Simple |
-| "stream my camera with dreamy style" | longlive | Simple |
-| "generate a video of dragons" | ltx2 | Simple |
-| "start live video with style transfer" | longlive | Simple |
+Best for: "start a live stream using scene 1's style", "put me in the cyberpunk world from scene 3"
 
-## Parameters for longlive
+### Recipe 5: AI Video Generation (no webcam)
+**When:** User wants generated video, not webcam transformation.
+**Graph:** Simple (source → ltx2 → sink)
+**Params:** `prompts` (scene description)
+**Note:** ltx2 must be installed on the fal runner
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| prompts | required | Style description, keep under 20 words |
-| noise_scale | 0.7 | 0.0=faithful, 1.0=creative |
-| noise_controller | true | Auto-adjust noise from motion |
-| denoising_step_list | [1000,750,500,250] | More steps=quality, fewer=speed |
+Best for: "generate a video of dragons", "create animated footage of aurora borealis"
 
-## SDK Integration
+## Matching Intent to Recipe
 
-The SDK's `stream_start` handler builds the graph automatically based on `LV2V_PIPELINE` env var. The browser doesn't need to send the graph — just the prompt.
+| User Intent | Recipe | noise_scale | Key Params |
+|-------------|--------|-------------|------------|
+| "transform my webcam into [style]" | 1 | 0.5-0.7 | prompts: style description |
+| "subtle/gentle/faithful filter" | 2 | 0.2-0.4 | prompts: enhancement description |
+| "go wild / trippy / psychedelic" | 3 | 0.9-1.0 | prompts: vivid descriptors |
+| "put me in [storyboard scene]" | 4 | 0.5-0.7 | prompts: from project style guide + scene |
+| "make it dreamier / more creative" | increase | +0.2 | via stream_control |
+| "more faithful / realistic" | decrease | -0.2 | via stream_control |
+| "generate a video of X" | 5 | N/A | prompts: scene description |
 
-To override the pipeline, the agent can specify it in the `stream_start` params:
-```json
-{"model_id": "scope", "params": {"prompt": "oil painting", "pipeline_id": "longlive"}}
-```
+## Combining Director + LV2V
+
+When a project is active and user asks to "stream" or "go live" using a scene:
+
+1. Load project's style guide (`promptPrefix` + `promptSuffix`)
+2. Get the target scene's prompt
+3. Combine: `{stylePrefix}{scenePrompt}{styleSuffix}`
+4. Start LV2V with `longlive` pipeline and the combined prompt
+5. Set `noise_scale` based on style intensity:
+   - Photorealistic scenes: 0.3-0.5
+   - Illustrated/artistic scenes: 0.5-0.7
+   - Abstract/psychedelic scenes: 0.8-1.0
+
+## Runtime Control (via stream_control)
+
+During streaming, the agent can adjust parameters:
+- `prompts`: change style description (smooth transition with `num_steps: 8, slerp`)
+- `noise_scale`: adjust creativity (0.0-1.0)
+- `reset_cache`: true for dramatic style changes
+- `kv_cache_attention_bias`: responsiveness (lower=responsive, higher=stable)
+
+Load the `live-director` skill for natural language command mapping.
