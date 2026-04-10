@@ -1,120 +1,155 @@
 /**
- * Prompt preprocessor — intercepts large multi-scene briefs and breaks them
- * down into a project plan before they reach the LLM agent.
+ * Prompt preprocessor — the creative engine behind storyboard generation.
  *
- * Problem: Gemini can't handle 800-word storyboard briefs + 21 tool schemas
- * in one shot. It returns empty STOP or MALFORMED_FUNCTION_CALL.
+ * For multi-scene briefs: owns the ENTIRE lifecycle (plan + generate all
+ * batches) with personality messages. The LLM agent only handles creative
+ * conversation afterward.
  *
- * Solution: Detect multi-scene prompts client-side, extract scenes and style,
- * call project_create directly, then hand a short "generate the project"
- * instruction to the agent.
+ * For simple prompts: passes through to the agent untouched.
  *
- * Flow:
- *   User: "Create a 9-scene cinematic storyboard for BYD..."
- *   Preprocessor detects 9 scenes → extracts scenes + style
- *   Preprocessor calls project_create tool directly
- *   Returns short instruction: "Project created (9 scenes). Call project_generate."
- *   Agent sees only this short instruction → calls project_generate → works.
+ * For follow-ups ("continue", "where are my pictures"): detects context
+ * and resumes generation or provides helpful responses.
  */
 
 import { executeTool } from "@/lib/tools/registry";
 import { useChatStore } from "@/lib/chat/store";
+import { useProjectStore } from "@/lib/projects/store";
 
-interface PreprocessResult {
-  /** If true, the preprocessor handled the prompt. Agent gets `agentPrompt` instead. */
+// ---------------------------------------------------------------------------
+// Personality — the creative partner voice
+// ---------------------------------------------------------------------------
+
+const REACTIONS = {
+  excited: [
+    "Oh, I love this brief!",
+    "This is going to be gorgeous.",
+    "What a vision — let me bring this to life.",
+    "Now THIS is a creative challenge I'm here for.",
+  ],
+  planning: [
+    "Let me break this down into scenes...",
+    "Planning the visual flow...",
+    "Mapping out the storyboard...",
+  ],
+  generating: [
+    "Bringing your scenes to life...",
+    "The canvas is about to get interesting...",
+    "Creating the magic...",
+  ],
+  batchDone: [
+    "Looking good so far!",
+    "These are coming together beautifully.",
+    "Love how these turned out.",
+  ],
+  allDone: [
+    "All scenes are on your canvas!",
+    "Your storyboard is ready!",
+    "Everything's laid out — take a look!",
+  ],
+  askFeedback: [
+    "Want me to adjust any of them?",
+    "Which scenes speak to you? I can refine the rest.",
+    "Any scenes you'd like me to rethink?",
+  ],
+};
+
+function pick(arr: string[]): string {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// ---------------------------------------------------------------------------
+// Detection
+// ---------------------------------------------------------------------------
+
+export interface PreprocessResult {
   handled: boolean;
-  /** Short prompt for the agent (replaces the original) */
   agentPrompt?: string;
 }
 
-/** Detect if a prompt is a multi-scene brief */
 function isMultiScene(text: string): boolean {
   const lower = text.toLowerCase();
-  // Count scene/shot references
   const sceneCount = (lower.match(/scene\s*\d|shot\s*\d|frame\s*\d/gi) || []).length;
   if (sceneCount >= 3) return true;
-  // Numbered list pattern (1. xxx 2. xxx 3. xxx)
   const numberedItems = (text.match(/^\s*\d+[\.\)\-]\s+\S/gm) || []).length;
   if (numberedItems >= 4) return true;
-  // "Scene N —" pattern
   const sceneDash = (text.match(/scene\s+\d+\s*[—\-–:]/gi) || []).length;
   if (sceneDash >= 3) return true;
-  // Very long prompt with scene-like keywords
   if (text.length > 1500 && (lower.includes("storyboard") || lower.includes("campaign") || lower.includes("scenes"))) return true;
   return false;
 }
 
-/** Extract scenes from a multi-scene brief using pattern matching */
+/** Detect follow-up messages that mean "keep going" or "where are my results" */
+function isFollowUp(text: string): { type: "continue" | "status" | "none" } {
+  const lower = text.toLowerCase().trim();
+  // Continue patterns
+  if (/^(continue|keep going|go|next|more|do the rest|finish|carry on|proceed|go ahead)\.?$/i.test(lower))
+    return { type: "continue" };
+  if (/continue|keep going|remaining|finish (it|them|the rest)|do the rest|next batch/i.test(lower))
+    return { type: "continue" };
+  // "Where are my pictures" patterns
+  if (/where.*(picture|image|scene|result)|don't see|can't see|nothing (show|appear|happen)|no (picture|image|result)|still waiting/i.test(lower))
+    return { type: "status" };
+  return { type: "none" };
+}
+
+// ---------------------------------------------------------------------------
+// Scene extraction
+// ---------------------------------------------------------------------------
+
 function extractScenes(text: string): Array<{ title: string; description: string; prompt: string }> {
   const scenes: Array<{ title: string; description: string; prompt: string }> = [];
 
-  // Try "Scene N — Title\nDescription" pattern
-  const sceneRegex = /(?:scene|shot|frame)\s*(\d+)\s*[—\-–:]\s*([^\n]+)\n([\s\S]*?)(?=(?:scene|shot|frame)\s*\d+\s*[—\-–:]|style\s+direction|$)/gi;
+  // Strip "style direction/notes" section at the end — it's not a scene
+  const cleanText = text.replace(/\n\s*(style\s+(direction|notes?)|visual\s+style|ghibli\s+style|colour|color\s+palette)[\s\S]*$/i, "");
+
+  // "Scene N — Title\nDescription"
+  const sceneRegex = /(?:scene|shot|frame)\s*(\d+)\s*[—\-–:]\s*([^\n]+)\n([\s\S]*?)(?=(?:scene|shot|frame)\s*\d+\s*[—\-–:]|$)/gi;
   let match;
-  while ((match = sceneRegex.exec(text)) !== null) {
+  while ((match = sceneRegex.exec(cleanText)) !== null) {
     const title = match[2].trim();
     const desc = match[3].trim();
-    // Summarize to under 25 words for the prompt
-    const prompt = summarizeToPrompt(title, desc);
-    scenes.push({ title, description: desc.slice(0, 200), prompt });
+    if (desc.length < 10) continue; // skip empty/fragment matches
+    scenes.push({ title, description: desc.slice(0, 200), prompt: summarize(title, desc) });
   }
-
   if (scenes.length >= 3) return scenes;
 
-  // Try numbered list pattern: "1. Title\nDescription"
+  // Numbered list: "1. Title\nDescription"
   const numberedRegex = /(\d+)[\.\)\-]\s+([^\n]+)\n([\s\S]*?)(?=\d+[\.\)\-]\s+|$)/g;
-  while ((match = numberedRegex.exec(text)) !== null) {
+  while ((match = numberedRegex.exec(cleanText)) !== null) {
     const title = match[2].trim();
     const desc = match[3].trim();
-    const prompt = summarizeToPrompt(title, desc);
-    scenes.push({ title, description: desc.slice(0, 200), prompt });
+    if (desc.length < 10) continue;
+    scenes.push({ title, description: desc.slice(0, 200), prompt: summarize(title, desc) });
   }
-
   return scenes;
 }
 
-/** Summarize a scene title + description into a concise visual prompt (under 25 words) */
-function summarizeToPrompt(title: string, description: string): string {
-  // Take the title and first sentence of description
+function summarize(title: string, description: string): string {
   const firstSentence = description.split(/[.!?\n]/)[0]?.trim() || "";
   const combined = `${title}. ${firstSentence}`;
-
-  // Truncate to ~25 words
   const words = combined.split(/\s+/);
-  if (words.length <= 25) return combined;
-  return words.slice(0, 25).join(" ");
+  return words.length <= 25 ? combined : words.slice(0, 25).join(" ");
 }
 
-/** Extract style guide from the brief */
-function extractStyleGuide(text: string): {
-  visual_style: string;
-  color_palette: string;
-  mood: string;
-  prompt_prefix: string;
-} {
+function extractStyleGuide(text: string) {
   const lower = text.toLowerCase();
-
-  // Look for style-related sentences
   let visual_style = "";
   let color_palette = "";
   let mood = "";
 
-  // Visual style
   const styleMatch = text.match(/(?:visual\s+style|style\s*:)[:\s]*([^.\n]+)/i);
   if (styleMatch) visual_style = styleMatch[1].trim().slice(0, 100);
+  else if (lower.includes("ghibli")) visual_style = "Studio Ghibli hand-painted watercolor animation";
   else if (lower.includes("photorealistic")) visual_style = "photorealistic CGI";
   else if (lower.includes("watercolor")) visual_style = "watercolor illustration";
   else if (lower.includes("anime")) visual_style = "anime style";
 
-  // Color palette
   const colorMatch = text.match(/(?:colour|color)\s*(?:palette)?[:\s]*([^.\n]+)/i);
   if (colorMatch) color_palette = colorMatch[1].trim().slice(0, 100);
 
-  // Mood
   const moodMatch = text.match(/(?:mood|tone)[:\s]*([^.\n]+)/i);
   if (moodMatch) mood = moodMatch[1].trim().slice(0, 100);
 
-  // Build prefix from style keywords
   const prefixParts: string[] = [];
   if (visual_style) prefixParts.push(visual_style);
   if (color_palette) prefixParts.push(color_palette);
@@ -123,35 +158,73 @@ function extractStyleGuide(text: string): {
   return { visual_style, color_palette, mood, prompt_prefix };
 }
 
+// ---------------------------------------------------------------------------
+// Main preprocessor
+// ---------------------------------------------------------------------------
+
 /**
- * Preprocess a user prompt. If it's a multi-scene brief, create the project
- * directly and return a short instruction for the agent.
+ * Preprocess a prompt. For multi-scene briefs: plan + generate everything.
+ * For follow-ups: detect and resume. For simple prompts: pass through.
  */
 export async function preprocessPrompt(text: string): Promise<PreprocessResult> {
+  const say = useChatStore.getState().addMessage;
+
+  // --- Follow-up detection ---
+  const followUp = isFollowUp(text);
+  if (followUp.type === "continue") {
+    const activeProject = useProjectStore.getState().getActiveProject();
+    if (activeProject) {
+      const done = activeProject.scenes.filter(s => s.status === "done").length;
+      const total = activeProject.scenes.length;
+      if (done < total) {
+        say(`On it — picking up where we left off (${done}/${total} done)...`, "agent");
+        await generateAllBatches(activeProject.id, total);
+        return { handled: true, agentPrompt: `All ${total} scenes are generated. Tell the user their storyboard is complete and ask which scenes they'd like to adjust.` };
+      } else {
+        return { handled: false }; // All done, let agent respond
+      }
+    }
+    // No active project — let agent handle
+    return { handled: false };
+  }
+
+  if (followUp.type === "status") {
+    const activeProject = useProjectStore.getState().getActiveProject();
+    if (activeProject) {
+      const done = activeProject.scenes.filter(s => s.status === "done").length;
+      const total = activeProject.scenes.length;
+      if (done < total) {
+        say(`Working on it — ${done}/${total} scenes done so far. Let me continue...`, "agent");
+        await generateAllBatches(activeProject.id, total);
+        return { handled: true, agentPrompt: `All ${total} scenes are now generated. The user was asking about progress — tell them everything is ready on the canvas and ask for feedback.` };
+      } else {
+        say(`All ${total} scenes are on the canvas! Take a look.`, "agent");
+        return { handled: true, agentPrompt: `All ${total} scenes are already generated and on the canvas. Ask the user what they think and if they want to adjust any scenes.` };
+      }
+    }
+    return { handled: false };
+  }
+
+  // --- Multi-scene detection ---
   if (!isMultiScene(text)) {
     return { handled: false };
   }
 
-  const say = useChatStore.getState().addMessage;
-
-  // Step 1: Extract scenes
   const scenes = extractScenes(text);
   if (scenes.length < 3) {
-    // Couldn't parse — let agent handle it
     return { handled: false };
   }
 
-  say(`Planning ${scenes.length}-scene project...`, "system");
+  // --- Personality: acknowledge the brief ---
+  say(pick(REACTIONS.excited), "agent");
+  say(`${pick(REACTIONS.planning)} ${scenes.length} scenes, coming right up.`, "agent");
 
-  // Step 2: Extract style guide
+  // --- Create project ---
   const style = extractStyleGuide(text);
-
-  // Step 3: Build a 1-line brief
   const briefWords = text.split(/\s+/).slice(0, 30).join(" ");
   const brief = briefWords + (text.split(/\s+/).length > 30 ? "..." : "");
 
-  // Step 4: Call project_create directly (bypasses Gemini entirely)
-  const result = await executeTool("project_create", {
+  const createResult = await executeTool("project_create", {
     brief,
     style_guide: style,
     scenes: scenes.map((s, i) => ({
@@ -163,20 +236,69 @@ export async function preprocessPrompt(text: string): Promise<PreprocessResult> 
     })),
   });
 
-  if (!result.success) {
-    say(`Project planning failed: ${result.error}`, "system");
+  if (!createResult.success) {
+    say(`Hmm, couldn't set up the project: ${createResult.error}`, "agent");
     return { handled: false };
   }
 
-  const data = result.data as Record<string, unknown>;
+  const data = createResult.data as Record<string, unknown>;
   const projectId = data.project_id as string;
   const totalScenes = data.total_scenes as number;
 
-  say(`Project planned: ${totalScenes} scenes. Generating...`, "system");
+  // --- Generate ALL batches with progress ---
+  say(pick(REACTIONS.generating), "agent");
+  await generateAllBatches(projectId, totalScenes);
 
-  // Step 5: Return short instruction for agent — just call project_generate
+  // --- Completion with personality ---
+  const doneMsg = `${pick(REACTIONS.allDone)} ${pick(REACTIONS.askFeedback)}`;
+
   return {
     handled: true,
-    agentPrompt: `Project "${projectId}" created with ${totalScenes} scenes. Call project_generate with project_id="${projectId}" now. After each batch, call project_generate again until all scenes are done. Then tell the user all scenes are ready and ask for feedback.`,
+    agentPrompt: `I just created and generated a ${totalScenes}-scene storyboard. All scenes are on the canvas. Say something like: "${doneMsg}" Keep it brief — the canvas shows the results. If the user wants changes, use project_iterate.`,
   };
+}
+
+/**
+ * Generate all remaining batches for a project, with progress messages.
+ */
+async function generateAllBatches(projectId: string, totalScenes: number): Promise<void> {
+  const say = useChatStore.getState().addMessage;
+  const startTime = Date.now();
+  let batchNum = 0;
+
+  for (let safety = 0; safety < 10; safety++) {
+    const store = useProjectStore.getState();
+    const project = store.getProject(projectId);
+    if (!project) break;
+
+    const done = project.scenes.filter(s => s.status === "done").length;
+    if (done >= totalScenes || store.isProjectComplete(projectId)) break;
+
+    batchNum++;
+    const batchStart = done + 1;
+    const batchEnd = Math.min(done + 5, totalScenes);
+    say(`Generating scenes ${batchStart}-${batchEnd}...`, "system");
+
+    const result = await executeTool("project_generate", { project_id: projectId });
+
+    if (!result.success) {
+      say(`Batch ${batchNum} had issues: ${result.error || "unknown error"}. Trying to continue...`, "system");
+      continue;
+    }
+
+    const batchData = result.data as Record<string, unknown>;
+    const completed = batchData.completed as number;
+    const remaining = (batchData.remaining as number) || 0;
+
+    if (remaining === 0) {
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+      say(`${pick(REACTIONS.batchDone)} All ${completed} scenes ready (${elapsed}s).`, "system");
+      break;
+    } else {
+      say(`${completed}/${totalScenes} done — ${pick(REACTIONS.batchDone)}`, "system");
+    }
+  }
+
+  // Auto-organize canvas
+  await executeTool("canvas_organize", {});
 }

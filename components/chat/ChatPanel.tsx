@@ -134,6 +134,7 @@ export function ChatPanel() {
   const [trackedTools, setTrackedTools] = useState<TrackedTool[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [thinkingVerb, setThinkingVerb] = useState("Thinking");
+  const [expandedEditor, setExpandedEditor] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -397,17 +398,99 @@ export function ChatPanel() {
           {/* Input + Quick Actions */}
           <div className="border-t border-[var(--border)] p-2">
             <QuickActions onSend={sendMessage} setInput={setInput} focusInput={focusInput} />
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder="Create a dragon as image, then animate it..."
-              rows={1}
-              className="w-full resize-none rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
-            />
+            <div className="flex gap-1">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder="Create a dragon as image, then animate it..."
+                rows={1}
+                className="min-w-0 flex-1 resize-none rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
+              />
+              <button
+                onClick={() => setExpandedEditor(true)}
+                title="Expand editor for long prompts"
+                className="shrink-0 rounded-lg border border-[var(--border)] bg-transparent px-2 text-[var(--text-dim)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text-muted)]"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M6 2H3a1 1 0 00-1 1v3M10 2h3a1 1 0 011 1v3M6 14H3a1 1 0 01-1-1v-3M10 14h3a1 1 0 001-1v-3" />
+                </svg>
+              </button>
+            </div>
           </div>
         </>
+      )}
+
+      {/* Expanded editor — floating modal for long prompts */}
+      {expandedEditor && (
+        <div
+          className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setExpandedEditor(false); }}
+        >
+          <div className="flex w-[90vw] max-w-[700px] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[rgba(20,20,20,0.98)] shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-3">
+              <span className="flex-1 text-sm font-medium text-[var(--text-muted)]">Compose Prompt</span>
+              <span className="text-[10px] text-[var(--text-dim)]">
+                {input.length > 0 ? `${input.split(/\s+/).filter(Boolean).length} words` : ""}
+              </span>
+              <button
+                onClick={() => setExpandedEditor(false)}
+                className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-dim)] transition-colors hover:bg-white/[0.08] hover:text-[var(--text)]"
+              >
+                ×
+              </button>
+            </div>
+            {/* Editor */}
+            <textarea
+              autoFocus
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                // Cmd/Ctrl+Enter to send
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  setExpandedEditor(false);
+                  sendMessage(input);
+                }
+                // Escape to close
+                if (e.key === "Escape") setExpandedEditor(false);
+              }}
+              placeholder="Paste your full storyboard brief, multi-scene prompt, or detailed creative direction here...
+
+Example:
+Create a 9-scene cinematic storyboard for...
+Scene 1 — Title
+Description...
+Scene 2 — Title
+Description..."
+              className="min-h-[300px] max-h-[60vh] flex-1 resize-y bg-transparent px-4 py-3 text-sm leading-relaxed text-[var(--text)] outline-none placeholder:text-[var(--text-dim)]"
+            />
+            {/* Footer */}
+            <div className="flex items-center gap-2 border-t border-[var(--border)] px-4 py-3">
+              <span className="flex-1 text-[10px] text-[var(--text-dim)]">
+                {input.length > 500 ? "Long prompt detected — will auto-plan as project" : ""}
+                {" "}Cmd+Enter to send · Esc to close
+              </span>
+              <button
+                onClick={() => setExpandedEditor(false)}
+                className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text-dim)] transition-colors hover:bg-white/[0.06]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setExpandedEditor(false);
+                  sendMessage(input);
+                }}
+                className="rounded-lg bg-purple-500/20 px-3 py-1.5 text-xs font-medium text-purple-300 transition-colors hover:bg-purple-500/30"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
