@@ -139,8 +139,16 @@ export const geminiPlugin: AgentPlugin = {
       const system = await loadSystemPrompt(context);
       const tools = buildToolSchemas();
 
+      // Limit conversation history to prevent token overflow
+      // Keep last 20 messages max — old ones get compacted anyway
+      if (messages.length > 20) {
+        messages = messages.slice(-20);
+      }
+
       // Append user message
       messages.push({ role: "user", parts: [{ text }] });
+
+      console.log(`[Gemini] Sending: ${messages.length} messages, ${tools.length} tools, system=${system.length} chars`);
 
       // Tool-use loop
       let lastRoundHadToolCalls = false;
@@ -181,23 +189,38 @@ export const geminiPlugin: AgentPlugin = {
         const candidate = response.candidates?.[0];
         if (!candidate?.content?.parts) {
           const reason = candidate?.finishReason || "No response";
-          console.warn(`[Gemini] Empty response: finishReason=${reason}, round=${round}, lastToolCalls=${lastRoundHadToolCalls}`);
+          console.warn(`[Gemini] Empty response: finishReason=${reason}, round=${round}, lastToolCalls=${lastRoundHadToolCalls}, messages=${messages.length}`);
 
           // MALFORMED_FUNCTION_CALL: auto-retry by injecting a simpler instruction
           if (reason === "MALFORMED_FUNCTION_CALL" && round < MAX_TOOL_ROUNDS - 1) {
             say("Simplifying request...", "system");
-            // Add a user message asking to simplify, then continue the loop
             messages.push({
               role: "user",
               parts: [{ text: "Your function call was too complex. Call create_media with fewer steps (max 3) and shorter prompts (under 30 words each). Do one batch at a time." }],
             });
-            continue; // retry the loop
+            continue;
+          }
+
+          // STOP with no content: Gemini returned nothing.
+          // Auto-retry once by rephrasing as an explicit tool instruction.
+          if (reason === "STOP" && round === 0 && !lastRoundHadToolCalls) {
+            console.warn("[Gemini] Empty STOP — retrying with explicit tool instruction");
+            // Replace last message with explicit instruction
+            messages[messages.length - 1] = {
+              role: "user",
+              parts: [{ text: `Use the create_media tool to: ${text}. Call the tool now.` }],
+            };
+            say("Processing...", "system");
+            continue;
           }
 
           if (!lastRoundHadToolCalls) {
             if (reason === "MALFORMED_FUNCTION_CALL") {
               say("Function call too complex even after retry. Try a simpler prompt.", "system");
               yield { type: "error", content: "Gemini: function call too complex. Try fewer scenes." };
+            } else if (reason === "STOP") {
+              say("No response from Gemini. Try rephrasing or a shorter prompt.", "system");
+              yield { type: "error", content: "Gemini returned empty. Try again." };
             } else if (reason === "MAX_TOKENS") {
               say("Response too long — try a shorter prompt or fewer scenes.", "system");
               yield { type: "error", content: "Gemini: response exceeded token limit. Try fewer scenes." };
