@@ -9,11 +9,61 @@ const roleStyles: Record<string, string> = {
   system: "self-center font-mono text-[10px] text-[var(--text-dim)]",
 };
 
-// Detect rating prompts like "[rate:ref_id:capability:prompt]"
 const RATING_RE = /\[rate:([^:]+):([^:]*):([^\]]*)\]/;
+
+// Match /skills/load xxx commands in system messages
+const CMD_RE = /\/skills\/load\s+(\S+)/g;
+
+/** Render text with clickable /skills/load commands */
+function RichText({ text, onClick }: { text: string; onClick?: (cmd: string) => void }) {
+  const parts: Array<{ type: "text" | "cmd"; value: string; cmd?: string }> = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  const re = new RegExp(CMD_RE.source, "g");
+
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: "text", value: text.slice(lastIndex, match.index) });
+    }
+    parts.push({ type: "cmd", value: match[0], cmd: match[0] });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    parts.push({ type: "text", value: text.slice(lastIndex) });
+  }
+
+  if (parts.length === 0) return <>{text}</>;
+
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.type === "cmd" ? (
+          <button
+            key={i}
+            onClick={() => onClick?.(p.cmd!)}
+            className="mx-0.5 inline-flex items-center gap-1 rounded bg-purple-500/15 px-1.5 py-0.5 font-mono text-[9px] text-purple-300 transition-colors hover:bg-purple-500/25 active:bg-purple-500/35"
+            title="Click to copy to input"
+          >
+            <span>{p.value}</span>
+            <span className="text-[8px] opacity-60">&#x2398;</span>
+          </button>
+        ) : (
+          <span key={i}>{p.value}</span>
+        )
+      )}
+    </>
+  );
+}
 
 export function MessageBubble({ message }: { message: ChatMessage }) {
   const ratingMatch = message.role === "agent" ? RATING_RE.exec(message.text) : null;
+
+  const handleCmdClick = (cmd: string) => {
+    // Dispatch prefill event to put command in the input
+    window.dispatchEvent(
+      new CustomEvent("chat-prefill", { detail: { text: cmd } })
+    );
+  };
 
   return (
     <div
@@ -32,8 +82,10 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
             />
           </div>
         </>
+      ) : message.role === "system" && message.text.includes("/skills/load") ? (
+        <RichText text={message.text} onClick={handleCmdClick} />
       ) : (
-        message.text
+        <span style={{ whiteSpace: "pre-wrap" }}>{message.text}</span>
       )}
     </div>
   );
