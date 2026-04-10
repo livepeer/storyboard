@@ -136,60 +136,68 @@ cd /opt/byoc && sudo docker compose up -d
 
 ## SKILL: LV2V (Live Video-to-Video) Streaming
 
-### Architecture
-```
-Browser webcam → SDK /stream/publish (JPEG) → MediaPublish (MPEG-TS) → trickle input
-  → Scope Orch → fal runner (Scope pipeline) → output trickle
-  → SDK MediaOutput (decode MPEG-TS → JPEG) → /stream/frame endpoint
-Browser polls /stream/frame → displays as <img> (JPEG per frame)
-```
+**Full debugging guide:** `docs/key-insights-scope.md`
 
-### The Scope Protocol (CRITICAL — must follow exactly)
+### The 4 Required Fixes (all must be present)
 
-The SDK's `_init_stream_session` must execute this sequence:
+1. **Orch timeout:** `-liveOutSegmentTimeout 300s` on orch (prevents 30s watchdog kill)
+2. **Fal keepalive:** PR 864 ping/pong in fal app (prevents WebSocket disconnect)
+3. **Graph params:** `start_stream` MUST include graph with source/pipeline/sink nodes (creates input trickle channel)
+4. **Edge format:** Edges MUST use `from/from_port/to_node/to_port/kind` NOT `source/target` (enables pipeline wiring)
 
-1. **Start events/ping/payment loops** concurrently
-2. **Wait for `runner_ready`** from events channel (up to 120s)
-3. **Send `load_pipeline`** API request via control channel
-4. **Wait for `pipeline_loaded`** from log events (up to 300s)
-5. **Send `start_stream`** with `pipeline_ids` and `prompts` params
-6. **Wait for `stream_started`** response with **per-stream channel URLs**
-7. **Create `MediaPublish`** on the **per-stream input URL** (e.g., `{id}-1-in`)
-8. **Create `MediaOutput`** on the **per-stream output URL** (e.g., `{id}-1-out`)
+### Graph Format (CRITICAL — must match Scope exactly)
 
-### KNOWN BUG: Job-level vs Per-stream URLs
-
-**Root cause of publish 404 errors:**
-
-The orch creates job-level trickle channels (`{id}`, `{id}-out`). After `start_stream`, the fal runner creates per-stream channels (`{id}-1-in`, `{id}-1-out`). 
-
-**If `_init_stream_session` fails or times out**, it falls back to job-level URLs:
-```
-WRONG: MediaPublish on https://orch.../ai/trickle/{id}     → 404 "Stream not found"
-RIGHT: MediaPublish on https://orch.../ai/trickle/{id}-1-in → works
+```python
+start_stream_params = {
+    "pipeline_ids": ["longlive"],
+    "prompts": prompt,
+    "graph": {
+        "nodes": [
+            {"id": "input", "type": "source", "source_mode": "video"},
+            {"id": "longlive", "type": "pipeline", "pipeline_id": "longlive"},
+            {"id": "output", "type": "sink"},
+        ],
+        "edges": [
+            {"from": "input", "from_port": "video", "to_node": "longlive", "to_port": "video", "kind": "stream"},
+            {"from": "longlive", "from_port": "video", "to_node": "output", "to_port": "video", "kind": "stream"},
+        ],
+    },
+}
 ```
 
-**Diagnosis:** Check SDK logs for:
-- `"per-stream channels ready"` = good (got per-stream URLs)
-- `"protocol failed...using job-level URLs"` = bad (fallback, publish will fail)
-- `"Trickle publisher channel does not exist"` = publishing to wrong URL
+### Trickle Channel URLs
 
-### Orch Configuration for LV2V
+```
+Job-level (DON'T use for MediaPublish/MediaOutput):
+  {id}, {id}-out, {id}-control, {id}-events
 
-The orch MUST have:
-- `-liveOutSegmentTimeout 300s` — prevents 30s output watchdog kill
-- `FAL_API_KEY` env var — fal runner requires auth
-- `LIVE_AI_WS_PREFIX` env var — WebSocket URL prefix for fal
+Per-stream (USE these — created by start_stream with graph):
+  {id}-1-in   — input (MediaPublish writes here)
+  {id}-2-out  — output (MediaOutput reads here)
+```
 
-Without `-liveOutSegmentTimeout 300s`, the orch kills streams after 30s because the output segment watchdog fires. The default is 30s (hardcoded in go-livepeer `ai_live_video.go:256`).
+### Diagnostic Checklist (check in order)
+
+| Symptom | Check |
+|---------|-------|
+| 503 on stream start | Daydream API key? daydream_user_id resolved? FAL_API_KEY on orch? |
+| Stream dies <30s | `-liveOutSegmentTimeout 300s` on orch? PR 864 deployed? |
+| Publish 404 | Graph in start_stream? "start_stream returned 2 channels"? |
+| Publish OK but no output | Edge format correct? Pipeline node ID = pipeline_id? |
+| Output OK but black screen | Card renders as `<img>` not `<video>`? |
+
+### Orch Requirements
+
+```
+-liveOutSegmentTimeout 300s
+FAL_API_KEY=<key>
+FAL_KEY=<key>
+LIVE_AI_WS_PREFIX=wss://fal.run/daydream
+```
 
 ### fal Runner Auth
 
-The fal runner requires `daydream_user_id` in the `start_lv2v` params. Without it:
-```
-ERROR: serverless handshake failed (ACCESS_DENIED): Access denied
-```
-The SDK resolves this from the Daydream API key via `_resolve_daydream_user_id()`.
+Requires `daydream_user_id` in `start_lv2v` params. SDK resolves from Daydream API key via `_resolve_daydream_user_id()`. Without it: `ACCESS_DENIED`.
 
 ### Stream Health Monitoring
 
