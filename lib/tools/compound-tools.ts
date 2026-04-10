@@ -229,8 +229,19 @@ export const createMediaTool: ToolDefinition = {
           canvas.updateCard(card.id, { url });
           results.push({ refId, cardId: card.id, url, capability, elapsed });
         } else {
-          canvas.updateCard(card.id, { error: "No media returned" });
-          results.push({ refId, cardId: card.id, error: "No media returned", capability, elapsed });
+          // Log the full response for debugging
+          console.warn(`[create_media] No URL extracted for ${capability}:`, JSON.stringify(r).slice(0, 300));
+          // Try one more extraction: some models return url at data level as string
+          const fallbackUrl = typeof data === "object"
+            ? (Object.values(data).find((v) => typeof v === "string" && (v as string).startsWith("http")) as string | undefined)
+            : undefined;
+          if (fallbackUrl) {
+            canvas.updateCard(card.id, { url: fallbackUrl });
+            results.push({ refId, cardId: card.id, url: fallbackUrl, capability, elapsed });
+          } else {
+            canvas.updateCard(card.id, { error: `No media returned from ${capability}` });
+            results.push({ refId, cardId: card.id, error: `No media returned from ${capability}`, capability, elapsed });
+          }
         }
 
         if (step.depends_on !== undefined && results[step.depends_on]) {

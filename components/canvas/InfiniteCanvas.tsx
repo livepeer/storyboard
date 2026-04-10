@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { Card } from "./Card";
 import { ArrowLayer } from "./ArrowEdge";
@@ -44,22 +44,32 @@ export function InfiniteCanvas() {
     panRef.current = null;
   }, []);
 
-  const onWheel = useCallback(
-    (e: React.WheelEvent) => {
+  // Wheel zoom — must use ref-based listener with { passive: false }
+  // because React attaches wheel events as passive by default,
+  // which makes e.preventDefault() fail and floods the console.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
       e.preventDefault();
       const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      zoomTo(viewport.scale * factor, e.clientX, e.clientY);
-    },
-    [viewport.scale, zoomTo]
-  );
+      zoomTo(viewportRef.current.scale * factor, e.clientX, e.clientY);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [zoomTo]);
 
   return (
     <div
+      ref={containerRef}
       className="fixed inset-0 overflow-hidden"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onWheel={onWheel}
     >
       {/* Dot grid — moves with pan/zoom to give sense of scale */}
       <div
