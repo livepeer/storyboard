@@ -35,7 +35,7 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
     case "capabilities":
       return showCapabilities();
     case "organize":
-      return organizeCanvas();
+      return organizeCanvas(cmd.args);
     case "export":
       return exportCanvas();
     default:
@@ -168,11 +168,19 @@ function showCapabilities(): string {
   return lines.join("\n");
 }
 
-function organizeCanvas(): string {
+function organizeCanvas(mode?: string): string {
   const store = useCanvasStore.getState();
-  if (store.cards.length === 0) return "Canvas is empty — nothing to organize.";
+  if (store.cards.length === 0) return "Canvas is empty \u2014 nothing to organize.";
+
+  const m = (mode || "grid").toLowerCase().trim();
+
+  if (m === "narrative" || m === "flow" || m === "story") {
+    store.narrativeLayout();
+    return `Organized ${store.cards.length} cards in narrative flow (horizontal chain).`;
+  }
+
   store.autoLayout();
-  return `Organized ${store.cards.length} cards in narrative order.`;
+  return `Organized ${store.cards.length} cards in grid layout.\nTip: /organize narrative \u2014 horizontal story flow`;
 }
 
 function exportCanvas(): string {

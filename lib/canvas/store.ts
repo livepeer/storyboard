@@ -23,6 +23,7 @@ interface CanvasState {
   // Layout
   layoutTimeline: (refIds: string[], cols?: number) => void;
   autoLayout: () => void;
+  narrativeLayout: () => void;
 
   // Card actions
   addCard: (opts: {
@@ -235,6 +236,55 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           x: GAP + col * (CARD_W + GAP),
           y: GAP + 48 + row * (CARD_H + GAP),
         };
+      });
+      return { cards };
+    }),
+
+  /** Narrative layout: horizontal chain following edge flow, branches below */
+  narrativeLayout: () =>
+    set((s) => {
+      const hasIncoming = new Set(s.edges.map((e) => e.toRefId));
+      const roots = s.cards.filter((c) => !hasIncoming.has(c.refId));
+      const visited = new Set<string>();
+      const order: string[] = [];
+      const queue = [...roots.map((c) => c.refId)];
+      while (queue.length > 0) {
+        const refId = queue.shift()!;
+        if (visited.has(refId)) continue;
+        visited.add(refId);
+        order.push(refId);
+        for (const e of s.edges) {
+          if (e.fromRefId === refId && !visited.has(e.toRefId)) {
+            queue.push(e.toRefId);
+          }
+        }
+      }
+      for (const c of s.cards) {
+        if (!visited.has(c.refId)) order.push(c.refId);
+      }
+
+      const positions = new Map<string, { x: number; y: number }>();
+      let nextX = GAP;
+      const baseY = GAP + 48;
+
+      for (const refId of order) {
+        const parentEdge = s.edges.find(
+          (e) => e.toRefId === refId && positions.has(e.fromRefId)
+        );
+        const isTransform = parentEdge && parentEdge.meta?.action !== "sequence";
+
+        if (isTransform && parentEdge) {
+          const parentPos = positions.get(parentEdge.fromRefId)!;
+          positions.set(refId, { x: parentPos.x, y: parentPos.y + CARD_H + GAP });
+        } else {
+          positions.set(refId, { x: nextX, y: baseY });
+          nextX += CARD_W + GAP;
+        }
+      }
+
+      const cards = s.cards.map((c) => {
+        const pos = positions.get(c.refId);
+        return pos ? { ...c, x: pos.x, y: pos.y } : c;
       });
       return { cards };
     }),
