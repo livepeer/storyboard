@@ -14,6 +14,9 @@ export function InfiniteCanvas() {
   const [lasso, setLasso] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number; button: number } | null>(null);
 
+  // Track whether this drag is a lasso (Shift held on pointer down)
+  const isLassoDrag = useRef(false);
+
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (e.button !== 0 && e.button !== 1) return;
@@ -25,6 +28,9 @@ export function InfiniteCanvas() {
         startX: e.clientX - viewport.panX,
         startY: e.clientY - viewport.panY,
       };
+
+      // Shift+drag = lasso select mode; plain drag = pan
+      isLassoDrag.current = e.shiftKey && e.button === 0;
 
       if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
         selectCard(null);
@@ -38,22 +44,24 @@ export function InfiniteCanvas() {
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!panRef.current || !pointerStartRef.current) return;
-      const dx = e.clientX - pointerStartRef.current.x;
-      const dy = e.clientY - pointerStartRef.current.y;
 
-      // Left button + drag exceeds threshold → lasso mode
-      if (pointerStartRef.current.button === 0 && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
-        const toCanvas = (sx: number, sy: number) => ({
-          x: (sx - viewport.panX) / viewport.scale,
-          y: (sy - viewport.panY) / viewport.scale,
-        });
-        const start = toCanvas(pointerStartRef.current.x, pointerStartRef.current.y);
-        const end = toCanvas(e.clientX, e.clientY);
-        setLasso({ x1: start.x, y1: start.y, x2: end.x, y2: end.y });
+      // Shift+drag = lasso selection
+      if (isLassoDrag.current) {
+        const dx = e.clientX - pointerStartRef.current.x;
+        const dy = e.clientY - pointerStartRef.current.y;
+        if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+          const toCanvas = (sx: number, sy: number) => ({
+            x: (sx - viewport.panX) / viewport.scale,
+            y: (sy - viewport.panY) / viewport.scale,
+          });
+          const start = toCanvas(pointerStartRef.current.x, pointerStartRef.current.y);
+          const end = toCanvas(e.clientX, e.clientY);
+          setLasso({ x1: start.x, y1: start.y, x2: end.x, y2: end.y });
+        }
         return;
       }
 
-      // Otherwise pan
+      // Plain drag = pan canvas
       setViewport({
         panX: e.clientX - panRef.current.startX,
         panY: e.clientY - panRef.current.startY,
@@ -81,6 +89,7 @@ export function InfiniteCanvas() {
     }
     panRef.current = null;
     pointerStartRef.current = null;
+    isLassoDrag.current = false;
   }, [lasso, cards, selectCards]);
 
   // Wheel zoom — must use ref-based listener with { passive: false }
