@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { Card } from "./Card";
 import { ArrowLayer } from "./ArrowEdge";
+import { GroupButton } from "./GroupButton";
 // EdgeInfoPopup is now inline in ArrowLayer (no separate component)
 
 export function InfiniteCanvas() {
@@ -147,6 +148,7 @@ export function InfiniteCanvas() {
         ))}
       </div>
       {/* Edge popup is inline in ArrowLayer */}
+      <GroupButton />
     </div>
   );
 }
