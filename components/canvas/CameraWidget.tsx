@@ -12,6 +12,7 @@ import {
   linkRefIdToStream,
   type Lv2vSession,
 } from "@/lib/stream/session";
+import { FrameExtractor } from "@/lib/stream/frame-extractor";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useChatStore } from "@/lib/chat/store";
 
@@ -79,58 +80,125 @@ export function CameraWidget() {
     }
   }, [addMessage]);
 
+  // Track frame extractor for non-webcam sources (so we can clean up on stop)
+  const extractorRef = useRef<FrameExtractor | null>(null);
+
   // Listen for agent-triggered LV2V start (from chat)
   useEffect(() => {
     const handler = async (e: Event) => {
-      const detail = (e as CustomEvent).detail as { prompt: string };
+      const detail = (e as CustomEvent).detail as {
+        prompt: string;
+        params?: Record<string, unknown>;
+        needsInput?: boolean;
+        source?: { type: string; url: string };
+        streamCardId?: string;
+      };
       if (!detail?.prompt) return;
-      // Auto-start webcam if not active
-      if (!active && videoRef.current) {
-        try {
-          await startWebcam(videoRef.current);
-          setActive(true);
-          addMessage("Camera auto-started for LV2V", "system");
-        } catch {
-          addMessage("Camera failed to start", "system");
-          return;
-        }
-        // Wait for video to initialize
-        await new Promise((r) => setTimeout(r, 500));
-      }
-      // Start LV2V with the prompt
-      if (!streaming && videoRef.current) {
+
+      const hasNonWebcamSource = detail.source && detail.source.type !== "webcam" && detail.source.url;
+
+      if (hasNonWebcamSource) {
+        // --- Non-webcam source: use FrameExtractor (image/video/url) ---
+        if (streaming) return;
         setStreaming(true);
-        setStatus("Starting stream\u2026");
+        setStatus("Starting stream from source\u2026");
         setCurrentPrompt(detail.prompt);
         try {
-          const session = await startStream(detail.prompt);
+          const session = await startStream(detail.prompt, detail.params);
           sessionRef.current = session;
-          const cardRefId = `lv2v_${Date.now()}`;
-          const card = addCard({ type: "stream", title: `LV2V: ${detail.prompt.slice(0, 25)}`, refId: cardRefId });
-          linkRefIdToStream(cardRefId, session.streamId);
+
+          // Use existing stream card from scope_start if provided, otherwise create one
+          const cardRefId = detail.streamCardId
+            ? useCanvasStore.getState().cards.find(c => c.id === detail.streamCardId)?.refId || `lv2v_${Date.now()}`
+            : `lv2v_${Date.now()}`;
+          let card;
+          if (detail.streamCardId) {
+            card = useCanvasStore.getState().cards.find(c => c.id === detail.streamCardId);
+          }
+          if (!card) {
+            card = addCard({ type: "stream", title: `LV2V: ${detail.prompt.slice(0, 25)}`, refId: cardRefId });
+          }
+          linkRefIdToStream(card.refId, session.streamId);
 
           setStatus("Waiting for pipeline\u2026");
-          addMessage("Waiting for LV2V pipeline\u2026", "system");
+          addMessage(`Starting LV2V from ${detail.source!.type} source\u2026`, "system");
           await waitForReady(session, (phase) => setStatus(phase));
 
-          const video = videoRef.current!;
-          if (!video.srcObject || video.videoWidth === 0) {
-            await startWebcam(video);
-            await new Promise((r) => setTimeout(r, 1000));
-          }
+          // Initialize frame extractor for the source
+          const sourceType = detail.source!.type as "image" | "video" | "url";
+          const extractor = new FrameExtractor({
+            type: sourceType,
+            url: detail.source!.url,
+            fps: 10,
+            quality: 0.8,
+          });
+          await extractor.init();
+          extractorRef.current = extractor;
 
-          startPublishing(session, () => captureFrame(video), 100);
-          session.onFrame = (url) => updateCard(card.id, { url });
+          // Use startPublishing with the extractor's captureFrame as the frame getter
+          startPublishing(session, () => extractor.captureFrame(), 100);
+
+          session.onFrame = (url) => updateCard(card!.id, { url });
           session.onStatus = (msg) => setStatus(msg);
           session.onError = (err) => addMessage(`LV2V: ${err}`, "system");
           startPolling(session, 200);
 
           setStatus("Streaming");
-          addMessage(`LV2V started: ${detail.prompt}`, "agent");
+          addMessage(`LV2V started from ${sourceType}: ${detail.prompt}`, "agent");
         } catch (e) {
+          extractorRef.current?.stop();
+          extractorRef.current = null;
           setStreaming(false);
           setStatus("");
           addMessage(`LV2V error: ${e instanceof Error ? e.message : "Unknown"}`, "system");
+        }
+      } else {
+        // --- Webcam source (original flow) ---
+        if (!active && videoRef.current) {
+          try {
+            await startWebcam(videoRef.current);
+            setActive(true);
+            addMessage("Camera auto-started for LV2V", "system");
+          } catch {
+            addMessage("Camera failed to start", "system");
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        if (!streaming && videoRef.current) {
+          setStreaming(true);
+          setStatus("Starting stream\u2026");
+          setCurrentPrompt(detail.prompt);
+          try {
+            const session = await startStream(detail.prompt, detail.params);
+            sessionRef.current = session;
+            const cardRefId = `lv2v_${Date.now()}`;
+            const card = addCard({ type: "stream", title: `LV2V: ${detail.prompt.slice(0, 25)}`, refId: cardRefId });
+            linkRefIdToStream(cardRefId, session.streamId);
+
+            setStatus("Waiting for pipeline\u2026");
+            addMessage("Waiting for LV2V pipeline\u2026", "system");
+            await waitForReady(session, (phase) => setStatus(phase));
+
+            const video = videoRef.current!;
+            if (!video.srcObject || video.videoWidth === 0) {
+              await startWebcam(video);
+              await new Promise((r) => setTimeout(r, 1000));
+            }
+
+            startPublishing(session, () => captureFrame(video), 100);
+            session.onFrame = (url) => updateCard(card.id, { url });
+            session.onStatus = (msg) => setStatus(msg);
+            session.onError = (err) => addMessage(`LV2V: ${err}`, "system");
+            startPolling(session, 200);
+
+            setStatus("Streaming");
+            addMessage(`LV2V started: ${detail.prompt}`, "agent");
+          } catch (e) {
+            setStreaming(false);
+            setStatus("");
+            addMessage(`LV2V error: ${e instanceof Error ? e.message : "Unknown"}`, "system");
+          }
         }
       }
     };
@@ -141,6 +209,10 @@ export function CameraWidget() {
   const handleStop = useCallback(() => {
     stopWebcam();
     setActive(false);
+    if (extractorRef.current) {
+      extractorRef.current.stop();
+      extractorRef.current = null;
+    }
     if (sessionRef.current) {
       stopStream(sessionRef.current);
       sessionRef.current = null;

@@ -120,8 +120,8 @@ export class FrameExtractor {
     }, intervalMs);
   }
 
-  /** Capture a single frame as a JPEG blob (synchronous via toBlob workaround). */
-  private captureFrame(): Blob | null {
+  /** Capture a single frame as a JPEG blob (synchronous via toDataURL). */
+  captureFrame(): Blob | null {
     if (!this.canvas || !this.ctx) return null;
 
     try {
