@@ -14,6 +14,12 @@ export interface Card {
   error?: string;
   /** Cards from the same create_media call share a batchId */
   batchId?: string;
+  /** The capability/model used to generate this card */
+  capability?: string;
+  /** The prompt used to generate this card */
+  prompt?: string;
+  /** Generation time in ms */
+  elapsed?: number;
 }
 
 export interface ArrowEdge {

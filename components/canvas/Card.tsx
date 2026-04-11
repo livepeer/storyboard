@@ -208,28 +208,41 @@ export function Card({ card }: { card: CardData }) {
         </div>
       )}
 
-      {/* Model info bar — shows when card is selected and has an incoming transformation */}
-      {isSelected && incomingEdge?.meta && !card.minimized && (
-        <div style={{
-          borderTop: "1px solid rgba(139,92,246,0.3)",
-          background: "rgba(139,92,246,0.08)",
-          padding: "6px 10px",
-          fontSize: 10,
-          color: "#c4b5fd",
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-            <span style={{ fontWeight: 600 }}>{incomingEdge.meta.capability || "transform"}</span>
-            <span style={{ color: "#34d399" }}>
-              {incomingEdge.meta.elapsed ? `${(incomingEdge.meta.elapsed / 1000).toFixed(1)}s` : ""}
-            </span>
-          </div>
-          {incomingEdge.meta.prompt && (
-            <div style={{ color: "var(--text-muted)", fontSize: 9, lineHeight: 1.4 }}>
-              {incomingEdge.meta.prompt.length > 80 ? incomingEdge.meta.prompt.slice(0, 80) + "\u2026" : incomingEdge.meta.prompt}
+      {/* Model info bar — shows when card is selected; uses card metadata or incoming edge */}
+      {isSelected && !card.minimized && (() => {
+        const cap = card.capability || incomingEdge?.meta?.capability;
+        const prompt = card.prompt || incomingEdge?.meta?.prompt;
+        const elapsed = card.elapsed ?? incomingEdge?.meta?.elapsed;
+        if (!cap && !prompt) return null;
+        return (
+          <div style={{
+            borderTop: `1px solid ${colors.text}33`,
+            background: `${colors.text}0d`,
+            padding: "6px 10px",
+            fontSize: 10,
+            color: "#c4b5fd",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: prompt ? 2 : 0 }}>
+              <span style={{ fontWeight: 600, color: colors.text }}>{cap || "generate"}</span>
+              <span style={{ color: "#34d399" }}>
+                {elapsed ? `${(elapsed / 1000).toFixed(1)}s` : ""}
+              </span>
             </div>
-          )}
-        </div>
-      )}
+            {prompt && (
+              <div
+                style={{ color: "var(--text-muted)", fontSize: 9, lineHeight: 1.4, cursor: "pointer" }}
+                title="Click to copy prompt"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigator.clipboard.writeText(prompt);
+                }}
+              >
+                {prompt.length > 120 ? prompt.slice(0, 120) + "\u2026" : prompt}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Stream controls — run/stop, status, inline agent */}
       {card.type === "stream" && !card.minimized && (

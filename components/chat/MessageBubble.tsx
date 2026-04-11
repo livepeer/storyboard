@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import type { ChatMessage } from "@/lib/chat/store";
 import { RatingWidget } from "./RatingWidget";
 
@@ -65,6 +66,7 @@ function RichText({ text, onClick }: { text: string; onClick?: (cmd: string) => 
 
 export function MessageBubble({ message }: { message: ChatMessage }) {
   const ratingMatch = message.role === "agent" ? RATING_RE.exec(message.text) : null;
+  const [copied, setCopied] = useState(false);
 
   const handleCmdClick = (cmd: string) => {
     // Dispatch prefill event to put command in the input
@@ -73,16 +75,33 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
     );
   };
 
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(message.text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  }, [message.text]);
+
   const isError = message.role === "system" && isErrorMessage(message.text);
+  const isCopyable = message.role === "user" || message.role === "agent";
 
   return (
     <div
-      className={`max-w-[90%] break-words rounded-lg px-3 py-2 text-xs ${
+      className={`group relative max-w-[90%] break-words rounded-lg px-3 py-2 text-xs ${
+        isCopyable ? "cursor-pointer" : ""
+      } ${
         isError
           ? "self-center font-mono text-[10px] bg-red-500/8 border border-red-500/20 text-red-400"
           : (roleStyles[message.role] || roleStyles.agent)
       }`}
+      onClick={isCopyable ? handleCopy : undefined}
+      title={isCopyable ? "Click to copy" : undefined}
     >
+      {copied && (
+        <span className="absolute -top-5 left-1/2 -translate-x-1/2 rounded bg-white/15 px-1.5 py-0.5 text-[9px] text-[var(--text)] backdrop-blur-sm">
+          Copied!
+        </span>
+      )}
       {ratingMatch ? (
         <>
           {message.text.replace(RATING_RE, "").trim()}
