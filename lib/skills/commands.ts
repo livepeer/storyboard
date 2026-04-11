@@ -174,16 +174,14 @@ function showCapabilities(): string {
 function organizeCanvas(mode?: string): string {
   const store = useCanvasStore.getState();
   if (store.cards.length === 0) return "Canvas is empty \u2014 nothing to organize.";
-
-  const m = (mode || "grid").toLowerCase().trim();
-
-  if (m === "narrative" || m === "flow" || m === "story") {
-    store.narrativeLayout();
-    return `Organized ${store.cards.length} cards in narrative flow (horizontal chain).`;
+  try {
+    const { organizeCanvas: organize } = require("@/lib/layout/agent");
+    const positions = organize(mode || undefined);
+    store.applyLayout(positions);
+    return `Organized ${store.cards.length} cards.`;
+  } catch {
+    return "Layout agent not available.";
   }
-
-  store.autoLayout();
-  return `Organized ${store.cards.length} cards in grid layout.\nTip: /organize narrative \u2014 horizontal story flow`;
 }
 
 function showContext(args?: string): string {

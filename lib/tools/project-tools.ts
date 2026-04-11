@@ -189,7 +189,11 @@ export const projectGenerateTool: ToolDefinition = {
       .sort((a, b) => a.index - b.index)
       .map((s) => s.cardRefId!);
     if (doneRefIds.length > 0) {
-      useCanvasStore.getState().layoutTimeline(doneRefIds);
+      try {
+        const { organizeCanvas } = await import("@/lib/layout/agent");
+        const positions = organizeCanvas();
+        useCanvasStore.getState().applyLayout(positions);
+      } catch { /* layout agent not available */ }
     }
 
     // Add narrative flow edges between consecutive scenes
