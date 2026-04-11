@@ -14,6 +14,7 @@ import { compoundTools } from "./compound-tools";
 import { memoryTools } from "./memory-tools";
 import { projectTools } from "./project-tools";
 import { scopeTools } from "./scope-tools";
+import { episodeTools } from "./episode-tools";
 
 /** Register all built-in tools */
 export function initializeTools(): void {
@@ -24,4 +25,5 @@ export function initializeTools(): void {
   registerTools(canvasTools);     // canvas_create, canvas_update, canvas_get, canvas_remove
   registerTools(skillTools);      // load_skill
   registerTools(memoryTools);     // memory_style, memory_rate, memory_preference
+  registerTools(episodeTools);    // episode_create, episode_update, episode_activate, episode_list
 }
