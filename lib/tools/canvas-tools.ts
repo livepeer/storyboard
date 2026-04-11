@@ -195,23 +195,29 @@ export const canvasRemoveTool: ToolDefinition = {
 };
 
 /**
- * canvas_organize — auto-layout all cards in narrative order.
+ * canvas_organize — auto-layout all cards using the layout agent.
  */
 export const canvasOrganizeTool: ToolDefinition = {
   name: "canvas_organize",
-  description: "Auto-organize all cards on the canvas in a clean grid layout following narrative/edge order. Call after creating multiple cards.",
-  parameters: { type: "object", properties: {} },
-  execute: async () => {
-    try {
-      const { organizeCanvas } = await import("@/lib/layout/agent");
-      const { useCanvasStore } = await import("@/lib/canvas/store");
-      const positions = organizeCanvas();
-      useCanvasStore.getState().applyLayout(positions);
-      const count = useCanvasStore.getState().cards.length;
-      return { success: true, data: { organized: count, message: `${count} cards organized` } };
-    } catch {
-      return { success: false, error: "Layout agent not available" };
-    }
+  description: "Auto-organize all cards on the canvas using the best layout strategy. Optionally specify a mode: basic, narrative, episode, graphic-novel, ads-board, movie-board, balanced.",
+  parameters: {
+    type: "object",
+    properties: {
+      mode: {
+        type: "string",
+        description: "Layout mode (optional \u2014 auto-selects if omitted)",
+        enum: ["basic", "narrative", "episode", "graphic-novel", "ads-board", "movie-board", "balanced"],
+      },
+    },
+  },
+  execute: async (input) => {
+    const { organizeCanvas } = await import("@/lib/layout/agent");
+    const { useCanvasStore } = await import("@/lib/canvas/store");
+    const mode = (input.mode as string) || undefined;
+    const positions = organizeCanvas(mode);
+    useCanvasStore.getState().applyLayout(positions);
+    const count = useCanvasStore.getState().cards.length;
+    return { success: true, data: { organized: count, mode: mode || "auto", message: `${count} cards organized` } };
   },
 };
 

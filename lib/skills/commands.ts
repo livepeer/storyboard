@@ -2,6 +2,7 @@ import { useSkillStore } from "./store";
 import { getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useSessionContext } from "@/lib/agents/session-context";
+import { handleOrganize, handleLayoutCommand } from "@/lib/layout/commands";
 
 interface ParsedCommand {
   command: string;
@@ -36,13 +37,15 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
     case "capabilities":
       return showCapabilities();
     case "organize":
-      return organizeCanvas(cmd.args);
+      return handleOrganize(cmd.args);
+    case "layout":
+      return handleLayoutCommand(cmd.args);
     case "export":
       return exportCanvas();
     case "context":
       return showContext(cmd.args);
     default:
-      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /capabilities, /organize, /export`;
+      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /capabilities, /organize, /layout, /export`;
   }
 }
 
@@ -169,19 +172,6 @@ function showCapabilities(): string {
     }
   }
   return lines.join("\n");
-}
-
-function organizeCanvas(mode?: string): string {
-  const store = useCanvasStore.getState();
-  if (store.cards.length === 0) return "Canvas is empty \u2014 nothing to organize.";
-  try {
-    const { organizeCanvas: organize } = require("@/lib/layout/agent");
-    const positions = organize(mode || undefined);
-    store.applyLayout(positions);
-    return `Organized ${store.cards.length} cards.`;
-  } catch {
-    return "Layout agent not available.";
-  }
 }
 
 function showContext(args?: string): string {
