@@ -10,6 +10,7 @@ import { QuickActions } from "./QuickActions";
 import { parseCommand, executeCommand } from "@/lib/skills/commands";
 import { preprocessPrompt } from "@/lib/agents/preprocessor";
 import { useSessionContext } from "@/lib/agents/session-context";
+import { EpisodeSwitcher } from "./EpisodeSwitcher";
 import { classifyIntent } from "@/lib/agents/intent";
 import { useWorkingMemory } from "@/lib/agents/working-memory";
 import type { AgentEvent, CanvasContext } from "@/lib/agents/types";
@@ -78,8 +79,8 @@ function buildCanvasContext(): CanvasContext {
       title: c.title,
       url: c.url,
     })),
-    selectedCard: state.selectedCardId
-      ? state.cards.find((c) => c.id === state.selectedCardId)?.refId
+    selectedCard: state.selectedCardIds.size === 1
+      ? state.cards.find((c) => c.id === Array.from(state.selectedCardIds)[0])?.refId
       : undefined,
     capabilities: [],
   };
@@ -417,6 +418,8 @@ export function ChatPanel() {
           <span className="text-[8px] text-purple-300/40">/context</span>
         </div>
       )}
+
+      {!minimized && <EpisodeSwitcher />}
 
       {/* Messages */}
       {!minimized && (
