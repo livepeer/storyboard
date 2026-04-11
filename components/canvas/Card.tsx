@@ -4,6 +4,8 @@ import { useCallback, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import type { Card as CardData } from "@/lib/canvas/types";
 import { getSession, getActiveSession, controlStream } from "@/lib/stream/session";
+import { EpisodeBadge } from "./EpisodeBadge";
+import { useEpisodeStore } from "@/lib/episodes/store";
 
 const TYPE_COLORS: Record<string, { text: string; bg: string }> = {
   image: { text: "#8b5cf6", bg: "rgba(139,92,246,0.1)" },
@@ -33,6 +35,8 @@ export function Card({ card }: { card: CardData }) {
 
   const isSelected = selectedCardIds.has(card.id);
   const colors = TYPE_COLORS[card.type] || TYPE_COLORS.image;
+  const episode = useEpisodeStore((s) => s.getEpisodeForCard(card.id));
+  const isActiveEpisode = episode?.id === useEpisodeStore((s) => s.activeEpisodeId);
 
   // Find incoming edge for this card (shows what transformation created it)
   const incomingEdge = edges.find((e) => e.toRefId === card.refId);
@@ -118,6 +122,8 @@ export function Card({ card }: { card: CardData }) {
         top: card.y,
         width: card.w,
         height: card.minimized ? 36 : card.h,
+        borderLeftWidth: isActiveEpisode ? 3 : undefined,
+        borderLeftColor: isActiveEpisode ? episode?.color : undefined,
       }}
       onPointerDown={(e) => {
         if (e.ctrlKey || e.metaKey) {
@@ -135,6 +141,8 @@ export function Card({ card }: { card: CardData }) {
         );
       }}
     >
+      <EpisodeBadge cardId={card.id} />
+
       {/* Header */}
       <div
         className="flex h-9 shrink-0 cursor-grab items-center gap-2 border-b border-[var(--border)] bg-white/[0.02] px-2.5 active:cursor-grabbing"
