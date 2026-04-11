@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import type { Card as CardData } from "@/lib/canvas/types";
 import { getSession, getActiveSession, controlStream } from "@/lib/stream/session";
+import { downloadCard } from "@/lib/utils/download";
 import { EpisodeBadge } from "./EpisodeBadge";
 import { useEpisodeStore } from "@/lib/episodes/store";
 
@@ -16,7 +17,7 @@ const TYPE_COLORS: Record<string, { text: string; bg: string }> = {
 };
 
 export function Card({ card }: { card: CardData }) {
-  const { viewport, selectedCardIds, updateCard, removeCard, selectCard, toggleCardSelection, edges } =
+  const { viewport, selectedCardIds, updateCard, removeCard, selectCard, toggleCardSelection, edges, cards } =
     useCanvasStore();
   const [streamInput, setStreamInput] = useState("");
   const [streamMsg, setStreamMsg] = useState("");
@@ -25,6 +26,8 @@ export function Card({ card }: { card: CardData }) {
     startY: number;
     origX: number;
     origY: number;
+    /** Original positions of all selected cards (for group drag) */
+    groupOrigins?: Array<{ id: string; x: number; y: number }>;
   } | null>(null);
   const resizeRef = useRef<{
     startX: number;
@@ -44,22 +47,36 @@ export function Card({ card }: { card: CardData }) {
     ? `${incomingEdge.meta.capability || "transform"}${incomingEdge.meta.elapsed ? ` (${(incomingEdge.meta.elapsed / 1000).toFixed(1)}s)` : ""}${incomingEdge.meta.prompt ? `\n${incomingEdge.meta.prompt.slice(0, 60)}` : ""}`
     : undefined;
 
-  // --- Drag ---
+  // --- Drag (supports group drag when multiple cards selected) ---
   const onDragStart = useCallback(
     (e: React.PointerEvent) => {
       if ((e.target as HTMLElement).closest(".card-controls")) return;
       e.stopPropagation();
+
+      // Handle selection first
+      if (e.ctrlKey || e.metaKey) {
+        toggleCardSelection(card.id);
+        return; // Don't start drag on toggle
+      } else if (!selectedCardIds.has(card.id)) {
+        selectCard(card.id);
+      }
+
+      // Capture origins for all selected cards (group drag)
+      const currentSelection = useCanvasStore.getState().selectedCardIds;
+      const allCards = useCanvasStore.getState().cards;
+      const groupOrigins = currentSelection.size > 1
+        ? allCards
+            .filter((c) => currentSelection.has(c.id))
+            .map((c) => ({ id: c.id, x: c.x, y: c.y }))
+        : undefined;
+
       dragRef.current = {
         startX: e.clientX,
         startY: e.clientY,
         origX: card.x,
         origY: card.y,
+        groupOrigins,
       };
-      if (e.ctrlKey || e.metaKey) {
-        toggleCardSelection(card.id);
-      } else if (!selectedCardIds.has(card.id)) {
-        selectCard(card.id);
-      }
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     },
     [card.id, card.x, card.y, selectCard, toggleCardSelection, selectedCardIds]
@@ -68,11 +85,25 @@ export function Card({ card }: { card: CardData }) {
   const onDragMove = useCallback(
     (e: React.PointerEvent) => {
       if (!dragRef.current) return;
-      const { startX, startY, origX, origY } = dragRef.current;
-      updateCard(card.id, {
-        x: origX + (e.clientX - startX) / viewport.scale,
-        y: origY + (e.clientY - startY) / viewport.scale,
-      });
+      const { startX, startY, origX, origY, groupOrigins } = dragRef.current;
+      const dx = (e.clientX - startX) / viewport.scale;
+      const dy = (e.clientY - startY) / viewport.scale;
+
+      if (groupOrigins && groupOrigins.length > 1) {
+        // Group drag — move all selected cards by the same delta
+        for (const origin of groupOrigins) {
+          updateCard(origin.id, {
+            x: origin.x + dx,
+            y: origin.y + dy,
+          });
+        }
+      } else {
+        // Single card drag
+        updateCard(card.id, {
+          x: origX + dx,
+          y: origY + dy,
+        });
+      }
     },
     [card.id, viewport.scale, updateCard]
   );
@@ -177,6 +208,15 @@ export function Card({ card }: { card: CardData }) {
           {card.refId}
         </span>
         <div className="card-controls flex shrink-0 gap-0.5">
+          {card.url && (
+            <button
+              className="flex h-[22px] w-[22px] items-center justify-center rounded border-none bg-transparent text-xs text-[var(--text-dim)] transition-all hover:bg-white/[0.08] hover:text-green-400"
+              title="Save to file"
+              onClick={() => downloadCard(card)}
+            >
+              ↓
+            </button>
+          )}
           <button
             className="flex h-[22px] w-[22px] items-center justify-center rounded border-none bg-transparent text-xs text-[var(--text-dim)] transition-all hover:bg-white/[0.08] hover:text-[var(--text-muted)]"
             onClick={() => updateCard(card.id, { minimized: !card.minimized })}

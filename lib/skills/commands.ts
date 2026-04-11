@@ -42,10 +42,12 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleLayoutCommand(cmd.args);
     case "export":
       return exportCanvas();
+    case "save":
+      return saveCards(cmd.args);
     case "context":
       return showContext(cmd.args);
     default:
-      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /capabilities, /organize, /layout, /export`;
+      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /capabilities, /organize, /layout, /save, /export`;
   }
 }
 
@@ -265,4 +267,67 @@ function exportCanvas(): string {
   }
 
   return `Exported ${data.cards.length} cards, ${data.edges.length} edges.\nCopied to clipboard.`;
+}
+
+async function saveCards(args: string): Promise<string> {
+  const { downloadCard, downloadCards, getSavableCards } = await import("@/lib/utils/download");
+  const canvasState = useCanvasStore.getState();
+  const arg = args.trim().toLowerCase();
+
+  // /save — save selected cards, or all if none selected
+  if (!arg || arg === "selected") {
+    const selectedIds = canvasState.selectedCardIds;
+    if (selectedIds.size > 0) {
+      const selected = canvasState.cards.filter((c) => selectedIds.has(c.id));
+      const savable = getSavableCards(selected);
+      if (savable.length === 0) return "No savable cards in selection (no media URLs).";
+      const { ok, fail } = await downloadCards(savable);
+      return fail > 0 ? `Saved ${ok}, failed ${fail}` : `Saved ${ok} cards.`;
+    }
+    // No selection → save all
+    const savable = getSavableCards(canvasState.cards);
+    if (savable.length === 0) return "No cards with media to save.";
+    const { ok, fail } = await downloadCards(savable);
+    return fail > 0 ? `Saved ${ok}/${savable.length} cards (${fail} failed).` : `Saved all ${ok} cards.`;
+  }
+
+  // /save all — save everything
+  if (arg === "all") {
+    const savable = getSavableCards(canvasState.cards);
+    if (savable.length === 0) return "No cards with media to save.";
+    const { ok, fail } = await downloadCards(savable);
+    return fail > 0 ? `Saved ${ok}/${savable.length} cards (${fail} failed).` : `Saved all ${ok} cards.`;
+  }
+
+  // /save episode <name> — save all cards in an episode
+  if (arg.startsWith("episode")) {
+    const epName = args.trim().slice(7).trim();
+    try {
+      const { useEpisodeStore } = await import("@/lib/episodes/store");
+      const epStore = useEpisodeStore.getState();
+      const ep = epStore.episodes.find(
+        (e) => e.id === epName || e.name.toLowerCase() === epName.toLowerCase()
+      );
+      if (!ep) return `Episode "${epName}" not found. Use /layout list to see episodes.`;
+      const epCards = canvasState.cards.filter((c) => ep.cardIds.includes(c.id));
+      const savable = getSavableCards(epCards);
+      if (savable.length === 0) return `No savable cards in episode "${ep.name}".`;
+      const { ok, fail } = await downloadCards(savable);
+      return fail > 0 ? `Saved ${ok}/${savable.length} from "${ep.name}" (${fail} failed).` : `Saved ${ok} cards from "${ep.name}".`;
+    } catch {
+      return "Episode store not available.";
+    }
+  }
+
+  // /save <refId> — save a specific card
+  const card = canvasState.cards.find(
+    (c) => c.refId.toLowerCase() === arg || c.id === arg
+  );
+  if (card) {
+    if (!card.url) return `Card ${card.refId} has no media to save.`;
+    const ok = await downloadCard(card);
+    return ok ? `Saved ${card.refId}.` : `Failed to save ${card.refId}.`;
+  }
+
+  return `Usage: /save — selected or all | /save all | /save <refId> | /save episode <name>`;
 }

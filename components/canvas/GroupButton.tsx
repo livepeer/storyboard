@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useEpisodeStore } from "@/lib/episodes/store";
+import { useChatStore } from "@/lib/chat/store";
+import { downloadCards, getSavableCards } from "@/lib/utils/download";
 
 export function GroupButton() {
   const selectedCardIds = useCanvasStore((s) => s.selectedCardIds);
@@ -59,13 +61,32 @@ export function GroupButton() {
           </button>
         </div>
       ) : (
-        <button
-          onClick={() => setNaming(true)}
-          className="flex items-center gap-1.5 rounded-lg bg-[var(--surface)] border border-purple-500/30 px-3 py-1.5 text-xs text-purple-300 shadow-lg hover:bg-purple-500/10 transition-colors"
-        >
-          <span>+</span>
-          <span>Group as Episode ({selected.length} cards)</span>
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setNaming(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-[var(--surface)] border border-purple-500/30 px-3 py-1.5 text-xs text-purple-300 shadow-lg hover:bg-purple-500/10 transition-colors"
+          >
+            <span>+</span>
+            <span>Group as Episode ({selected.length})</span>
+          </button>
+          {getSavableCards(selectedCards).length > 0 && (
+            <button
+              onClick={async () => {
+                const savable = getSavableCards(selectedCards);
+                useChatStore.getState().addMessage(`Saving ${savable.length} cards\u2026`, "system");
+                const { ok, fail } = await downloadCards(savable);
+                useChatStore.getState().addMessage(
+                  fail > 0 ? `Saved ${ok}, failed ${fail}` : `Saved ${ok} cards`,
+                  "system"
+                );
+              }}
+              className="flex items-center gap-1 rounded-lg bg-[var(--surface)] border border-green-500/30 px-3 py-1.5 text-xs text-green-300 shadow-lg hover:bg-green-500/10 transition-colors"
+            >
+              <span>{"\u2B07"}</span>
+              <span>Save ({getSavableCards(selectedCards).length})</span>
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

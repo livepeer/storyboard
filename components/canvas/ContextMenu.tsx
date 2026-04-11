@@ -27,6 +27,8 @@ interface MenuAction {
 }
 
 const ACTIONS: MenuAction[] = [
+  // --- Save ---
+  { id: "save", label: "Save to File", icon: "\u2B07", forTypes: ["image", "video", "audio"], requiresMedia: true, mode: "direct" },
   // --- Direct execution (one-click, no prompt needed) ---
   { id: "upscale", label: "Upscale", icon: "\u2B06", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "remove-bg", label: "Remove Background", icon: "\u2702", forTypes: ["image"], requiresMedia: true, mode: "direct" },
@@ -115,6 +117,14 @@ export function ContextMenu() {
             prefillChat(`Describe "${title}" and suggest next steps`);
             return;
         }
+        return;
+      }
+
+      // --- Save to file ---
+      if (action.id === "save") {
+        const { downloadCard } = await import("@/lib/utils/download");
+        const ok = await downloadCard(targetCard);
+        addMessage(ok ? `Saved ${targetCard.refId}` : `Failed to save ${targetCard.refId}`, "system");
         return;
       }
 
