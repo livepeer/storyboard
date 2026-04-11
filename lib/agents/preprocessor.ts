@@ -16,6 +16,7 @@ import { useChatStore } from "@/lib/chat/store";
 import { useProjectStore } from "@/lib/projects/store";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useSessionContext, extractCreativeContext, updateContextFromFeedback } from "./session-context";
+import { classifyIntent, type Intent } from "./intent";
 
 // ---------------------------------------------------------------------------
 // Personality — the creative partner voice
@@ -78,78 +79,6 @@ function isMultiScene(text: string): boolean {
   if (sceneDash >= 3) return true;
   if (text.length > 1500 && (lower.includes("storyboard") || lower.includes("campaign") || lower.includes("scenes"))) return true;
   return false;
-}
-
-type Intent =
-  | { type: "continue" }
-  | { type: "add_scenes"; count: number; direction?: string }
-  | { type: "adjust_scene"; sceneHint?: string; feedback: string }
-  | { type: "style_correction"; feedback: string }
-  | { type: "status" }
-  | { type: "none" };
-
-/**
- * Context-aware intent classifier.
- *
- * Uses the user's message + active project state to understand intent.
- * No LLM call needed for 90% of cases — context resolves ambiguity.
- *
- * Key insight: when an active project exists, messages about "more",
- * "better", "expand", "interesting" are about that project.
- */
-function classifyIntent(text: string, hasActiveProject: boolean, pendingScenes: number): Intent {
-  const lower = text.toLowerCase().trim();
-
-  // --- Explicit continue ---
-  if (/^(continue|keep going|go|next|do the rest|finish|carry on|proceed|go ahead)\.?$/i.test(lower))
-    return { type: "continue" };
-  if (/continue generating|keep going|finish (it|them|the rest)|do the rest|next batch|remaining scenes/i.test(lower))
-    return { type: "continue" };
-
-  // --- Explicit add N more ---
-  const moreCountMatch = lower.match(/(?:give|make|add|create|do|generate)\s+(?:me\s+)?(\d+)\s+more/i);
-  if (moreCountMatch)
-    return { type: "add_scenes", count: parseInt(moreCountMatch[1]), direction: text };
-
-  // --- "More" with creative direction (only if project exists) ---
-  if (hasActiveProject) {
-    // "add more scenes", "more scenes", "expand the storyboard"
-    if (/(?:add|give|make|create)\s+(?:me\s+)?more|more scenes|expand.*stor|extend/i.test(lower))
-      return { type: "add_scenes", count: 4, direction: text };
-
-    // "make the story more interesting/dramatic/funny" — creative expansion
-    if (/make.*(story|storyboard|it).*(more|better|interesting|dramatic|funny|exciting|emotional|longer)/i.test(lower))
-      return { type: "add_scenes", count: 4, direction: text };
-
-    // "I want more" / "not enough" / "need more scenes"
-    if (/(?:i\s+)?(?:want|need)\s+more|not enough|too few|too short/i.test(lower))
-      return { type: "add_scenes", count: 4, direction: text };
-
-    // --- Adjust specific scene ---
-    const sceneRef = lower.match(/scene\s*(\d+)|(\d+)(?:st|nd|rd|th)\s+(?:scene|one|image|picture|frame)/i);
-    if (sceneRef && /change|adjust|redo|fix|update|too|more|less|different|rethink|modify|improve|tweak/i.test(lower))
-      return { type: "adjust_scene", sceneHint: sceneRef[1] || sceneRef[2], feedback: text };
-
-    // "the market scene needs..." / "that bridge scene..."
-    if (/(?:the|that)\s+\w+\s+(?:scene|one|image|picture).*(?:needs?|should|could|is too|isn't|looks)/i.test(lower))
-      return { type: "adjust_scene", feedback: text };
-
-    // If there are pending scenes and user is just saying something short + vague
-    if (pendingScenes > 0 && lower.length < 30 && !/^(hey|hi|hello|thanks|ok|yes|no|what|how|why|can|please)/i.test(lower))
-      return { type: "continue" };
-  }
-
-  // --- Style correction (with or without project) ---
-  if (/wrong style|style is wrong|should be|use .*style|not.*right.*style|change.*style|switch.*style|too.*style|style.*wrong/i.test(lower))
-    return { type: "style_correction", feedback: text };
-  if (/do it again.*(?:in|with|using)|redo.*(?:in|with|using)|try again.*(?:in|with|using)/i.test(lower))
-    return { type: "style_correction", feedback: text };
-
-  // --- Status check ---
-  if (/where.*(picture|image|scene|result)|don't see|can't see|nothing (show|appear|happen)|no (picture|image|result)|still waiting|what happened/i.test(lower))
-    return { type: "status" };
-
-  return { type: "none" };
 }
 
 /**
@@ -328,7 +257,7 @@ export async function preprocessPrompt(text: string): Promise<PreprocessResult> 
   }
 
   if (intent.type === "add_scenes") {
-    const count = intent.count;
+    const count = intent.count ?? 4;
     if (activeProject) {
       say(`Love the ambition! Adding ${count} more scenes to expand the story...`, "agent");
       const existingCount = activeProject.scenes.length;
@@ -370,7 +299,7 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
     const currentCtx = useSessionContext.getState().context;
     if (currentCtx) {
       say("Updating the creative direction...", "agent");
-      const patch = await updateContextFromFeedback(currentCtx, intent.feedback);
+      const patch = await updateContextFromFeedback(currentCtx, intent.feedback ?? "");
       if (patch) {
         useSessionContext.getState().updateContext(patch);
         const updated = useSessionContext.getState().context!;
