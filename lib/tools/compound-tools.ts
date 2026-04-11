@@ -194,9 +194,29 @@ export const createMediaTool: ToolDefinition = {
       // Apply session creative context + style-override skills
       // Session context = persistent style/character/setting from the original brief
       // Style overrides = loaded skills (ghibli, kids-drawing, etc.)
-      const sessionPrefix = step.action !== "tts"
-        ? useSessionContext.getState().buildPrefix()
-        : "";
+      let sessionPrefix = "";
+      if (step.action !== "tts") {
+        // Check for active episode — use its effective context if present
+        try {
+          const { useEpisodeStore } = await import("@/lib/episodes/store");
+          const { buildPrefixFromContext } = await import("@/lib/agents/session-context");
+          const epStore = useEpisodeStore.getState();
+          const activeEp = epStore.getActiveEpisode();
+          if (activeEp) {
+            const storyboardCtx = useSessionContext.getState().context;
+            if (storyboardCtx) {
+              const effective = epStore.getEffectiveContext(activeEp.id, storyboardCtx);
+              if (effective) {
+                sessionPrefix = buildPrefixFromContext(effective);
+              }
+            }
+          }
+        } catch { /* episode store not available */ }
+        // Fallback to session context if no episode active
+        if (!sessionPrefix) {
+          sessionPrefix = useSessionContext.getState().buildPrefix();
+        }
+      }
       const styled = step.action !== "tts"
         ? applyStyleOverrides(step.prompt, step.action)
         : { prompt: step.prompt };

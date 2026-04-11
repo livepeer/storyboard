@@ -31,6 +31,7 @@ interface WorkingMemoryState {
   digest: string;
   recentActions: ActionRecord[];
   preferences: Record<string, string>;
+  activeEpisodeId: string | null;
 
   setProject: (p: ProjectSnapshot | null) => void;
   recordAction: (action: ActionRecord) => void;
@@ -48,6 +49,7 @@ export const useWorkingMemory = create<WorkingMemoryState>((set, get) => ({
   digest: "",
   recentActions: [],
   preferences: {},
+  activeEpisodeId: null,
 
   setProject: (p) => set({ project: p }),
 
@@ -106,8 +108,12 @@ export const useWorkingMemory = create<WorkingMemoryState>((set, get) => ({
     } catch {
       // Project store not available (e.g., in unit tests)
     }
+    try {
+      const { useEpisodeStore } = require("@/lib/episodes/store");
+      set({ activeEpisodeId: useEpisodeStore.getState().activeEpisodeId });
+    } catch { /* not available in tests */ }
   },
 
   reset: () =>
-    set({ project: null, digest: "", recentActions: [], preferences: {} }),
+    set({ project: null, digest: "", recentActions: [], preferences: {}, activeEpisodeId: null }),
 }));

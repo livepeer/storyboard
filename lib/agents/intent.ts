@@ -7,6 +7,8 @@ export type IntentType =
   | "adjust_scene"
   | "style_correction"
   | "status"
+  | "episode_switch"
+  | "episode_create"
   | "none";
 
 export interface Intent {
@@ -76,6 +78,12 @@ export function classifyIntent(
   // Status check
   if (/where.*(picture|image|scene|result)|don't see|can't see|nothing.*(show\w*|appear\w*|happen\w*)|no (picture|image|result)|still waiting|what happened/i.test(lower))
     return { type: "status" };
+
+  // Episode management
+  if (/switch.*episode|activate.*episode|go to.*episode|use.*episode/i.test(lower))
+    return { type: "episode_switch", direction: text };
+  if (/group.*episode|create.*episode|make.*episode|new episode/i.test(lower))
+    return { type: "episode_create", direction: text };
 
   return { type: "none" };
 }

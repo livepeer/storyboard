@@ -175,6 +175,14 @@ export const geminiPlugin: AgentPlugin = {
         digest: mem.digest,
         recentActions: mem.recentActions,
         preferences: mem.preferences,
+        activeEpisodeId: mem.activeEpisodeId,
+        canvasCards: context.cards.map((c) => ({
+          refId: c.refId,
+          type: c.type,
+          title: c.title,
+          url: c.url,
+        })),
+        selectedCard: context.selectedCard,
       });
       const tools = buildToolSchemas();
 

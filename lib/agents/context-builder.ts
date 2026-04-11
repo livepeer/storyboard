@@ -3,11 +3,23 @@
 import type { Intent } from "./intent";
 import type { ProjectSnapshot, ActionRecord } from "./working-memory";
 
+interface CardInfo {
+  refId: string;
+  type: string;
+  title: string;
+  url?: string;
+}
+
 interface MemorySnapshot {
   project: ProjectSnapshot | null;
   digest: string;
   recentActions: ActionRecord[];
   preferences: Record<string, string>;
+  /** Current canvas cards — so agent knows what refIds exist */
+  canvasCards?: CardInfo[];
+  /** Currently selected card refId */
+  selectedCard?: string;
+  activeEpisodeId?: string | null;
 }
 
 const BASE_PROMPT = `You are a passionate creative partner in Livepeer Storyboard. You get genuinely excited about ideas, offer bold suggestions, and celebrate great results. Brief and punchy — the canvas shows results, don't over-describe.
@@ -15,8 +27,14 @@ const BASE_PROMPT = `You are a passionate creative partner in Livepeer Storyboar
 ## Rules
 - Keep prompts under 25 words. Summarize — don't copy descriptions verbatim.
 - After generating, react briefly and ask what's next.
-- For restyle/animate existing card: canvas_get first, pass source_url.
-- Never say "I can't" — suggest an alternative approach.`;
+- Never say "I can't" — suggest an alternative approach.
+
+## Card References
+When the user mentions a card by name (e.g., "img-9", "vid-3"):
+- The card list below shows all cards on canvas with their refId, type, and title
+- To use a card as input: call scope_start with source.ref_id, or create_media with source_url from canvas_get
+- For restyle/animate/stream from existing card: canvas_get(ref_id) first to get the URL, then pass it
+- The selected card (if any) is what the user is likely referring to`;
 
 export function buildAgentContext(intent: Intent, memory: MemorySnapshot): string {
   const parts: string[] = [BASE_PROMPT];
@@ -106,6 +124,16 @@ If incomplete, call project_generate to continue.`);
       }
       break;
 
+    case "episode_switch":
+      parts.push(`\n## Action: Switch Episode
+User wants to switch to a different episode. Use episode_activate or episode_list to find the right one.`);
+      break;
+
+    case "episode_create":
+      parts.push(`\n## Action: Create Episode
+User wants to group cards into an episode. Use episode_create with card refIds and a name.`);
+      break;
+
     default:
       parts.push(`\n## Routing
 - 1-5 items: create_media with SHORT prompts
@@ -128,6 +156,45 @@ If incomplete, call project_generate to continue.`);
     if (done) parts.push(`\nDone scenes: ${done.slice(0, 300)}`);
     if (pending) parts.push(`Pending: ${pending.slice(0, 200)}`);
   }
+
+  // Canvas cards — so agent can resolve refIds like "img-9"
+  if (memory.canvasCards && memory.canvasCards.length > 0) {
+    const shown = memory.canvasCards.slice(-15);
+    const list = shown.map((c) => `${c.refId}:${c.type}:"${c.title}"`).join(", ");
+    const extra = memory.canvasCards.length > 15 ? ` (+${memory.canvasCards.length - 15} more)` : "";
+    parts.push(`\nCanvas: ${list}${extra}`);
+    if (memory.selectedCard) {
+      parts.push(`Selected: ${memory.selectedCard}`);
+    }
+  }
+
+  // Active episode context
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { useEpisodeStore } = require("@/lib/episodes/store");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { useSessionContext } = require("@/lib/agents/session-context");
+    const epStore = useEpisodeStore.getState();
+
+    if (epStore.episodes.length > 0) {
+      const epList = epStore.episodes.map((ep: { id: string; name: string; cardIds: string[]; }) =>
+        `${ep.name}(${ep.cardIds.length} cards${ep.id === memory.activeEpisodeId ? ", ACTIVE" : ""})`
+      ).join(", ");
+      parts.push(`\nEpisodes: ${epList}`);
+    }
+
+    const activeEp = epStore.getActiveEpisode();
+    if (activeEp) {
+      const storyboardCtx = useSessionContext.getState().context;
+      if (storyboardCtx) {
+        const overrides = Object.entries(activeEp.context)
+          .filter(([, v]) => v)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(", ");
+        parts.push(`Active episode: "${activeEp.name}" — overrides: ${overrides || "none (inherits all)"}`);
+      }
+    }
+  } catch { /* not available in tests */ }
 
   // Recent actions
   if (memory.recentActions.length > 0) {

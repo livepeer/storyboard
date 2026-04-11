@@ -50,7 +50,7 @@ function buildSummary(ctx: CreativeContext): string {
   return parts.join(", ") || "Active context";
 }
 
-function buildPrefixFromContext(ctx: CreativeContext): string {
+export function buildPrefixFromContext(ctx: CreativeContext): string {
   // Build an assertive prefix that models will follow.
   // Style and characters are the most important for consistency.
   const parts: string[] = [];
