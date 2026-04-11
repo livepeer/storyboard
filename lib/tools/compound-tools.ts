@@ -188,6 +188,27 @@ export const createMediaTool: ToolDefinition = {
       elapsed: number;
     }> = [];
 
+    // Pre-plan card positions so new cards land in the right spot
+    let prePlannedPositions: Array<{ x: number; y: number; w: number; h: number }> = [];
+    try {
+      const { prePlan, pickStrategy } = await import("@/lib/layout/agent");
+      const { useEpisodeStore } = await import("@/lib/episodes/store");
+      const { useLayoutStore } = await import("@/lib/layout/store");
+      const epState = useEpisodeStore.getState();
+      const layoutPref = useLayoutStore.getState().activeSkillId;
+      const ctx = {
+        cards: useCanvasStore.getState().cards,
+        edges: useCanvasStore.getState().edges,
+        episodes: epState.episodes,
+        activeEpisodeId: epState.activeEpisodeId,
+        canvasWidth: 1920,
+      };
+      const skillId = pickStrategy(ctx, layoutPref);
+      prePlannedPositions = prePlan(useCanvasStore.getState().cards, rawSteps.length, skillId);
+    } catch {
+      // Layout agent not available — cards use default nextPosition()
+    }
+
     for (let i = 0; i < rawSteps.length; i++) {
       const step = rawSteps[i];
 
@@ -247,6 +268,12 @@ export const createMediaTool: ToolDefinition = {
       // Create card (spinner shows while generating)
       console.log(`[create_media] Step ${i}/${rawSteps.length}: refId=${refId}, cardNum=${cardNum}, canvasCards=${useCanvasStore.getState().cards.length}, capability=${capability}`);
       const card = canvas.addCard({ type, title, refId, batchId });
+      if (prePlannedPositions[i]) {
+        const pos = prePlannedPositions[i];
+        useCanvasStore.getState().updateCard(card.id, {
+          x: pos.x, y: pos.y, w: pos.w, h: pos.h,
+        });
+      }
 
       // Build params — inject source URL from depends_on or source_url
       const params: Record<string, unknown> = {};
