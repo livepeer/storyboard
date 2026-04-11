@@ -85,6 +85,14 @@ export const projectCreateTool: ToolDefinition = {
 
     const project = useProjectStore.getState().createProject(brief, scenes, styleGuide);
 
+    // Bootstrap working memory with new project
+    try {
+      const { useWorkingMemory } = await import("@/lib/agents/working-memory");
+      const mem = useWorkingMemory.getState();
+      mem.syncFromProjectStore();
+      mem.appendDigest(`Project created: ${scenes.length} scenes, style: ${styleGuide?.visualStyle || "unset"}`);
+    } catch { /* non-critical */ }
+
     return {
       success: true,
       data: {
@@ -205,6 +213,19 @@ export const projectGenerateTool: ToolDefinition = {
       store.updateProjectStatus(projectId, "reviewing");
     }
 
+    // Sync working memory
+    try {
+      const { useWorkingMemory } = await import("@/lib/agents/working-memory");
+      const mem = useWorkingMemory.getState();
+      mem.recordAction({
+        tool: "project_generate",
+        summary: `batch of ${batch.length} scenes`,
+        outcome: `${completed}/${project.scenes.length} total done, ${remaining.length} remaining`,
+        success: result.success,
+      });
+      mem.syncFromProjectStore();
+    } catch { /* non-critical */ }
+
     return {
       success: result.success,
       data: {
@@ -253,6 +274,21 @@ export const projectIterateTool: ToolDefinition = {
 
     // Regenerate by calling project_generate (which picks up "regenerating" scenes)
     const result = await projectGenerateTool.execute({ project_id: projectId });
+
+    // Sync working memory
+    const sceneIndices = indices;
+    try {
+      const { useWorkingMemory } = await import("@/lib/agents/working-memory");
+      const mem = useWorkingMemory.getState();
+      mem.recordAction({
+        tool: "project_iterate",
+        summary: `${sceneIndices.length} scenes re-generated`,
+        outcome: result.success ? "iteration complete" : "iteration failed",
+        success: result.success,
+      });
+      mem.syncFromProjectStore();
+    } catch { /* non-critical */ }
+
     return result;
   },
 };

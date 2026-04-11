@@ -217,12 +217,15 @@ export const createMediaTool: ToolDefinition = {
       const typePrefix: Record<string, string> = {
         image: "img", video: "vid", audio: "aud", stream: "str",
       };
-      const cardNum = canvas.cards.length + 1;
+      // Read FRESH state each iteration — the snapshot from line 180 is stale
+      // after addCard() calls in previous loop iterations
+      const cardNum = useCanvasStore.getState().cards.length + 1;
       const refId = `${typePrefix[type] || "med"}-${cardNum}`;
       // Title: use step.title if agent provided one, else extract 3-5 key words from prompt
       const title = step.title || extractShortTitle(step.prompt);
 
       // Create card (spinner shows while generating)
+      console.log(`[create_media] Step ${i}/${rawSteps.length}: refId=${refId}, cardNum=${cardNum}, canvasCards=${useCanvasStore.getState().cards.length}, capability=${capability}`);
       const card = canvas.addCard({ type, title, refId, batchId });
 
       // Build params — inject source URL from depends_on or source_url
@@ -279,12 +282,15 @@ export const createMediaTool: ToolDefinition = {
         const dataError = data.error as string | undefined;
         const effectiveError = topError || dataError;
 
+        // Store generation metadata on the card for the info banner
+        const genMeta = { capability, prompt: effectivePrompt, elapsed };
+
         if (effectiveError) {
           const friendly = humanizeError(effectiveError);
-          canvas.updateCard(card.id, { error: friendly });
+          canvas.updateCard(card.id, { error: friendly, ...genMeta });
           results.push({ refId, cardId: card.id, error: friendly, capability, elapsed });
         } else if (url) {
-          canvas.updateCard(card.id, { url });
+          canvas.updateCard(card.id, { url, ...genMeta });
           results.push({ refId, cardId: card.id, url, capability, elapsed });
         } else {
           // Log the full response for debugging
@@ -294,11 +300,11 @@ export const createMediaTool: ToolDefinition = {
             ? (Object.values(data).find((v) => typeof v === "string" && (v as string).startsWith("http")) as string | undefined)
             : undefined;
           if (fallbackUrl) {
-            canvas.updateCard(card.id, { url: fallbackUrl });
+            canvas.updateCard(card.id, { url: fallbackUrl, ...genMeta });
             results.push({ refId, cardId: card.id, url: fallbackUrl, capability, elapsed });
           } else {
             const noMediaMsg = `No output from ${capability} — try a different prompt`;
-            canvas.updateCard(card.id, { error: noMediaMsg });
+            canvas.updateCard(card.id, { error: noMediaMsg, ...genMeta });
             results.push({ refId, cardId: card.id, error: noMediaMsg, capability, elapsed });
           }
         }
@@ -336,6 +342,22 @@ export const createMediaTool: ToolDefinition = {
           `${r.refId}: ${r.capability} (${(r.elapsed / 1000).toFixed(1)}s)${r.error ? ` — ${r.error}` : ""}`
       )
       .join("; ");
+
+    // Record in working memory
+    try {
+      const { useWorkingMemory } = await import("@/lib/agents/working-memory");
+      const mem = useWorkingMemory.getState();
+      const ok = results.filter((r) => !r.error).length;
+      const cap = results[0]?.capability || "unknown";
+      mem.recordAction({
+        tool: "create_media",
+        summary: `${rawSteps.length} steps (${cap})`,
+        outcome: ok === results.length
+          ? `${ok} created`
+          : `${ok}/${results.length} ok`,
+        success: ok > 0,
+      });
+    } catch { /* non-critical */ }
 
     return {
       success: results.every((r) => !r.error),
