@@ -14,7 +14,7 @@ const TYPE_COLORS: Record<string, { text: string; bg: string }> = {
 };
 
 export function Card({ card }: { card: CardData }) {
-  const { viewport, selectedCardId, updateCard, removeCard, selectCard, edges } =
+  const { viewport, selectedCardIds, updateCard, removeCard, selectCard, toggleCardSelection, edges } =
     useCanvasStore();
   const [streamInput, setStreamInput] = useState("");
   const [streamMsg, setStreamMsg] = useState("");
@@ -31,7 +31,7 @@ export function Card({ card }: { card: CardData }) {
     origH: number;
   } | null>(null);
 
-  const isSelected = selectedCardId === card.id;
+  const isSelected = selectedCardIds.has(card.id);
   const colors = TYPE_COLORS[card.type] || TYPE_COLORS.image;
 
   // Find incoming edge for this card (shows what transformation created it)
@@ -51,10 +51,14 @@ export function Card({ card }: { card: CardData }) {
         origX: card.x,
         origY: card.y,
       };
-      selectCard(card.id);
+      if (e.ctrlKey || e.metaKey) {
+        toggleCardSelection(card.id);
+      } else if (!selectedCardIds.has(card.id)) {
+        selectCard(card.id);
+      }
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [card.id, card.x, card.y, selectCard]
+    [card.id, card.x, card.y, selectCard, toggleCardSelection, selectedCardIds]
   );
 
   const onDragMove = useCallback(
@@ -107,7 +111,7 @@ export function Card({ card }: { card: CardData }) {
   return (
     <div
       className={`absolute flex flex-col overflow-hidden rounded-xl border bg-[var(--surface)] shadow-[var(--shadow)] transition-[box-shadow,border-color] ${
-        isSelected ? "border-[#555]" : "border-[var(--border)]"
+        isSelected ? "border-[#555] ring-1 ring-blue-400/30" : "border-[var(--border)]"
       } ${card.minimized ? "!h-9 !min-h-0" : "min-h-[160px] min-w-[200px]"}`}
       style={{
         left: card.x,
@@ -115,7 +119,13 @@ export function Card({ card }: { card: CardData }) {
         width: card.w,
         height: card.minimized ? 36 : card.h,
       }}
-      onPointerDown={() => selectCard(card.id)}
+      onPointerDown={(e) => {
+        if (e.ctrlKey || e.metaKey) {
+          toggleCardSelection(card.id);
+        } else if (!selectedCardIds.has(card.id)) {
+          selectCard(card.id);
+        }
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         window.dispatchEvent(

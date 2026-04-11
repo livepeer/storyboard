@@ -56,11 +56,11 @@ interface Props {
 }
 
 export function QuickActions({ setInput, focusInput }: Props) {
-  const selectedCardId = useCanvasStore((s) => s.selectedCardId);
+  const selectedCardIds = useCanvasStore((s) => s.selectedCardIds);
   const cards = useCanvasStore((s) => s.cards);
 
-  const selectedCard = selectedCardId
-    ? cards.find((c) => c.id === selectedCardId)
+  const selectedCard = selectedCardIds.size === 1
+    ? cards.find((c) => c.id === Array.from(selectedCardIds)[0])
     : null;
 
   const handleClick = (action: QuickAction) => {

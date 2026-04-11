@@ -6,7 +6,7 @@ function resetStore() {
     viewport: { panX: 0, panY: 0, scale: 1 },
     cards: [],
     edges: [],
-    selectedCardId: null,
+    selectedCardIds: new Set<string>(),
     selectedEdgeIdx: -1,
   });
 }
@@ -139,10 +139,41 @@ describe("Canvas Store", () => {
     it("selects and deselects cards", () => {
       const card = useCanvasStore.getState().addCard({ type: "image", title: "A" });
       useCanvasStore.getState().selectCard(card.id);
-      expect(useCanvasStore.getState().selectedCardId).toBe(card.id);
+      expect(useCanvasStore.getState().selectedCardIds.has(card.id)).toBe(true);
+      expect(useCanvasStore.getState().selectedCardIds.size).toBe(1);
 
       useCanvasStore.getState().selectCard(null);
-      expect(useCanvasStore.getState().selectedCardId).toBeNull();
+      expect(useCanvasStore.getState().selectedCardIds.size).toBe(0);
+    });
+
+    it("toggles card selection with toggleCardSelection", () => {
+      const card = useCanvasStore.getState().addCard({ type: "image", title: "A" });
+      const card2 = useCanvasStore.getState().addCard({ type: "image", title: "B" });
+
+      useCanvasStore.getState().toggleCardSelection(card.id);
+      expect(useCanvasStore.getState().selectedCardIds.has(card.id)).toBe(true);
+
+      useCanvasStore.getState().toggleCardSelection(card2.id);
+      expect(useCanvasStore.getState().selectedCardIds.size).toBe(2);
+
+      useCanvasStore.getState().toggleCardSelection(card.id);
+      expect(useCanvasStore.getState().selectedCardIds.has(card.id)).toBe(false);
+      expect(useCanvasStore.getState().selectedCardIds.size).toBe(1);
+    });
+
+    it("selectCards sets multiple selections", () => {
+      const card = useCanvasStore.getState().addCard({ type: "image", title: "A" });
+      const card2 = useCanvasStore.getState().addCard({ type: "image", title: "B" });
+
+      useCanvasStore.getState().selectCards([card.id, card2.id]);
+      expect(useCanvasStore.getState().selectedCardIds.size).toBe(2);
+    });
+
+    it("clearSelection empties selection", () => {
+      const card = useCanvasStore.getState().addCard({ type: "image", title: "A" });
+      useCanvasStore.getState().selectCard(card.id);
+      useCanvasStore.getState().clearSelection();
+      expect(useCanvasStore.getState().selectedCardIds.size).toBe(0);
     });
 
     it("clears edge selection when card selected", () => {
@@ -151,6 +182,7 @@ describe("Canvas Store", () => {
 
       const card = useCanvasStore.getState().addCard({ type: "image", title: "A" });
       useCanvasStore.getState().selectCard(card.id);
+      expect(useCanvasStore.getState().selectedCardIds.has(card.id)).toBe(true);
       expect(useCanvasStore.getState().selectedEdgeIdx).toBe(-1);
     });
   });

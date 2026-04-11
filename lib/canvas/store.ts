@@ -12,7 +12,7 @@ interface CanvasState {
   viewport: CanvasViewport;
   cards: Card[];
   edges: ArrowEdge[];
-  selectedCardId: string | null;
+  selectedCardIds: Set<string>;
   selectedEdgeIdx: number;
 
   // Viewport actions
@@ -38,6 +38,9 @@ interface CanvasState {
   updateCard: (id: string, patch: Partial<Card>) => void;
   removeCard: (id: string) => void;
   selectCard: (id: string | null) => void;
+  toggleCardSelection: (id: string) => void;
+  selectCards: (ids: string[]) => void;
+  clearSelection: () => void;
 
   // Edge actions
   addEdge: (fromRefId: string, toRefId: string, meta?: ArrowEdge["meta"]) => void;
@@ -66,7 +69,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   viewport: { panX: 0, panY: 0, scale: 1 },
   cards: [],
   edges: [],
-  selectedCardId: null,
+  selectedCardIds: new Set<string>(),
   selectedEdgeIdx: -1,
 
   setViewport: (v) =>
@@ -146,11 +149,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         edges: s.edges.filter(
           (e) => e.fromRefId !== card.refId && e.toRefId !== card.refId
         ),
-        selectedCardId: s.selectedCardId === id ? null : s.selectedCardId,
+        selectedCardIds: (() => {
+          const next = new Set(s.selectedCardIds);
+          next.delete(id);
+          return next;
+        })(),
       };
     }),
 
-  selectCard: (id) => set({ selectedCardId: id, selectedEdgeIdx: -1 }),
+  selectCard: (id) =>
+    set({ selectedCardIds: new Set(id ? [id] : []), selectedEdgeIdx: -1 }),
+
+  toggleCardSelection: (id) =>
+    set((s) => {
+      const next = new Set(s.selectedCardIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return { selectedCardIds: next, selectedEdgeIdx: -1 };
+    }),
+
+  selectCards: (ids) =>
+    set({ selectedCardIds: new Set(ids), selectedEdgeIdx: -1 }),
+
+  clearSelection: () =>
+    set({ selectedCardIds: new Set(), selectedEdgeIdx: -1 }),
 
   addEdge: (fromRefId, toRefId, meta) =>
     set((s) => {
@@ -176,7 +198,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       ),
     })),
 
-  selectEdge: (idx) => set({ selectedEdgeIdx: idx, selectedCardId: null }),
+  selectEdge: (idx) => set({ selectedEdgeIdx: idx, selectedCardIds: new Set() }),
 
   layoutTimeline: (refIds, cols = 5) =>
     set((s) => {
