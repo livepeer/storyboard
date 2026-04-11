@@ -485,18 +485,15 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
     console.warn("[Preprocessor] Creative DNA extraction failed:", e);
   }
 
-  // --- Generate ALL batches with progress ---
+  // --- Hand off to agent for generation ---
   say(pick(REACTIONS.generating), "agent");
-  await generateAllBatches(projectId, totalScenes);
 
-  // --- Completion with personality (said directly, not via agent) ---
-  say(`${pick(REACTIONS.allDone)} ${pick(REACTIONS.askFeedback)}`, "agent");
-
-  // No agentPrompt needed — we already said everything. But give the agent
-  // context so it can handle follow-up conversation about the scenes.
+  // Return agentPrompt so the agent calls project_generate (instead of
+  // the preprocessor driving the entire lifecycle). This lets the agent
+  // loop, auto-continue, and report results through the normal tool-use flow.
   return {
-    handled: true,
-    agentPrompt: `[Context: A ${totalScenes}-scene storyboard was just generated and is on the canvas. The user may want to adjust specific scenes (use project_iterate), add more scenes (use create_media), or discuss the results. Be brief and enthusiastic.]`,
+    handled: false,
+    agentPrompt: `Project "${projectId}" created with ${totalScenes} scenes. Call project_generate with project_id="${projectId}" to start generating. Keep calling project_generate until all scenes are done. After completion call canvas_organize.`,
   };
 }
 

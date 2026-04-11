@@ -6,8 +6,9 @@ import type {
 } from "../types";
 import { listTools, executeTool } from "@/lib/tools/registry";
 import { useChatStore } from "@/lib/chat/store";
-import { loadSystemPrompt } from "../claude/system-prompt";
-import { compactHistory } from "../claude/compaction";
+import { buildAgentContext } from "../context-builder";
+import { useWorkingMemory } from "../working-memory";
+import { classifyIntent } from "../intent";
 
 /**
  * Gemini message format.
@@ -161,7 +162,20 @@ export const geminiPlugin: AgentPlugin = {
     setProcessing(true);
 
     try {
-      const system = await loadSystemPrompt(context);
+      // Build intent-aware system prompt from working memory
+      const projStore = (await import("@/lib/projects/store")).useProjectStore.getState();
+      const activeProj = projStore.getActiveProject();
+      const pendingCount = activeProj
+        ? activeProj.scenes.filter((s: { status: string }) => s.status === "pending" || s.status === "regenerating").length
+        : 0;
+      const intent = classifyIntent(text, !!activeProj, pendingCount);
+      const mem = useWorkingMemory.getState();
+      const system = buildAgentContext(intent, {
+        project: mem.project,
+        digest: mem.digest,
+        recentActions: mem.recentActions,
+        preferences: mem.preferences,
+      });
       const tools = buildToolSchemas();
 
       // Limit conversation history to prevent token overflow
@@ -301,6 +315,12 @@ ${text.slice(0, 2000)}` }],
           }
 
           if (!lastRoundHadToolCalls) {
+            // Context-only messages (from preprocessor) — Gemini has nothing to do.
+            // Don't show an error; the preprocessor already handled the request.
+            if (text.startsWith("[Context:")) {
+              console.log("[Gemini] Context-only message — skipping (preprocessor handled)");
+              break;
+            }
             if (reason === "MALFORMED_FUNCTION_CALL") {
               say("Too complex — try a simpler prompt or fewer scenes.", "system");
             } else if (reason === "STOP") {
@@ -414,6 +434,19 @@ ${text.slice(0, 2000)}` }],
           parts: userParts,
         });
       }
+
+      // Update working memory with action results
+      const wmem = useWorkingMemory.getState();
+      if (completedTools.length > 0) {
+        const ok = completedTools.filter(t => t.success).length;
+        wmem.recordAction({
+          tool: completedTools.map(t => t.name).join("+"),
+          summary: `${completedTools.length} tools`,
+          outcome: `${ok}/${completedTools.length} succeeded`,
+          success: ok === completedTools.length,
+        });
+      }
+      wmem.syncFromProjectStore();
 
       // Completion summary — if agent didn't say anything after finishing tools,
       // generate a brief summary so the user knows what happened.

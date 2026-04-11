@@ -10,6 +10,8 @@ import { QuickActions } from "./QuickActions";
 import { parseCommand, executeCommand } from "@/lib/skills/commands";
 import { preprocessPrompt } from "@/lib/agents/preprocessor";
 import { useSessionContext } from "@/lib/agents/session-context";
+import { classifyIntent } from "@/lib/agents/intent";
+import { useWorkingMemory } from "@/lib/agents/working-memory";
 import type { AgentEvent, CanvasContext } from "@/lib/agents/types";
 
 /** Map tool name + input to a human-friendly present-progressive verb */
@@ -225,27 +227,56 @@ export function ChatPanel() {
       activeCount.current++;
       addMessage(text, "user");
 
-      // Preprocess: detect multi-scene briefs and break them down
-      // before they reach the LLM agent. This prevents overwhelming
-      // Gemini with 800-word storyboard prompts.
+      // Step 1: Classify intent
+      const { useProjectStore } = await import("@/lib/projects/store");
+      const projStore = useProjectStore.getState();
+      const activeProject = projStore.getActiveProject();
+      const pendingScenes = activeProject
+        ? activeProject.scenes.filter((s: { status: string }) => s.status === "pending" || s.status === "regenerating").length
+        : 0;
+      const intent = classifyIntent(text, !!activeProject, pendingScenes);
+
+      // Step 2: Sync working memory
+      const memory = useWorkingMemory.getState();
+      memory.syncFromProjectStore();
+
+      // Step 3: Preprocess (extraction only for new_project; direct handling for continue/status)
       let agentText = text;
+      let skipAgent = false;
       try {
         setThinkingVerb("Analyzing");
         setIsThinking(true);
-        const pre = await preprocessPrompt(text);
-        if (pre.handled && pre.agentPrompt) {
-          agentText = pre.agentPrompt;
+        if (intent.type === "new_project" || intent.type === "continue" || intent.type === "status") {
+          const pre = await preprocessPrompt(text);
+          if (pre.handled) {
+            // Preprocessor fully handled (continue/status) — skip agent
+            skipAgent = true;
+            memory.syncFromProjectStore();
+          } else if (pre.agentPrompt) {
+            // Preprocessor did extraction, agent should execute (new_project)
+            agentText = pre.agentPrompt;
+            memory.syncFromProjectStore();
+          }
         }
       } catch {
         // Preprocessing failed — send original to agent
       }
 
-      const plugin = getActivePlugin();
-      if (plugin) {
-        const context = buildCanvasContext();
-        const gen = plugin.sendMessage(agentText, context);
-        await consumeEvents(gen);
+      // Step 4: Send to agent (unless preprocessor fully handled it)
+      if (!skipAgent) {
+        const plugin = getActivePlugin();
+        if (plugin) {
+          const context = buildCanvasContext();
+          const gen = plugin.sendMessage(agentText, context);
+          await consumeEvents(gen);
+        }
       }
+
+      // Step 5: Update working memory
+      memory.syncFromProjectStore();
+      memory.appendDigest(`User: "${text.slice(0, 50)}".`);
+
+      setIsThinking(false);
       activeCount.current--;
     },
     [addMessage, consumeEvents]
