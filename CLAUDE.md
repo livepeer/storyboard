@@ -182,9 +182,11 @@ Per-stream (USE these — created by start_stream with graph):
 |---------|-------|
 | 503 on stream start | Daydream API key? daydream_user_id resolved? FAL_API_KEY on orch? |
 | Stream dies <30s | `-liveOutSegmentTimeout 300s` on orch? PR 864 deployed? |
-| Publish 404 | Graph in start_stream? "start_stream returned 2 channels"? |
+| Publish 404 (fresh stream) | Graph in start_stream? "start_stream returned 2 channels"? |
+| Publish 410 Gone | SDK restarted — stream session lost. Client should auto-stop on first 410. Restart the stream from the UI. |
 | Publish OK but no output | Edge format correct? Pipeline node ID = pipeline_id? |
 | Output OK but black screen | Card renders as `<img>` not `<video>`? |
+| SDK unreachable from CLI but browser works | GCP metadata server failure mode — `gcloud compute instances reset sdk-staging-1 --zone=us-west1-b --project=livepeer-simple-infra` then `cd /opt/sdk && sudo docker compose down && sudo docker compose up -d` to recreate the stale docker network |
 
 ### Orch Requirements
 
@@ -216,6 +218,58 @@ curl -s -X POST https://sdk.daydream.monster/streams/cleanup
 - SDK has a stream reaper (checks every 30s, kills idle >2min or age >1hr)
 - Browser has `beforeunload` handler to stop streams on page close
 - Client-side dead stream detection (auto-stop after 30 consecutive publish failures)
+- **SDK returns HTTP 410 Gone for unknown stream IDs** — the publish handler checks both `_stream_sessions` and `_lv2v_jobs` first; if neither has the stream, it raises `HTTPException(410, "Stream no longer exists")`. Client treats first 410 as terminal and stops immediately. This is the primary defense against zombies after SDK restarts (the in-memory state is wiped but browsers don't know).
+
+### LV2V Failure Pattern: SDK Restart → Browser Zombies (RECURRING)
+
+**Symptom:** User reports "videos work sometimes, fail other times" with `404` or `410` on `/stream/{id}/publish?seq=NNNN` where seq is in the thousands.
+
+**Root cause chain:**
+1. SDK container crashes/restarts (commonly OOM `Exited (137)` under load, or the GCP metadata-server failure mode)
+2. `_stream_sessions` and `_lv2v_jobs` dicts are wiped (in-memory only)
+3. Browser tabs holding old streams keep publishing frames at 10fps to dead stream IDs
+4. Newly-started streams work fine (they get fresh IDs in the new SDK process)
+5. Old streams should auto-stop on the first 410 — verify the client has the 410-handling code in `lib/stream/session.ts`
+
+**Diagnosis steps:**
+```bash
+# 1. Is the SDK reachable?
+curl -s --max-time 10 -o /dev/null -w "%{http_code}\n" https://sdk.daydream.monster/capabilities
+
+# 2. What containers are running?
+gcloud compute ssh sdk-staging-1 --zone=us-west1-b --project=livepeer-simple-infra --command="sudo docker ps -a --format '{{.Names}} {{.Status}}'"
+
+# 3. Why did sdk-service exit? (137 = SIGKILL/OOM, 0 = clean restart)
+gcloud compute ssh sdk-staging-1 --zone=us-west1-b --project=livepeer-simple-infra --command="sudo docker inspect sdk-service --format '{{.State.OOMKilled}} {{.State.ExitCode}} {{.RestartCount}}'"
+
+# 4. Recent healthcheck activity?
+gcloud compute ssh sdk-staging-1 --zone=us-west1-b --project=livepeer-simple-infra --command="sudo tail -30 /var/log/sdk-healthcheck.log"
+
+# 5. List active streams (server-side state)
+curl -s https://sdk.daydream.monster/streams | python3 -m json.tool
+
+# 6. Test publish to a known-dead stream — should return 410, not 404
+curl -X POST -H "Content-Type: image/jpeg" --data-binary "test" "https://sdk.daydream.monster/stream/DEADBEEF/publish?seq=1" -w "\nHTTP %{http_code}\n"
+```
+
+**Recovery steps (in order):**
+```bash
+# A. Server-side cleanup (kills any zombies still in SDK memory)
+curl -X POST https://sdk.daydream.monster/streams/cleanup
+
+# B. If SDK is unreachable but VM is RUNNING — likely the GCP metadata bug
+gcloud compute instances reset sdk-staging-1 --zone=us-west1-b --project=livepeer-simple-infra
+
+# C. After reset, the docker network reference is stale — rebuild it
+gcloud compute ssh sdk-staging-1 --zone=us-west1-b --project=livepeer-simple-infra --command="cd /opt/sdk && sudo docker compose down && sudo docker compose up -d"
+
+# D. Verify SDK is back
+curl -s https://sdk.daydream.monster/capabilities | head -c 200
+```
+
+**Why 410 instead of 404:** The old SDK fell through to a non-existent BYOC trickle URL which returned 404. The client treated 404 as "transient" and only auto-stopped after 30 consecutive failures — which rarely happened because the orch returned mixed results. Now the SDK returns 410 immediately for unknown stream IDs, and the client stops on the very first one. See `lib/stream/session.ts` — look for `if (r.status === 410)` in `startPublishing`.
+
+**Why this keeps happening:** LV2V stream sessions are intentionally ephemeral — persisting them across SDK restarts would create stale-state bugs and slow startup. The right pattern is "server says I'm gone clearly, client trusts it and stops." The 410 fix is the systematic defense; the underlying SDK crash is a separate operational concern (memory limits on the e2-medium VM, fal runner bugs, etc).
 
 ---
 
@@ -418,20 +472,52 @@ Raw errors are mapped to friendly messages in `compound-tools.ts`:
 
 ## SKILL: VM Health & Auto-Recovery
 
-### SDK VM Health Check
-`/opt/sdk/healthcheck.sh` runs every 2 minutes via cron on sdk-staging-1:
-1. Checks `http://localhost:8000/capabilities`
-2. If unhealthy: restarts `sdk-service` Docker container
-3. If 3 consecutive Docker restarts fail: reboots the VM
-4. Logs to `/var/log/sdk-healthcheck.log`
+### SDK VM Health Check (current state — as of 2026-04-12)
+`/opt/sdk/healthcheck.sh` runs every 2 minutes via cron on sdk-staging-1 but now does **only** a GCP metadata-server probe. If the metadata server fails twice in a row the script reboots the VM. There is no longer any probe of the SDK process itself — recovery for the SDK is entirely delegated to uvicorn (multi-worker, below) and Docker's `restart: always` policy.
+
+**Why the SDK probe was removed (important — don't put it back):** the old script polled `/capabilities` with a 5s+15s timeout and `docker restart sdk-service` after 3 fails. Because `/capabilities` did a synchronous HTTP round-trip to the BYOC orch from inside an async handler on a single uvicorn worker, any `ltx-i2v` video render (20–60s on BYOC) would stall the event loop long enough to trip the probe. The cron then killed the container **every 2 minutes during video gen**, which also killed any concurrent `/stream/start` POSTs mid-flight — this looked like "LV2V failing before reaching fal.ai" because the CORS preflight 200'd but the POST was dropped when the container bounced. Script backup: `/opt/sdk/healthcheck.sh.bak`. Compose backup: `/opt/sdk/docker-compose.yaml.bak`.
+
+### SDK uvicorn config (current state — as of 2026-04-12, post-revert)
+`/opt/sdk/docker-compose.yaml` overrides the image CMD with:
+```
+command: uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1
+```
+**Must stay at `--workers 1`.** LV2V session state in `app.py` is module-level in-process dicts (`_stream_sessions` at line ~1330, `_lv2v_jobs` at line ~1191). With multi-worker uvicorn, each worker has its own copy, and `/stream/start` + subsequent `/stream/{id}/publish` / `/stream/{id}/frame` calls get load-balanced across workers by the OS accept queue. Non-owning workers return 410 Gone, `lib/stream/session.ts:167` treats the first 410 as terminal and auto-stops the stream, and LV2V dies within one frame while the fal runner keeps rolling. An earlier attempt to set `--workers 4` to fix an unrelated blocking problem broke LV2V this way — confirmed and reverted 2026-04-12.
+
+**How the original blocking problem is addressed:**
+- **Non-blocking I/O:** Every blocking call inside an `async def` handler is wrapped in `await asyncio.to_thread(fn, *args)`. That includes `submit_byoc_job` (`/inference`, `/train`, `/enrich`), `submit_training_job`, `get_training_status`, `wait_for_training`, `list_capabilities` (`/capabilities` cache miss), `_llm_call`, `_resolve_daydream_user_id`, `_orch_request`. A 64-thread default `ThreadPoolExecutor` is installed at app startup to handle this. `asyncio.to_thread` copies `contextvars.Context` into the worker thread so `_current_signer_headers` still propagates — this is why `to_thread` is used instead of `run_in_executor`.
+- **`/capabilities` in-process cache with 60s TTL + stale-on-error.** Hot path has no orch round-trip, so a stalled `/inference` (in the rare case one still slips through the non-blocking wrap) doesn't stall the probe the frontend hammers on every page load.
+- **Healthcheck cron no longer probes the SDK at all**, so a busy worker can't trigger a container restart.
+- **Per-stream `asyncio.Lock`** for `/stream/{id}/publish`, keyed by `stream_id` in `_publish_locks: dict[str, asyncio.Lock]`. Prevents the go-livepeer trickle server's 5-slot ring buffer (`trickle_server.go:82`) from slot-evicting an in-flight segment when a later seq catches up. Created in `/stream/start`, popped in `/stream/stop` and by the reaper.
+- **LV2V stream reaper** (new, scans `_lv2v_jobs` every 30s, kills idle >120s or age >3600s). Fixes a pre-existing leak where browser crashes without `/stream/stop` left orphan session state forever. Also cleans up `_publish_locks` entries.
+
+All of the above landed in `livepeer/simple-infra#11` (`feat/sdk-nonblocking-io` branch off `feat/sdk-capabilities-cache`). Verified by a 9-test e2e suite running against live sdk-staging-1. See `docs/superpowers/specs/2026-04-12-sdk-nonblocking-io-design.md` and `docs/superpowers/plans/2026-04-12-sdk-nonblocking-io.md`.
+
+**Do not "fix" this by adding more workers** until LV2V session state is moved to a shared store (Redis, sqlite, or equivalent). With `asyncio.to_thread` on every blocking call, a single worker handles arbitrary concurrent load without session-state coherency issues. Multi-worker is neither needed nor safe.
+
+### /capabilities caching (as of 2026-04-12)
+`/capabilities` in app.py is wrapped with a 60s in-process TTL cache plus stale-on-error fallback. Capability lists only change on byoc-orch deploy, so 60s is fine. Single uvicorn worker = single cache, so worst case is 1 orch hit per minute. On refresh failure, the old list is returned rather than an empty response — a transient orch blip no longer blanks out the capability registry in every browser tab. The change is on `feat/sdk-capabilities-cache` in `livepeer/simple-infra` (commits `3019c51` baseline snapshot + `cc2aa23` feat), and landed for real on `feat/sdk-nonblocking-io` (#11). Currently hot-patched onto the running container via `docker cp`; will be baked in on next SDK image rebuild.
 
 ### GCP Monitoring
-- Uptime check every 5 minutes on `https://sdk.daydream.monster/capabilities`
-- Alert policy emails `sean@livepeer.org` if check fails for 5+ minutes
+- Uptime check every 5 minutes on `https://sdk.daydream.monster/health` (**changed 2026-04-12** — was `/capabilities`; switched because `/capabilities` depends on the BYOC orch being reachable, so a BYOC outage was paging the SDK oncall).
+- `/health` is in-process (`return {"status": "ok", "orchestrator": ORCH_URL}`) — no I/O, instant response, only fires when the SDK is actually down.
+- Alert policy emails `sean@livepeer.org` if check fails for 5+ minutes.
+- Uptime check ID: `sdk-service-health-xI5Sggu-Fq8`
 - Alert policy ID: `projects/livepeer-simple-infra/alertPolicies/10364248248890653369`
 
 ### Common VM Failure Mode
-GCP metadata server (`169.254.169.254`) becomes unreachable → snapd crash-loops → SSH hangs → all services degrade. Fix: `gcloud compute instances reset sdk-staging-1 --zone=us-west1-b --project=livepeer-simple-infra`
+GCP metadata server (`169.254.169.254`) becomes unreachable → snapd crash-loops → SSH hangs → all services degrade. Fix: `gcloud compute instances reset sdk-staging-1 --zone=us-west1-b --project=livepeer-simple-infra`. After a reset the docker network reference can be stale — follow with `cd /opt/sdk && sudo docker compose down && sudo docker compose up -d` to rebuild it.
+
+### Lessons from the 2026-04-11 outage (don't relearn these)
+- **"SDK keeps crashing during video gen"** is almost never OOM or a code crash. Check `OOMKilled`, `ExitCode`, and kernel `dmesg` first — if they're clean, it's healthcheck-driven or worker-exhaustion, not a real death.
+- **Symptom correlation check:** grep SDK logs for `Started server process` (restart marker) and correlate with `ltx-i2v` dispatch lines. A 1:1 cadence = healthcheck killing a busy server, not a memory problem.
+- **"LV2V stream failed without hitting fal"** + no POST to `/stream/start` in SDK logs (only the OPTIONS preflight) = the POST was dropped because the container bounced between preflight and POST. Root cause is upstream of LV2V — look at why the container bounced.
+- **Do not add a new external process killer** as a reaction to "SDK feels slow." The right fix is always either more workers or cheaper endpoints. External killers misdiagnose busy as dead.
+- **Hot-patching app.py:** `gcloud compute scp app.py sdk-staging-1:/tmp/ ; docker cp /tmp/app.py sdk-service:/app/app.py ; docker restart sdk-service`. This is ephemeral — a `docker compose up -d` (e.g. from editing compose) **recreates** the container from the image and wipes the hot patch. Bake important changes into the image, not just the running container.
+- **The deployed SDK image is built from source that isn't in any branch of `simple-infra`** (1788 lines vs the 2172 on `feat/scope-advanced-params`). The baseline is now captured on `feat/sdk-capabilities-cache` — future SDK source changes should branch from there.
+- **Multi-worker uvicorn breaks LV2V on this service.** `_stream_sessions` and `_lv2v_jobs` are per-process dicts; 4 workers means 3 out of every 4 publish/poll requests hit a worker that doesn't know about the stream and return 410 Gone, which the client treats as terminal. Symptom: stream "starts" (card shows streaming), then card turns black within one frame while the fal runner keeps running (it was already dispatched and doesn't know the SDK lost track). If you're ever tempted to add workers again to fix a latency problem, move LV2V state to a shared store first — or wrap the blocking BYOC call in `asyncio.to_thread` instead so a single worker can handle concurrent requests.
+- **Test thresholds calibrated to single happy-path runs are flaky.** During the non-blocking I/O PR (`#11`), T3 was initially asserting on `/stream/start` total duration under 15s — which was true in one run (34.1s), false in another (17.9s), and catastrophically false in a third (111.3s) because fal Scope runner cold-start variance swings wildly. The fix was to decouple the test from total duration and instead measure the actual invariant ( `/health` p95 during the crossfire window) which is immune to fal warmth. Similarly T1/T2/T7 thresholds had to be relaxed from "sub-100ms" (calibrated for in-VM probes) to "sub-1500ms" (calibrated for over-the-internet through Caddy+TLS). Rule: tests should measure invariants, not proxies, and thresholds should be loose enough to tolerate ambient jitter while tight enough to catch multi-second regressions.
+- **Verifying a lock from inside the lock is tautological.** T4 initially tried to verify the per-stream publish lock by reading `Lp-Trickle-Seq` response headers, but the SDK's MPEG-TS publisher batches frames and doesn't expose per-frame seqs. Then tried timing-based verification, but the un-locked portions of each request (HTTP parse, body read, lock acquire wait) dwarf the in-lock work, so wall-clock measurements show high "parallelism" even when the lock is serializing the protected region. Final design: direct in-lock instrumentation via a thread-safe `_publish_in_lock_max: dict[str, int]` counter updated inside `async with lock:` and exposed via `/debug/stream/{id}/publish-stats`. Assert `in_lock_max == 1`. This IS tautological if you trust your code, but that's fine — the test's purpose is to fail-loudly if a future refactor moves the lock out of scope.
 
 ---
 
