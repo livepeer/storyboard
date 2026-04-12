@@ -9,6 +9,7 @@ export type IntentType =
   | "status"
   | "episode_switch"
   | "episode_create"
+  | "video_strategy"
   | "none";
 
 export interface Intent {
@@ -84,6 +85,11 @@ export function classifyIntent(
     return { type: "episode_switch", direction: text };
   if (/group.*episode|create.*episode|make.*episode|new episode/i.test(lower))
     return { type: "episode_create", direction: text };
+
+  // Video strategy reply ("1", "2", "3", "overview", "full", "custom")
+  if (/^(1|2|3|overview|full|custom|full coverage)\.?$/i.test(lower)) {
+    return { type: "video_strategy", direction: text };
+  }
 
   return { type: "none" };
 }

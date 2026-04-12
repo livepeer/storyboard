@@ -17,6 +17,16 @@ import { useProjectStore } from "@/lib/projects/store";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useSessionContext, extractCreativeContext, updateContextFromFeedback } from "./session-context";
 import { classifyIntent, type Intent } from "./intent";
+import {
+  detectVideoIntent,
+  extractDurations,
+  extractColorArc,
+  extractCharacterLock,
+  extractPerSceneNotes,
+  buildLockedPrefix,
+  planVideoStrategy,
+} from "./video-intent";
+import { breakSceneIntoBeatsFallback } from "./beat-extractor";
 
 // ---------------------------------------------------------------------------
 // Personality — the creative partner voice
@@ -354,16 +364,83 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
   const briefWords = text.split(/\s+/).slice(0, 30).join(" ");
   const brief = briefWords + (text.split(/\s+/).length > 30 ? "..." : "");
 
-  const createResult = await executeTool("project_create", {
-    brief,
-    style_guide: style,
-    scenes: scenes.map((s, i) => ({
+  // --- Video intent detection ---
+  const isVideo = detectVideoIntent(text);
+  let videoStrategy: { mode: "overview" | "full" | "custom"; perScene: number[]; totalClips: number } | null = null;
+  let videoConsistency: {
+    lockedPrefix: string;
+    colorArc: string[];
+    characterLock: string;
+  } | null = null;
+
+  if (isVideo) {
+    say(`\uD83C\uDFAC Detected video brief — extracting durations and consistency layers...`, "system");
+    const durations = extractDurations(text);
+    const totalDuration = durations.reduce((s, d) => s + d.seconds, 0);
+
+    if (totalDuration === 0 || totalDuration <= 60) {
+      videoStrategy = planVideoStrategy("overview", durations.map((d) => d.seconds));
+      if (videoStrategy.perScene.length === 0) {
+        videoStrategy = {
+          mode: "overview",
+          totalClips: scenes.length,
+          perScene: scenes.map(() => 1),
+        };
+      }
+      say(`Strategy: overview \u2014 1 clip per scene at ~10s each (${scenes.length} clips total).`, "system");
+    } else {
+      videoStrategy = planVideoStrategy("overview", durations.map((d) => d.seconds));
+      const fullPlan = planVideoStrategy("full", durations.map((d) => d.seconds));
+      say(`\u26A0 Total declared duration: ${totalDuration}s. Each clip is 5\u201310s.\nUsing OVERVIEW: ${videoStrategy.totalClips} clips at 10s each.\nFor FULL coverage (${fullPlan.totalClips} clips covering ${totalDuration}s), reply: "full coverage"`, "system");
+    }
+
+    const ctxStore = useSessionContext.getState();
+    const ctx = ctxStore.context;
+    videoConsistency = {
+      lockedPrefix: buildLockedPrefix({
+        style: ctx?.style || style.visual_style || "",
+        characters: ctx?.characters || extractCharacterLock(text),
+        setting: ctx?.setting || "",
+        palette: ctx?.palette || style.color_palette || "",
+        mood: ctx?.mood || style.mood || "",
+        rules: ctx?.rules || "",
+      }),
+      colorArc: extractColorArc(text),
+      characterLock: extractCharacterLock(text),
+    };
+    say(`Locked prefix: "${videoConsistency.lockedPrefix.slice(0, 80)}..."`, "system");
+  }
+
+  const sceneObjects = scenes.map((s, i) => {
+    const baseScene: Record<string, unknown> = {
       index: i,
       title: s.title,
       description: s.description,
       prompt: s.prompt,
-      action: "generate",
-    })),
+      action: isVideo ? "video_keyframe" : "generate",
+    };
+
+    if (isVideo && videoStrategy) {
+      const clipsPerScene = videoStrategy.perScene[i] || 1;
+      baseScene.clipsPerScene = clipsPerScene;
+      if (clipsPerScene > 1) {
+        baseScene.beats = breakSceneIntoBeatsFallback(s.description, clipsPerScene);
+      }
+      const notes = extractPerSceneNotes(s.description);
+      if (notes.visualLanguage) baseScene.visualLanguage = notes.visualLanguage;
+      if (notes.cameraNotes) baseScene.cameraNotes = notes.cameraNotes;
+      if (notes.score) baseScene.score = notes.score;
+    }
+
+    return baseScene;
+  });
+
+  const createResult = await executeTool("project_create", {
+    brief,
+    style_guide: style,
+    scenes: sceneObjects,
+    is_video: isVideo,
+    video_consistency: videoConsistency,
   });
 
   if (!createResult.success) {
