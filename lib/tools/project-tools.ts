@@ -3,7 +3,7 @@ import { useProjectStore } from "@/lib/projects/store";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useSessionContext } from "@/lib/agents/session-context";
 import { executeTool } from "./registry";
-import type { Scene, StyleGuide } from "@/lib/projects/types";
+import type { Scene, StyleGuide, VideoConsistency } from "@/lib/projects/types";
 
 /**
  * project_create — Create a project from a brief with scene breakdown.
@@ -31,6 +31,19 @@ export const projectCreateTool: ToolDefinition = {
           prompt_suffix: { type: "string", description: "Style suffix injected into all scene prompts" },
         },
       },
+      is_video: {
+        type: "boolean",
+        description: "Set true when the brief signals a video/animated short",
+      },
+      video_consistency: {
+        type: "object",
+        description: "Locked prefix, color arc, character lock for cross-clip consistency",
+        properties: {
+          lockedPrefix: { type: "string" },
+          colorArc: { type: "array", items: { type: "string" } },
+          characterLock: { type: "string" },
+        },
+      },
       scenes: {
         type: "array",
         description: "Scene breakdown. Keep each prompt under 40 words.",
@@ -42,7 +55,12 @@ export const projectCreateTool: ToolDefinition = {
             description: { type: "string", description: "What the scene shows" },
             prompt: { type: "string", description: "Concise generation prompt (under 40 words)" },
             media_type: { type: "string", enum: ["image", "video", "audio"], description: "Output type" },
-            action: { type: "string", enum: ["generate", "animate", "tts"], description: "What to do" },
+            action: { type: "string", enum: ["generate", "animate", "tts", "video_keyframe"], description: "What to do" },
+            visualLanguage: { type: "string" },
+            cameraNotes: { type: "string" },
+            score: { type: "string" },
+            clipsPerScene: { type: "number" },
+            beats: { type: "array", items: { type: "string" } },
             depends_on: {
               type: "array",
               items: { type: "number" },
@@ -84,6 +102,36 @@ export const projectCreateTool: ToolDefinition = {
     }));
 
     const project = useProjectStore.getState().createProject(brief, scenes, styleGuide);
+    const projectId = project.id;
+
+    // Apply video fields if provided
+    if (input.is_video) {
+      const projStore = useProjectStore.getState();
+      const proj = projStore.getProject(projectId);
+      if (proj) {
+        proj.isVideo = true;
+        if (input.video_consistency) {
+          proj.videoConsistency = input.video_consistency as VideoConsistency;
+        }
+        // Save scene-level fields from input
+        const inputScenes = (input.scenes as Array<Record<string, unknown>>) || [];
+        for (let i = 0; i < proj.scenes.length; i++) {
+          const inScene = inputScenes[i];
+          if (!inScene) continue;
+          if (inScene.visualLanguage) proj.scenes[i].visualLanguage = inScene.visualLanguage as string;
+          if (inScene.cameraNotes) proj.scenes[i].cameraNotes = inScene.cameraNotes as string;
+          if (inScene.score) proj.scenes[i].score = inScene.score as string;
+          if (typeof inScene.clipsPerScene === "number") proj.scenes[i].clipsPerScene = inScene.clipsPerScene;
+          if (Array.isArray(inScene.beats)) proj.scenes[i].beats = inScene.beats as string[];
+          // Override action to video_keyframe
+          if (inScene.action === "video_keyframe") {
+            proj.scenes[i].action = "video_keyframe";
+          }
+        }
+        // Trigger a state update so subscribers re-render
+        useProjectStore.setState({ projects: [...useProjectStore.getState().projects] });
+      }
+    }
 
     // Bootstrap working memory with new project
     try {
