@@ -3,10 +3,11 @@
 import { useCallback, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import type { Card as CardData } from "@/lib/canvas/types";
-import { getSession, getActiveSession, controlStream } from "@/lib/stream/session";
+import { getSession, getActiveSession } from "@/lib/stream/session";
 import { downloadCard } from "@/lib/utils/download";
 import { EpisodeBadge } from "./EpisodeBadge";
 import { useEpisodeStore } from "@/lib/episodes/store";
+import { StreamCockpit } from "./StreamCockpit";
 
 const TYPE_COLORS: Record<string, { text: string; bg: string }> = {
   image: { text: "#8b5cf6", bg: "rgba(139,92,246,0.1)" },
@@ -17,10 +18,8 @@ const TYPE_COLORS: Record<string, { text: string; bg: string }> = {
 };
 
 export function Card({ card }: { card: CardData }) {
-  const { viewport, selectedCardIds, updateCard, removeCard, selectCard, toggleCardSelection, edges, cards } =
+  const { viewport, selectedCardIds, updateCard, removeCard, selectCard, toggleCardSelection, togglePin, edges, cards } =
     useCanvasStore();
-  const [streamInput, setStreamInput] = useState("");
-  const [streamMsg, setStreamMsg] = useState("");
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -40,6 +39,12 @@ export function Card({ card }: { card: CardData }) {
   const colors = TYPE_COLORS[card.type] || TYPE_COLORS.image;
   const episode = useEpisodeStore((s) => s.getEpisodeForCard(card.id));
   const isActiveEpisode = episode?.id === useEpisodeStore((s) => s.activeEpisodeId);
+
+  // Auto-expand stream cards when streaming
+  const streamSession = card.type === "stream" ? (getSession(card.refId) || getActiveSession()) : null;
+  const isStreaming = !!streamSession && !streamSession.stopped;
+  const expandedW = isStreaming ? 640 : card.w;
+  const expandedH = isStreaming ? 580 : card.h;
 
   // Find incoming edge for this card (shows what transformation created it)
   const incomingEdge = edges.find((e) => e.toRefId === card.refId);
@@ -146,13 +151,15 @@ export function Card({ card }: { card: CardData }) {
   return (
     <div
       className={`absolute flex flex-col overflow-hidden rounded-xl border bg-[var(--surface)] shadow-[var(--shadow)] transition-[box-shadow,border-color] ${
-        isSelected ? "border-[#555] ring-1 ring-blue-400/30" : "border-[var(--border)]"
+        isSelected ? "border-[#555] ring-1 ring-blue-400/30"
+        : card.pinned ? "border-amber-500/40 ring-1 ring-amber-400/20"
+        : "border-[var(--border)]"
       } ${card.minimized ? "!h-9 !min-h-0" : "min-h-[160px] min-w-[200px]"}`}
       style={{
         left: card.x,
         top: card.y,
-        width: card.w,
-        height: card.minimized ? 36 : card.h,
+        width: expandedW,
+        height: card.minimized ? 36 : expandedH,
         borderLeftWidth: isActiveEpisode ? 3 : undefined,
         borderLeftColor: isActiveEpisode ? episode?.color : undefined,
       }}
@@ -208,6 +215,15 @@ export function Card({ card }: { card: CardData }) {
           {card.refId}
         </span>
         <div className="card-controls flex shrink-0 gap-0.5">
+          <button
+            className={`flex h-[22px] w-[22px] items-center justify-center rounded border-none bg-transparent text-xs transition-all hover:bg-white/[0.08] ${
+              card.pinned ? "text-amber-400" : "text-[var(--text-dim)] hover:text-amber-400"
+            }`}
+            title={card.pinned ? "Unpin" : "Pin to screen"}
+            onClick={() => togglePin(card.id)}
+          >
+            {card.pinned ? "\uD83D\uDCCC" : "\uD83D\uDCCC"}
+          </button>
           {card.url && (
             <button
               className="flex h-[22px] w-[22px] items-center justify-center rounded border-none bg-transparent text-xs text-[var(--text-dim)] transition-all hover:bg-white/[0.08] hover:text-green-400"
@@ -302,93 +318,9 @@ export function Card({ card }: { card: CardData }) {
         );
       })()}
 
-      {/* Stream controls — run/stop, status, inline agent */}
+      {/* Stream Cockpit — replaces old cramped controls when streaming */}
       {card.type === "stream" && !card.minimized && (
-        <div style={{
-          borderTop: "1px solid rgba(236,72,153,0.2)",
-          background: "rgba(236,72,153,0.05)",
-          padding: "4px 8px",
-          fontSize: 10,
-        }}>
-          {/* Run/Stop + Status bar */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-            <button
-              className="card-controls"
-              style={{
-                background: "rgba(236,72,153,0.2)",
-                border: "1px solid rgba(236,72,153,0.3)",
-                borderRadius: 4,
-                color: "#ec4899",
-                padding: "2px 8px",
-                fontSize: 10,
-                cursor: "pointer",
-              }}
-              onClick={() => {
-                const session = getSession(card.refId) || getActiveSession();
-                if (session) {
-                  // Toggle publishing
-                  if (session.stopped) {
-                    window.dispatchEvent(new CustomEvent("lv2v-resume", { detail: { streamId: session.streamId } }));
-                  } else {
-                    window.dispatchEvent(new CustomEvent("lv2v-pause", { detail: { streamId: session.streamId } }));
-                  }
-                }
-              }}
-            >
-              {(() => {
-                const session = getSession(card.refId) || getActiveSession();
-                return session && !session.stopped ? "Stop" : "Start";
-              })()}
-            </button>
-            <span style={{ color: "var(--text-dim)", flex: 1 }}>
-              {(() => {
-                const session = getSession(card.refId) || getActiveSession();
-                if (!session) return "No active stream";
-                if (session.stopped) return "Stopped";
-                return `pub:${session.publishOk} recv:${session.totalRecv}`;
-              })()}
-            </span>
-          </div>
-
-          {/* Inline Scope agent input */}
-          <div style={{ display: "flex", gap: 4 }}>
-            <input
-              className="card-controls"
-              type="text"
-              placeholder="Type to control stream..."
-              value={streamInput}
-              onChange={(e) => setStreamInput(e.target.value)}
-              onKeyDown={async (e) => {
-                if (e.key !== "Enter" || !streamInput.trim()) return;
-                const session = getSession(card.refId) || getActiveSession();
-                if (!session) {
-                  setStreamMsg("No active stream");
-                  return;
-                }
-                try {
-                  await controlStream(session, streamInput.trim());
-                  setStreamMsg(`Updated: prompt`);
-                  setStreamInput("");
-                } catch (err) {
-                  setStreamMsg(`Error: ${err}`);
-                }
-              }}
-              style={{
-                flex: 1,
-                background: "rgba(255,255,255,0.05)",
-                border: "1px solid rgba(255,255,255,0.1)",
-                borderRadius: 4,
-                padding: "3px 6px",
-                fontSize: 10,
-                color: "var(--text-muted)",
-                outline: "none",
-              }}
-            />
-          </div>
-          {streamMsg && (
-            <div style={{ color: "#34d399", fontSize: 9, marginTop: 2 }}>{streamMsg}</div>
-          )}
-        </div>
+        <StreamCockpit card={card} />
       )}
 
       {/* Video controls enhancement */}
