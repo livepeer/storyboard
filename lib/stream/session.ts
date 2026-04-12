@@ -14,6 +14,8 @@ export interface Lv2vSession {
   consecutiveEmpty: number;
   consecutivePublishFail: number;
   lastFpsTime: number;
+  /** Most recent params applied via controlStream — for HUD display */
+  lastParams?: Record<string, unknown>;
   onFrame?: (url: string) => void;
   onStatus?: (msg: string) => void;
   onError?: (err: string) => void;
@@ -260,6 +262,8 @@ export async function controlStream(
 ): Promise<void> {
   const payload: Record<string, unknown> = { ...params };
   if (prompt) payload.prompts = prompt;
+  // Track applied params for HUD display
+  session.lastParams = { ...(session.lastParams || {}), ...payload };
   await fetch(`${sdkUrl()}/stream/${session.streamId}/control`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...sdkHeaders() },
