@@ -198,12 +198,67 @@ export const projectGenerateTool: ToolDefinition = {
     const styleSuffix = project.styleGuide?.promptSuffix || "";
 
     // Build create_media steps from the batch
-    const steps = batch.map((scene) => ({
-      action: scene.action,
-      prompt: `${stylePrefix}${scene.prompt}${styleSuffix}`,
-      title: scene.title,
-      source_url: scene.sourceUrl,
-    }));
+    // For video_keyframe scenes: emit either a keyframe step (image) OR animate steps
+    // depending on whether the scene already has a keyframeRefId
+    const consistency = project.videoConsistency;
+    const lockedPrefix = consistency?.lockedPrefix || "";
+    const characterLock = consistency?.characterLock || "";
+    const colorArc = consistency?.colorArc || [];
+
+    // Track step → scene mapping so we can write keyframeRefId back after generation
+    const stepMeta: Array<{ sceneIndex: number; isKeyframe: boolean }> = [];
+
+    const steps: Array<{
+      action: string;
+      prompt: string;
+      title: string;
+      source_url?: string;
+    }> = [];
+
+    for (const scene of batch) {
+      if (scene.action === "video_keyframe" && !scene.keyframeRefId) {
+        // PHASE 1: Generate keyframe image
+        const colorPhrase = colorArc[scene.index] || "";
+        const visLang = scene.visualLanguage || "";
+        const kfPrompt = [lockedPrefix, scene.prompt, colorPhrase, visLang]
+          .filter((s) => s && s.length > 0)
+          .join(" ")
+          .slice(0, 800);
+        stepMeta.push({ sceneIndex: scene.index, isKeyframe: true });
+        steps.push({
+          action: "generate",
+          prompt: kfPrompt,
+          title: `${scene.title} (keyframe)`,
+        });
+      } else if (scene.action === "video_keyframe" && scene.keyframeRefId) {
+        // PHASE 2: Animate clips from the keyframe
+        const clipCount = scene.clipsPerScene || 1;
+        const beats = scene.beats || [scene.description];
+        for (let c = 0; c < clipCount; c++) {
+          const beat = beats[c] || beats[0] || scene.description;
+          const motionPrompt = [characterLock, beat, scene.cameraNotes || ""]
+            .filter((s) => s && s.length > 0)
+            .join(" ")
+            .slice(0, 500);
+          stepMeta.push({ sceneIndex: scene.index, isKeyframe: false });
+          steps.push({
+            action: "animate",
+            prompt: motionPrompt,
+            title: `${scene.title} (clip ${c + 1}/${clipCount})`,
+            source_url: scene.sourceUrl, // Set when keyframe was generated in previous batch
+          });
+        }
+      } else {
+        // Regular non-video scene
+        stepMeta.push({ sceneIndex: scene.index, isKeyframe: false });
+        steps.push({
+          action: scene.action,
+          prompt: `${stylePrefix}${scene.prompt}${styleSuffix}`,
+          title: scene.title,
+          source_url: scene.sourceUrl,
+        });
+      }
+    }
 
     // Mark scenes as generating
     for (const scene of batch) {
@@ -217,16 +272,63 @@ export const projectGenerateTool: ToolDefinition = {
     const cardsCreated = (result.data as Record<string, unknown>)?.cards_created as string[] | undefined;
     const results = (result.data as Record<string, unknown>)?.results as Array<{ refId: string; error?: string }> | undefined;
 
-    for (let i = 0; i < batch.length; i++) {
-      const scene = batch[i];
-      const refId = cardsCreated?.[i];
-      const stepResult = results?.[i];
-      const hasError = stepResult?.error;
+    // Map step results back to scenes using stepMeta
+    // Video scenes with keyframe phase stay "pending" for the next batch (animate phase)
+    const sceneToStepResults = new Map<number, Array<{ refId?: string; error?: string; isKeyframe: boolean }>>();
+    if (cardsCreated && results) {
+      for (let i = 0; i < stepMeta.length; i++) {
+        const meta = stepMeta[i];
+        if (!sceneToStepResults.has(meta.sceneIndex)) {
+          sceneToStepResults.set(meta.sceneIndex, []);
+        }
+        sceneToStepResults.get(meta.sceneIndex)!.push({
+          refId: cardsCreated[i],
+          error: results[i]?.error,
+          isKeyframe: meta.isKeyframe,
+        });
+      }
+    }
+
+    for (const scene of batch) {
+      const stepResults = sceneToStepResults.get(scene.index) || [];
+      const hasError = stepResults.some((r) => r.error);
 
       if (hasError) {
-        store.updateSceneStatus(projectId, scene.index, "pending"); // retry later
-      } else if (refId) {
-        store.updateSceneStatus(projectId, scene.index, "done", refId);
+        store.updateSceneStatus(projectId, scene.index, "pending");
+        continue;
+      }
+
+      // Find keyframe step (if any)
+      const keyframeResult = stepResults.find((r) => r.isKeyframe);
+      if (keyframeResult?.refId) {
+        // Phase 1 just completed: write keyframeRefId + sourceUrl, keep scene "pending" for animate phase
+        const proj = store.getProject(projectId);
+        if (proj) {
+          const sceneObj = proj.scenes.find((s) => s.index === scene.index);
+          if (sceneObj) {
+            sceneObj.keyframeRefId = keyframeResult.refId;
+            // Resolve URL from canvas store
+            try {
+              const { useCanvasStore } = await import("@/lib/canvas/store");
+              const card = useCanvasStore.getState().cards.find((c) => c.refId === keyframeResult.refId);
+              if (card?.url) sceneObj.sourceUrl = card.url;
+            } catch { /* canvas not available */ }
+            // First scene's keyframe becomes the style anchor
+            if (scene.index === 0 && proj.videoConsistency && !proj.videoConsistency.styleAnchorRefId) {
+              proj.videoConsistency.styleAnchorRefId = keyframeResult.refId;
+            }
+            // Trigger state update
+            useProjectStore.setState({ projects: [...useProjectStore.getState().projects] });
+          }
+        }
+        store.updateSceneStatus(projectId, scene.index, "pending"); // wait for animate phase
+        continue;
+      }
+
+      // Phase 2 completed (or non-video scene): mark done with the first card refId
+      const firstRefId = stepResults[0]?.refId;
+      if (firstRefId) {
+        store.updateSceneStatus(projectId, scene.index, "done", firstRefId);
       }
     }
 
