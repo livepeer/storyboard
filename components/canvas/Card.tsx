@@ -44,7 +44,8 @@ export function Card({ card }: { card: CardData }) {
   const streamSession = card.type === "stream" ? (getSession(card.refId) || getActiveSession()) : null;
   const isStreaming = !!streamSession && !streamSession.stopped;
   const expandedW = isStreaming ? 640 : card.w;
-  const expandedH = isStreaming ? 580 : card.h;
+  // 640 (square frame) + 32 (title) + 50 (presets) + 80 (input) + 50 (chips) + 60 (feed) ≈ 920
+  const expandedH = isStreaming ? 920 : card.h;
 
   // Find incoming edge for this card (shows what transformation created it)
   const incomingEdge = edges.find((e) => e.toRefId === card.refId);

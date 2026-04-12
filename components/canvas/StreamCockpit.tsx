@@ -130,14 +130,14 @@ export function StreamCockpit({ card }: Props) {
         </span>
       </div>
 
-      {/* Live frame with HUD */}
+      {/* Live frame with HUD — square aspect so the whole video shows */}
       <div
         className="relative flex items-center justify-center"
-        style={{ height: 240, background: "rgba(0,0,0,0.5)" }}
+        style={{ aspectRatio: "1 / 1", background: "rgba(0,0,0,0.85)" }}
       >
         {card.url ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={card.url} alt="" className="h-full w-full object-cover" />
+          <img src={card.url} alt="" className="h-full w-full object-contain" />
         ) : (
           <span className="text-xs text-white/30">waiting for output&hellip;</span>
         )}
