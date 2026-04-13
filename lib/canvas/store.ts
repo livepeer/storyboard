@@ -6,7 +6,7 @@ const CARD_H = 280;
 const GAP = 24;
 const COLS_PER_ROW = 5;
 
-let nextCardId = 0;
+let nextCardId = Date.now();
 
 interface CanvasState {
   viewport: CanvasViewport;
@@ -39,6 +39,8 @@ interface CanvasState {
   toggleCardSelection: (id: string) => void;
   selectCards: (ids: string[]) => void;
   clearSelection: () => void;
+  togglePin: (id: string) => void;
+  pinCards: (ids: string[], pinned: boolean) => void;
 
   // Edge actions
   addEdge: (fromRefId: string, toRefId: string, meta?: ArrowEdge["meta"]) => void;
@@ -171,6 +173,50 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   clearSelection: () =>
     set({ selectedCardIds: new Set(), selectedEdgeIdx: -1 }),
+
+  togglePin: (id) =>
+    set((s) => {
+      const { panX, panY, scale } = s.viewport;
+      return {
+        cards: s.cards.map((c) => {
+          if (c.id !== id) return c;
+          if (c.pinned) {
+            // Unpin — drop screen-space snapshot
+            return { ...c, pinned: false, pinX: undefined, pinY: undefined, pinScale: undefined };
+          }
+          // Pin — snapshot current screen position so the card stays where
+          // the user sees it rather than rendering at raw canvas coords.
+          return {
+            ...c,
+            pinned: true,
+            pinX: panX + c.x * scale,
+            pinY: panY + c.y * scale,
+            pinScale: scale,
+          };
+        }),
+      };
+    }),
+
+  pinCards: (ids, pinned) =>
+    set((s) => {
+      const idSet = new Set(ids);
+      const { panX, panY, scale } = s.viewport;
+      return {
+        cards: s.cards.map((c) => {
+          if (!idSet.has(c.id)) return c;
+          if (!pinned) {
+            return { ...c, pinned: false, pinX: undefined, pinY: undefined, pinScale: undefined };
+          }
+          return {
+            ...c,
+            pinned: true,
+            pinX: panX + c.x * scale,
+            pinY: panY + c.y * scale,
+            pinScale: scale,
+          };
+        }),
+      };
+    }),
 
   addEdge: (fromRefId, toRefId, meta) =>
     set((s) => {

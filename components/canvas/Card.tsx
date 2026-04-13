@@ -47,6 +47,20 @@ export function Card({ card }: { card: CardData }) {
   // 640 (square frame) + 32 (title) + 50 (presets) + 80 (input) + 50 (chips) + 60 (feed) ≈ 920
   const expandedH = isStreaming ? 920 : card.h;
 
+  // Pinned cards render at their screen-space snapshot (pinX/pinY) rather
+  // than their canvas coords, because InfiniteCanvas lifts them out of the
+  // pan/zoom transform div. Without this they'd render at e.g. left=5000 on
+  // a fixed-position root and appear off-screen. pinScale lets us keep the
+  // card visually the same size it was at pin time regardless of later zoom.
+  const isPinnedDisplay = !!card.pinned && card.pinX !== undefined && card.pinY !== undefined;
+  const pinScale = card.pinScale ?? 1;
+  const displayLeft = isPinnedDisplay ? card.pinX! : card.x;
+  const displayTop = isPinnedDisplay ? card.pinY! : card.y;
+  const displayW = isPinnedDisplay ? expandedW * pinScale : expandedW;
+  const displayH = isPinnedDisplay
+    ? (card.minimized ? 36 : expandedH) * pinScale
+    : (card.minimized ? 36 : expandedH);
+
   // Find incoming edge for this card (shows what transformation created it)
   const incomingEdge = edges.find((e) => e.toRefId === card.refId);
   const tooltipText = incomingEdge?.meta
@@ -79,8 +93,8 @@ export function Card({ card }: { card: CardData }) {
       dragRef.current = {
         startX: e.clientX,
         startY: e.clientY,
-        origX: card.x,
-        origY: card.y,
+        origX: isPinnedDisplay ? card.pinX! : card.x,
+        origY: isPinnedDisplay ? card.pinY! : card.y,
         groupOrigins,
       };
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -92,8 +106,11 @@ export function Card({ card }: { card: CardData }) {
     (e: React.PointerEvent) => {
       if (!dragRef.current) return;
       const { startX, startY, origX, origY, groupOrigins } = dragRef.current;
-      const dx = (e.clientX - startX) / viewport.scale;
-      const dy = (e.clientY - startY) / viewport.scale;
+      // Pinned cards live in screen space — no viewport scale divide, and
+      // writes go to pinX/pinY. Unpinned cards live in canvas space —
+      // delta scales with zoom, writes go to x/y.
+      const dx = isPinnedDisplay ? e.clientX - startX : (e.clientX - startX) / viewport.scale;
+      const dy = isPinnedDisplay ? e.clientY - startY : (e.clientY - startY) / viewport.scale;
 
       if (groupOrigins && groupOrigins.length > 1) {
         // Group drag — move all selected cards by the same delta
@@ -103,15 +120,19 @@ export function Card({ card }: { card: CardData }) {
             y: origin.y + dy,
           });
         }
+      } else if (isPinnedDisplay) {
+        updateCard(card.id, {
+          pinX: origX + dx,
+          pinY: origY + dy,
+        });
       } else {
-        // Single card drag
         updateCard(card.id, {
           x: origX + dx,
           y: origY + dy,
         });
       }
     },
-    [card.id, viewport.scale, updateCard]
+    [card.id, viewport.scale, updateCard, isPinnedDisplay]
   );
 
   const onDragEnd = useCallback(() => {
@@ -137,12 +158,16 @@ export function Card({ card }: { card: CardData }) {
     (e: React.PointerEvent) => {
       if (!resizeRef.current) return;
       const { startX, startY, origW, origH } = resizeRef.current;
+      // w/h are canvas-space. For pinned cards the rendered size is
+      // card.w * pinScale, so divide the screen delta by pinScale to keep
+      // resize feeling 1:1 on screen. For unpinned, divide by viewport.scale.
+      const denom = isPinnedDisplay ? pinScale : viewport.scale;
       updateCard(card.id, {
-        w: Math.max(200, origW + (e.clientX - startX) / viewport.scale),
-        h: Math.max(160, origH + (e.clientY - startY) / viewport.scale),
+        w: Math.max(200, origW + (e.clientX - startX) / denom),
+        h: Math.max(160, origH + (e.clientY - startY) / denom),
       });
     },
-    [card.id, viewport.scale, updateCard]
+    [card.id, viewport.scale, updateCard, isPinnedDisplay, pinScale]
   );
 
   const onResizeEnd = useCallback(() => {
@@ -157,10 +182,10 @@ export function Card({ card }: { card: CardData }) {
         : "border-[var(--border)]"
       } ${card.minimized ? "!h-9 !min-h-0" : "min-h-[160px] min-w-[200px]"}`}
       style={{
-        left: card.x,
-        top: card.y,
-        width: expandedW,
-        height: card.minimized ? 36 : expandedH,
+        left: displayLeft,
+        top: displayTop,
+        width: displayW,
+        height: card.minimized ? 36 : displayH,
         borderLeftWidth: isActiveEpisode ? 3 : undefined,
         borderLeftColor: isActiveEpisode ? episode?.color : undefined,
       }}
@@ -250,7 +275,7 @@ export function Card({ card }: { card: CardData }) {
       </div>
 
       {/* Body */}
-      {!card.minimized && (
+      {!card.minimized && card.type !== "stream" && (
         <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-[var(--bg)]">
           {card.error ? (
             <div className="flex flex-col items-center gap-2 p-4 text-center">

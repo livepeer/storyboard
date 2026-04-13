@@ -20,6 +20,13 @@ export interface Card {
   prompt?: string;
   /** Generation time in ms */
   elapsed?: number;
+  /** Pinned cards stay fixed on screen when panning/zooming */
+  pinned?: boolean;
+  /** Screen-space position captured at pin time — used when pinned is true */
+  pinX?: number;
+  pinY?: number;
+  /** Viewport scale at pin time — used to size the pinned card 1:1 with how it looked when pinned */
+  pinScale?: number;
 }
 
 export interface ArrowEdge {
