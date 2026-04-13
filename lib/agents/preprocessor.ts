@@ -156,36 +156,141 @@ Reply ONLY the label:`,
 // Scene extraction
 // ---------------------------------------------------------------------------
 
-function extractScenes(text: string): Array<{ title: string; description: string; prompt: string }> {
-  const scenes: Array<{ title: string; description: string; prompt: string }> = [];
+/**
+ * A scene as extracted from raw brief text.
+ */
+interface ExtractedScene {
+  title: string;
+  description: string;
+  prompt: string;
+}
 
-  // Strip "style direction/notes" section at the end — it's not a scene
-  const cleanText = text.replace(/\n\s*(style\s+(direction|notes?)|visual\s+style|ghibli\s+style|colour|color\s+palette)[\s\S]*$/i, "");
+/**
+ * A project group — one or more consecutive scenes from the brief that
+ * share a numbering sequence. A single brief can contain multiple
+ * projects (two complete storyboards pasted together, a 6-scene video
+ * followed by a 10-scene graphic novel, etc.). Each gets its own
+ * subText slice so style / video / creative DNA extractors can analyze
+ * only the bytes that belong to it.
+ */
+interface ExtractedProject {
+  subText: string;
+  scenes: ExtractedScene[];
+}
 
-  // "Scene N — Title\nDescription"
+/**
+ * Split raw brief text into one or more project groups on scene-number
+ * reset. A new project starts whenever the current scene number is not
+ * strictly greater than the previous one (i.e., it reset to 1 or went
+ * backwards). Single-project briefs return one group containing every
+ * scene. This is the smart-split that lets the agent handle briefs
+ * like "here's a 6-scene video AND a 10-scene graphic novel" as two
+ * distinct projects instead of one confused 16-scene blob.
+ *
+ * The scene regex bounds each scene at the next `SCENE N —` header or
+ * end-of-string via a lookahead, so there is NO need to pre-strip
+ * trailing "style notes" — doing so (as an earlier version did) ate
+ * every scene after any `\nColour:` sub-line and collapsed 10-scene
+ * briefs down to 1.
+ */
+function extractProjects(text: string): ExtractedProject[] {
   const sceneRegex = /(?:scene|shot|frame)\s*(\d+)\s*[—\-–:]\s*([^\n]+)\n([\s\S]*?)(?=(?:scene|shot|frame)\s*\d+\s*[—\-–:]|$)/gi;
-  let match;
-  while ((match = sceneRegex.exec(cleanText)) !== null) {
-    const title = match[2].trim();
-    const desc = match[3].trim();
-    if (desc.length < 10) continue; // skip empty/fragment matches
-    scenes.push({ title, description: desc.slice(0, 200), prompt: summarize(title, desc) });
-  }
-  if (scenes.length >= 3) return scenes;
 
-  // Numbered list: "1. Title\nDescription"
-  const numberedRegex = /(\d+)[\.\)\-]\s+([^\n]+)\n([\s\S]*?)(?=\d+[\.\)\-]\s+|$)/g;
-  while ((match = numberedRegex.exec(cleanText)) !== null) {
+  // First pass: collect every match WITH its character offset so we can
+  // slice subText per-project later.
+  const raw: Array<{ num: number; title: string; desc: string; offset: number }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = sceneRegex.exec(text)) !== null) {
+    const num = parseInt(match[1], 10);
     const title = match[2].trim();
     const desc = match[3].trim();
     if (desc.length < 10) continue;
-    scenes.push({ title, description: desc.slice(0, 200), prompt: summarize(title, desc) });
+    raw.push({ num, title, desc, offset: match.index });
   }
-  return scenes;
+
+  if (raw.length === 0) {
+    // Fall back to numbered-list format (1. Title\nDesc)
+    const numberedRegex = /(\d+)[\.\)\-]\s+([^\n]+)\n([\s\S]*?)(?=\d+[\.\)\-]\s+|$)/g;
+    while ((match = numberedRegex.exec(text)) !== null) {
+      const num = parseInt(match[1], 10);
+      const title = match[2].trim();
+      const desc = match[3].trim();
+      if (desc.length < 10) continue;
+      raw.push({ num, title, desc, offset: match.index });
+    }
+    if (raw.length === 0) return [];
+  }
+
+  // Second pass: group by project. A reset (num <= lastNum) starts a
+  // new project. The first scene always starts project 0.
+  const groups: Array<typeof raw> = [];
+  let current: typeof raw = [];
+  let lastNum = 0;
+  for (const r of raw) {
+    if (r.num <= lastNum) {
+      if (current.length > 0) groups.push(current);
+      current = [];
+    }
+    current.push(r);
+    lastNum = r.num;
+  }
+  if (current.length > 0) groups.push(current);
+
+  // Third pass: slice per-project subText for downstream analyzers, and
+  // summarize each scene into a short image-gen prompt.
+  return groups.map((group, i) => {
+    const startOffset = group[0].offset;
+    const endOffset = i + 1 < groups.length ? groups[i + 1][0].offset : text.length;
+    const subText = text.slice(startOffset, endOffset);
+    const scenes: ExtractedScene[] = group.map((r) => ({
+      title: r.title,
+      description: r.desc.slice(0, 200),
+      prompt: summarize(r.title, r.desc),
+    }));
+    return { subText, scenes };
+  });
 }
 
+/**
+ * Legacy wrapper — returns a flat scene list from the first detected
+ * project only. Kept for compatibility with call sites that still want
+ * the old shape.
+ */
+function extractScenes(text: string): ExtractedScene[] {
+  const projects = extractProjects(text);
+  return projects.length === 0 ? [] : projects[0].scenes;
+}
+
+// Lines like "Panel language:", "Colour:", "Score:", "Visual language:",
+// "Super:", "Duration:", "Camera:" are production metadata embedded inside
+// a scene description — not content. summarize() skips them so the per-scene
+// prompt captures the actual scene content instead of the metadata header
+// that happens to come first in the raw description block.
+const METADATA_LINE_RE =
+  /^\s*(panel|colour|color|score|visual|super|duration|camera|score|sound|music|shot|lens|palette|style|lighting|art\s*style)\s*[:—\-–]/i;
+
+// Production briefs often have a "panel format" line as the 2nd line of a
+// scene block (e.g. "Full bleed double spread — the most visually generous
+// panel in the book"). These don't start with "Panel:" so METADATA_LINE_RE
+// misses them, but they're clearly metadata because they contain no
+// sentence-terminator and describe layout/camera rather than story content.
+// A real content line almost always contains at least one ". " (period then
+// space or end-of-string) marking the end of a sentence; format-meta lines
+// use em-dashes instead.
+const HAS_SENTENCE_RE = /[.!?](\s|$)/;
+
 function summarize(title: string, description: string): string {
-  const firstSentence = description.split(/[.!?\n]/)[0]?.trim() || "";
+  const lines = description
+    .split(/\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length >= 10 && !METADATA_LINE_RE.test(l));
+
+  // Prefer the first line that contains a real sentence terminator.
+  // Fall back to the first non-metadata line if nothing has a period.
+  // Last resort: the full description as-is.
+  const contentLine =
+    lines.find((l) => HAS_SENTENCE_RE.test(l)) || lines[0] || description;
+  const firstSentence = contentLine.split(/[.!?]/)[0]?.trim() || "";
   const combined = `${title}. ${firstSentence}`;
   const words = combined.split(/\s+/);
   return words.length <= 25 ? combined : words.slice(0, 25).join(" ");
@@ -350,112 +455,151 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
     return { handled: false };
   }
 
-  const scenes = extractScenes(text);
-  if (scenes.length < 3) {
+  // Smart-split: a single brief may contain multiple projects (a 6-scene
+  // video pasted on top of a 10-scene graphic novel, etc.). Each detected
+  // project is processed independently — its own subText slice feeds
+  // style/video/creative-DNA extractors so they don't bleed settings
+  // across projects.
+  const projects = extractProjects(text);
+  const totalSceneCount = projects.reduce((n, p) => n + p.scenes.length, 0);
+  if (projects.length === 0 || totalSceneCount < 3) {
     return { handled: false };
   }
 
   // --- Personality: acknowledge the brief ---
   say(pick(REACTIONS.excited), "agent");
-  say(`${pick(REACTIONS.planning)} ${scenes.length} scenes, coming right up.`, "agent");
-
-  // --- Create project ---
-  const style = extractStyleGuide(text);
-  const briefWords = text.split(/\s+/).slice(0, 30).join(" ");
-  const brief = briefWords + (text.split(/\s+/).length > 30 ? "..." : "");
-
-  // --- Video intent detection ---
-  const isVideo = detectVideoIntent(text);
-  let videoStrategy: { mode: "overview" | "full" | "custom"; perScene: number[]; totalClips: number } | null = null;
-  let videoConsistency: {
-    lockedPrefix: string;
-    colorArc: string[];
-    characterLock: string;
-  } | null = null;
-
-  if (isVideo) {
-    say(`\uD83C\uDFAC Detected video brief — extracting durations and consistency layers...`, "system");
-    const durations = extractDurations(text);
-    const totalDuration = durations.reduce((s, d) => s + d.seconds, 0);
-
-    if (totalDuration === 0 || totalDuration <= 60) {
-      videoStrategy = planVideoStrategy("overview", durations.map((d) => d.seconds));
-      if (videoStrategy.perScene.length === 0) {
-        videoStrategy = {
-          mode: "overview",
-          totalClips: scenes.length,
-          perScene: scenes.map(() => 1),
-        };
-      }
-      say(`Strategy: overview \u2014 1 clip per scene at ~10s each (${scenes.length} clips total).`, "system");
-    } else {
-      videoStrategy = planVideoStrategy("overview", durations.map((d) => d.seconds));
-      const fullPlan = planVideoStrategy("full", durations.map((d) => d.seconds));
-      say(`\u26A0 Total declared duration: ${totalDuration}s. Each clip is 5\u201310s.\nUsing OVERVIEW: ${videoStrategy.totalClips} clips at 10s each.\nFor FULL coverage (${fullPlan.totalClips} clips covering ${totalDuration}s), reply: "full coverage"`, "system");
-    }
-
-    const ctxStore = useSessionContext.getState();
-    const ctx = ctxStore.context;
-    videoConsistency = {
-      lockedPrefix: buildLockedPrefix({
-        style: ctx?.style || style.visual_style || "",
-        characters: ctx?.characters || extractCharacterLock(text),
-        setting: ctx?.setting || "",
-        palette: ctx?.palette || style.color_palette || "",
-        mood: ctx?.mood || style.mood || "",
-        rules: ctx?.rules || "",
-      }),
-      colorArc: extractColorArc(text),
-      characterLock: extractCharacterLock(text),
-    };
-    say(`Locked prefix: "${videoConsistency.lockedPrefix.slice(0, 80)}..."`, "system");
+  if (projects.length === 1) {
+    say(`${pick(REACTIONS.planning)} ${totalSceneCount} scenes, coming right up.`, "agent");
+  } else {
+    const breakdown = projects.map((p) => p.scenes.length).join(" + ");
+    say(
+      `${pick(REACTIONS.planning)} I see ${projects.length} projects in this brief (${breakdown} scenes). I'll create them one after another.`,
+      "agent",
+    );
   }
 
-  const sceneObjects = scenes.map((s, i) => {
-    const baseScene: Record<string, unknown> = {
-      index: i,
-      title: s.title,
-      description: s.description,
-      prompt: s.prompt,
-      action: isVideo ? "video_keyframe" : "generate",
-    };
+  const createdProjects: Array<{ projectId: string; totalScenes: number }> = [];
 
-    if (isVideo && videoStrategy) {
-      const clipsPerScene = videoStrategy.perScene[i] || 1;
-      baseScene.clipsPerScene = clipsPerScene;
-      if (clipsPerScene > 1) {
-        baseScene.beats = breakSceneIntoBeatsFallback(s.description, clipsPerScene);
+  for (let pi = 0; pi < projects.length; pi++) {
+    const { subText, scenes } = projects[pi];
+    const projectLabel = projects.length > 1 ? ` (project ${pi + 1}/${projects.length})` : "";
+
+    // Per-project style + brief extracted from ONLY that project's subText
+    const style = extractStyleGuide(subText);
+    const briefWords = subText.split(/\s+/).slice(0, 30).join(" ");
+    const brief = briefWords + (subText.split(/\s+/).length > 30 ? "..." : "");
+
+    // Per-project video intent — one brief can mix "6-scene animated video"
+    // (project 1) with "10-scene graphic novel" (project 2) and each wants
+    // different handling.
+    const isVideo = detectVideoIntent(subText);
+    let videoStrategy: { mode: "overview" | "full" | "custom"; perScene: number[]; totalClips: number } | null = null;
+    let videoConsistency: {
+      lockedPrefix: string;
+      colorArc: string[];
+      characterLock: string;
+    } | null = null;
+
+    if (isVideo) {
+      say(`🎬 Detected video brief${projectLabel} — extracting durations and consistency layers...`, "system");
+      const durations = extractDurations(subText);
+      const totalDuration = durations.reduce((s, d) => s + d.seconds, 0);
+
+      if (totalDuration === 0 || totalDuration <= 60) {
+        videoStrategy = planVideoStrategy("overview", durations.map((d) => d.seconds));
+        if (videoStrategy.perScene.length === 0) {
+          videoStrategy = {
+            mode: "overview",
+            totalClips: scenes.length,
+            perScene: scenes.map(() => 1),
+          };
+        }
+        say(`Strategy: overview — 1 clip per scene at ~10s each (${scenes.length} clips total).`, "system");
+      } else {
+        videoStrategy = planVideoStrategy("overview", durations.map((d) => d.seconds));
+        const fullPlan = planVideoStrategy("full", durations.map((d) => d.seconds));
+        say(`⚠ Total declared duration: ${totalDuration}s. Each clip is 5–10s.\nUsing OVERVIEW: ${videoStrategy.totalClips} clips at 10s each.\nFor FULL coverage (${fullPlan.totalClips} clips covering ${totalDuration}s), reply: "full coverage"`, "system");
       }
-      const notes = extractPerSceneNotes(s.description);
-      if (notes.visualLanguage) baseScene.visualLanguage = notes.visualLanguage;
-      if (notes.cameraNotes) baseScene.cameraNotes = notes.cameraNotes;
-      if (notes.score) baseScene.score = notes.score;
+
+      const ctxStore = useSessionContext.getState();
+      const ctx = ctxStore.context;
+      videoConsistency = {
+        lockedPrefix: buildLockedPrefix({
+          style: ctx?.style || style.visual_style || "",
+          characters: ctx?.characters || extractCharacterLock(subText),
+          setting: ctx?.setting || "",
+          palette: ctx?.palette || style.color_palette || "",
+          mood: ctx?.mood || style.mood || "",
+          rules: ctx?.rules || "",
+        }),
+        colorArc: extractColorArc(subText),
+        characterLock: extractCharacterLock(subText),
+      };
+      say(`Locked prefix: "${videoConsistency.lockedPrefix.slice(0, 80)}..."`, "system");
     }
 
-    return baseScene;
-  });
+    const sceneObjects = scenes.map((s, i) => {
+      const baseScene: Record<string, unknown> = {
+        index: i,
+        title: s.title,
+        description: s.description,
+        prompt: s.prompt,
+        action: isVideo ? "video_keyframe" : "generate",
+      };
 
-  const createResult = await executeTool("project_create", {
-    brief,
-    style_guide: style,
-    scenes: sceneObjects,
-    is_video: isVideo,
-    video_consistency: videoConsistency,
-  });
+      if (isVideo && videoStrategy) {
+        const clipsPerScene = videoStrategy.perScene[i] || 1;
+        baseScene.clipsPerScene = clipsPerScene;
+        if (clipsPerScene > 1) {
+          baseScene.beats = breakSceneIntoBeatsFallback(s.description, clipsPerScene);
+        }
+        const notes = extractPerSceneNotes(s.description);
+        if (notes.visualLanguage) baseScene.visualLanguage = notes.visualLanguage;
+        if (notes.cameraNotes) baseScene.cameraNotes = notes.cameraNotes;
+        if (notes.score) baseScene.score = notes.score;
+      }
 
-  if (!createResult.success) {
-    say(`Hmm, couldn't set up the project: ${createResult.error}`, "agent");
+      return baseScene;
+    });
+
+    const createResult = await executeTool("project_create", {
+      brief,
+      style_guide: style,
+      scenes: sceneObjects,
+      is_video: isVideo,
+      video_consistency: videoConsistency,
+    });
+
+    if (!createResult.success) {
+      say(`Hmm, couldn't set up project${projectLabel}: ${createResult.error}`, "agent");
+      continue;
+    }
+
+    const data = createResult.data as Record<string, unknown>;
+    const projectId = data.project_id as string;
+    const totalScenes = data.total_scenes as number;
+    createdProjects.push({ projectId, totalScenes });
+
+    if (projects.length > 1) {
+      say(`Project ${pi + 1}/${projects.length} created: ${totalScenes} scenes`, "system");
+    }
+  }
+
+  if (createdProjects.length === 0) {
+    say(`Couldn't set up any projects from this brief.`, "agent");
     return { handled: false };
   }
 
-  const data = createResult.data as Record<string, unknown>;
-  const projectId = data.project_id as string;
-  const totalScenes = data.total_scenes as number;
-
   // --- Extract Creative DNA (SYNC — must complete before user asks for "8 more") ---
+  // For multi-project briefs, DNA is extracted from the FIRST project's
+  // subText since session-context is singleton. The second project's
+  // style lives in its scene prompts but the user can "style correction"
+  // it later. Single-project briefs are unaffected.
+  const firstProjectSubText = projects[0].subText;
+  const firstStyle = extractStyleGuide(firstProjectSubText);
   console.log("[Preprocessor] Starting Creative DNA extraction...");
   try {
-    const ctx = await extractCreativeContext(text);
+    const ctx = await extractCreativeContext(firstProjectSubText);
     console.log("[Preprocessor] Extraction result:", ctx);
     if (ctx) {
       useSessionContext.getState().setContext(ctx);
@@ -466,15 +610,15 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
       console.warn("[Preprocessor] Creative DNA extraction returned null — Gemini may not have returned structured format");
       // Fallback: build context from the style guide we already extracted
       const fallbackCtx = {
-        style: style.visual_style || "illustrated storyboard",
-        palette: style.color_palette || "",
+        style: firstStyle.visual_style || "illustrated storyboard",
+        palette: firstStyle.color_palette || "",
         characters: "",
         setting: "",
         rules: "",
-        mood: style.mood || "",
+        mood: firstStyle.mood || "",
       };
       // Try to extract character/setting from the brief's first paragraph
-      const firstPara = text.split("\n\n")[0] || text.slice(0, 300);
+      const firstPara = firstProjectSubText.split("\n\n")[0] || firstProjectSubText.slice(0, 300);
       const charMatch = firstPara.match(/(?:follows?|about|featuring|with)\s+(?:a\s+)?([^,.]+(?:girl|boy|woman|man|child|character)[^,.]*)/i);
       if (charMatch) fallbackCtx.characters = charMatch[1].trim().slice(0, 100);
       const settingMatch = firstPara.match(/(?:through|in|at|across)\s+(?:a\s+)?([^,.]+(?:village|city|town|forest|mountain|world|land)[^,.]*)/i);
@@ -494,12 +638,21 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
   // --- Hand off to agent for generation ---
   say(pick(REACTIONS.generating), "agent");
 
-  // Return agentPrompt so the agent calls project_generate (instead of
-  // the preprocessor driving the entire lifecycle). This lets the agent
-  // loop, auto-continue, and report results through the normal tool-use flow.
+  // Return agentPrompt so the agent calls project_generate for each
+  // project in sequence. The agent loops through project_generate until
+  // all scenes are done, then organizes the canvas.
+  const generateInstruction = createdProjects
+    .map(
+      (p, i) =>
+        `Project ${i + 1}: id="${p.projectId}" (${p.totalScenes} scenes)`,
+    )
+    .join("\n");
   return {
     handled: false,
-    agentPrompt: `Project "${projectId}" created with ${totalScenes} scenes. Call project_generate with project_id="${projectId}" to start generating. Keep calling project_generate until all scenes are done. After completion call canvas_organize.`,
+    agentPrompt:
+      createdProjects.length === 1
+        ? `Project "${createdProjects[0].projectId}" created with ${createdProjects[0].totalScenes} scenes. Call project_generate with project_id="${createdProjects[0].projectId}" to start generating. Keep calling project_generate until all scenes are done. After completion call canvas_organize.`
+        : `${createdProjects.length} projects created:\n${generateInstruction}\n\nFor EACH project above, call project_generate with that project_id, and keep calling project_generate for that same project until all its scenes are done. Then move to the next project. After all projects are complete, call canvas_organize once.`,
   };
 }
 
