@@ -14,6 +14,21 @@ export interface Lv2vSession {
   consecutiveEmpty: number;
   consecutivePublishFail: number;
   lastFpsTime: number;
+  /** In-flight guards — when true, the next tick skips instead of stacking
+   *  another fetch on top. Without this the publish loop would fire a new
+   *  fetch every 100ms regardless of whether the previous one returned,
+   *  eventually exhausting the browser's HTTP connection pool with
+   *  ERR_INSUFFICIENT_RESOURCES after a few thousand frames. */
+  publishInFlight: boolean;
+  pollInFlight: boolean;
+  /** Publish tick drops — stream frames older than the current interval
+   *  that got skipped because the previous publish was still pending. */
+  publishDropped: number;
+  /** Last blob: URL handed to onFrame, so we can URL.revokeObjectURL it
+   *  when we produce the next one. Without this, every frame we receive
+   *  leaks a blob URL in the browser — over 5000 frames that's real
+   *  memory pressure and contributes to the resource exhaustion. */
+  lastFrameUrl: string | null;
   /** Most recent params applied via controlStream — for HUD display */
   lastParams?: Record<string, unknown>;
   onFrame?: (url: string) => void;
@@ -74,6 +89,10 @@ export async function startStream(
     consecutiveEmpty: 0,
     consecutivePublishFail: 0,
     lastFpsTime: Date.now(),
+    publishInFlight: false,
+    pollInFlight: false,
+    publishDropped: 0,
+    lastFrameUrl: null,
   };
   sessions.set(streamId, session);
   return session;
@@ -144,35 +163,93 @@ export function startPublishing(
 
   session.publishTimer = setInterval(async () => {
     if (session.stopped) return;
+
+    // Back-pressure: if the previous publish hasn't returned yet, drop
+    // this frame entirely instead of stacking another fetch on top. This
+    // is the fix for ERR_INSUFFICIENT_RESOURCES — without it, a slow SDK
+    // (even 150ms / tick) leaks one socket per tick until Chrome's
+    // per-host connection pool is exhausted and ALL further fetches to
+    // sdk.daydream.monster fail. Dropping the frame is correct for
+    // live video: the next capture (100ms later) is newer anyway.
+    if (session.publishInFlight) {
+      session.publishDropped++;
+      return;
+    }
+
     const blob = getFrame();
     if (!blob || blob.size === 0) return;
+
+    session.publishInFlight = true;
+    const seq = session.publishSeq++;
     try {
       const r = await fetch(
-        `${sdkUrl()}/stream/${session.streamId}/publish?seq=${session.publishSeq++}`,
-        { method: "POST", headers, body: blob }
+        `${sdkUrl()}/stream/${session.streamId}/publish?seq=${seq}`,
+        { method: "POST", headers, body: blob },
       );
+      // ALWAYS drain the response body, even on error, so the browser
+      // can release the socket back to the connection pool. Without
+      // this, keepalive connections stay pinned waiting for the app to
+      // read the body, which (combined with the back-pressure bug
+      // above) is how we got to 5000+ pending requests before freeze.
+      try {
+        await r.text();
+      } catch {
+        /* body read failed — nothing to do, fetch is done */
+      }
       if (r.ok) {
         session.publishOk++;
         session.consecutivePublishFail = 0;
         if (session.publishOk <= 3) {
-          console.log(`[LV2V] Published frame #${session.publishOk}, seq=${session.publishSeq - 1}, blob=${blob.size}B`);
+          console.log(
+            `[LV2V] Published frame #${session.publishOk}, seq=${seq}, blob=${blob.size}B`,
+          );
         }
       } else {
         session.publishErr++;
         session.consecutivePublishFail = (session.consecutivePublishFail || 0) + 1;
         if (session.publishErr <= 5) {
-          console.log(`[LV2V] Publish error: HTTP ${r.status}, seq=${session.publishSeq - 1}`);
+          console.log(`[LV2V] Publish error: HTTP ${r.status}, seq=${seq}`);
         }
-        // Auto-stop if publish fails consistently (stream is dead server-side)
+        // 410 Gone = SDK has no record of this stream → it's dead forever, stop immediately
+        if (r.status === 410) {
+          console.warn(
+            `[LV2V] Stream ${session.streamId} is gone (SDK returned 410). Auto-stopping.`,
+          );
+          session.onError?.("Stream session lost — likely SDK restart. Stopping.");
+          stopStream(session);
+          return;
+        }
+        // Auto-stop after 30 consecutive failures
         if (session.consecutivePublishFail > 30) {
-          console.warn(`[LV2V] Stream dead — ${session.consecutivePublishFail} consecutive publish failures. Auto-stopping.`);
+          console.warn(
+            `[LV2V] Stream dead — ${session.consecutivePublishFail} consecutive publish failures. Auto-stopping.`,
+          );
           session.onError?.("Stream died — publish failures. Stopping.");
           stopStream(session);
           return;
         }
       }
-    } catch {
+    } catch (e) {
       session.publishErr++;
+      // Browser-level failures (ERR_INSUFFICIENT_RESOURCES, connection
+      // reset, offline) all land here. Count them against the same
+      // consecutive-failure budget as HTTP errors so a cascading pool
+      // exhaustion triggers the 30-strike auto-stop and frees the
+      // timer instead of spamming forever.
+      session.consecutivePublishFail = (session.consecutivePublishFail || 0) + 1;
+      if (session.publishErr <= 5) {
+        console.log(`[LV2V] Publish fetch threw: ${e}`);
+      }
+      if (session.consecutivePublishFail > 30) {
+        console.warn(
+          `[LV2V] Stream dead — ${session.consecutivePublishFail} consecutive fetch failures. Auto-stopping.`,
+        );
+        session.onError?.("Stream died — browser connection errors. Stopping.");
+        stopStream(session);
+        return;
+      }
+    } finally {
+      session.publishInFlight = false;
     }
   }, intervalMs);
 }
@@ -184,10 +261,18 @@ export function startPublishing(
 export function startPolling(session: Lv2vSession, intervalMs = 200) {
   session.pollTimer = setInterval(async () => {
     if (session.stopped) return;
+
+    // Same back-pressure as the publish loop: if the previous /frame
+    // poll hasn't returned yet, skip this tick instead of stacking
+    // another fetch. Without this the poll loop would also contribute
+    // to browser connection-pool exhaustion.
+    if (session.pollInFlight) return;
+    session.pollInFlight = true;
+
     try {
       const resp = await fetch(
         `${sdkUrl()}/stream/${session.streamId}/frame?seq=${session.pollSeq}`,
-        { headers: sdkHeaders() }
+        { headers: sdkHeaders() },
       );
       if (
         resp.status === 200 &&
@@ -195,19 +280,34 @@ export function startPolling(session: Lv2vSession, intervalMs = 200) {
       ) {
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
-        const seq = parseInt(
-          resp.headers.get("X-Trickle-Seq") || "0",
-          10
-        );
+        const seq = parseInt(resp.headers.get("X-Trickle-Seq") || "0", 10);
         session.pollSeq = seq;
         session.frameCount++;
         session.totalRecv++;
         session.consecutiveEmpty = 0;
+
+        // Revoke the PREVIOUS blob URL before handing over the new one.
+        // Without this every polled frame leaks a blob URL (and its
+        // underlying blob data) for the lifetime of the tab — over a
+        // 10-minute stream at 5Hz that's 3000 leaked blobs, which is
+        // real memory and contributes to the browser's resource
+        // exhaustion when combined with the connection-pool leak.
+        const prevUrl = session.lastFrameUrl;
+        session.lastFrameUrl = url;
+        if (prevUrl) {
+          try {
+            URL.revokeObjectURL(prevUrl);
+          } catch {
+            /* ignore */
+          }
+        }
         session.onFrame?.(url);
 
         // Log first few frames to console for debugging
         if (session.totalRecv <= 3) {
-          console.log(`[LV2V] Frame #${session.totalRecv} received, seq=${seq}, blob=${blob.size}B`);
+          console.log(
+            `[LV2V] Frame #${session.totalRecv} received, seq=${seq}, blob=${blob.size}B`,
+          );
         }
 
         // FPS reporting every 3s
@@ -217,8 +317,9 @@ export function startPolling(session: Lv2vSession, intervalMs = 200) {
             session.frameCount /
             ((now - session.lastFpsTime) / 1000)
           ).toFixed(1);
+          const droppedSuffix = session.publishDropped > 0 ? ` drop:${session.publishDropped}` : "";
           session.onStatus?.(
-            `${fps}fps | recv:${session.totalRecv} | pub:${session.publishOk}${session.publishErr ? " err:" + session.publishErr : ""}`
+            `${fps}fps | recv:${session.totalRecv} | pub:${session.publishOk}${session.publishErr ? " err:" + session.publishErr : ""}${droppedSuffix}`,
           );
           session.frameCount = 0;
           session.lastFpsTime = now;
@@ -228,12 +329,19 @@ export function startPolling(session: Lv2vSession, intervalMs = 200) {
           session.onStatus?.("First output frame received!");
         }
       } else {
+        // Always drain the body even on no-image responses so Chrome
+        // can release the connection back to the pool.
+        try {
+          await resp.text();
+        } catch {
+          /* ignore */
+        }
         session.consecutiveEmpty++;
 
         // Status update every ~3s while waiting
         if (session.consecutiveEmpty % 15 === 0) {
           session.onStatus?.(
-            `waiting for output\u2026 | pub:${session.publishOk}${session.publishErr ? " err:" + session.publishErr : ""}`
+            `waiting for output… | pub:${session.publishOk}${session.publishErr ? " err:" + session.publishErr : ""}`,
           );
         }
 
@@ -244,13 +352,18 @@ export function startPolling(session: Lv2vSession, intervalMs = 200) {
           session.totalRecv === 0
         ) {
           session.onError?.(
-            `Stream appears dead \u2014 published ${session.publishOk} frames but received none`
+            `Stream appears dead — published ${session.publishOk} frames but received none`,
           );
           session.consecutiveEmpty = 0; // don't spam
         }
       }
     } catch {
-      // Poll errors are non-fatal
+      // Browser-level errors (ERR_INSUFFICIENT_RESOURCES, offline, etc.)
+      // — non-fatal here, the publish loop is the one that auto-stops
+      // on consecutive errors. Just count it and keep trying.
+      session.consecutiveEmpty++;
+    } finally {
+      session.pollInFlight = false;
     }
   }, intervalMs);
 }
@@ -275,13 +388,31 @@ export async function stopStream(session: Lv2vSession): Promise<void> {
   session.stopped = true;
   if (session.publishTimer) clearInterval(session.publishTimer);
   if (session.pollTimer) clearInterval(session.pollTimer);
+  // Revoke the last outstanding blob URL so the browser can free its
+  // backing blob data. The <img> inside the Card component will drop
+  // its reference on the next re-render; by that point the revoked
+  // URL already freed the blob.
+  if (session.lastFrameUrl) {
+    try {
+      URL.revokeObjectURL(session.lastFrameUrl);
+    } catch {
+      /* ignore */
+    }
+    session.lastFrameUrl = null;
+  }
   sessions.delete(session.streamId);
   try {
-    await fetch(`${sdkUrl()}/stream/${session.streamId}/stop`, {
+    const r = await fetch(`${sdkUrl()}/stream/${session.streamId}/stop`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...sdkHeaders() },
       body: "{}",
     });
+    // Drain the body so the connection returns to the pool cleanly.
+    try {
+      await r.text();
+    } catch {
+      /* ignore */
+    }
   } catch {
     // Best-effort stop
   }

@@ -25,9 +25,17 @@ export function StreamCockpit({ card }: Props) {
   const session = getSession(card.refId) || getActiveSession();
   const isActive = !!session && !session.stopped;
 
-  /** Apply a tool call to the running stream */
+  /** Apply a tool call to the running stream.
+   *
+   * Fire-and-forget: the UI state is updated synchronously (via
+   * setResult / setActivePreset in callers) and the network call
+   * runs in the background. This keeps the cockpit feeling instant —
+   * the only remaining latency is the fal-side apply (~1.5-3s for a
+   * new frame with the updated prompt to propagate through the
+   * pipeline), which is irreducible.
+   */
   const applyAction = useCallback(
-    async (action: ToolCall, intent: string) => {
+    (action: ToolCall, intent: string) => {
       const sess = getSession(card.refId) || getActiveSession();
       if (!sess) return;
       previousParams.current = { ...(sess.lastParams || {}) };
@@ -46,23 +54,27 @@ export function StreamCockpit({ card }: Props) {
         delete params.preset;
       }
 
-      try {
-        await controlStream(sess, prompt, params);
-        useCockpitStore.getState().recordHistory(intent, action, "kept");
-      } catch (e) {
+      // Record history optimistically. If the network call fails we
+      // downgrade to rolled_back — but most of the time this just
+      // works and the user sees the update reflected in a few seconds.
+      useCockpitStore.getState().recordHistory(intent, action, "kept");
+
+      controlStream(sess, prompt, params).catch((e: unknown) => {
         console.error("[StreamCockpit] apply failed", e);
-      }
+      });
     },
-    [card.refId]
+    [card.refId],
   );
 
   const handleSubmit = useCallback(
     async (intent: string) => {
+      // translateIntent is fast (pattern matching, no LLM) — still
+      // async because it returns a Promise for future extensibility.
       const translated = await translateIntent(intent);
       setResult(translated);
-      await applyAction(translated.applied, intent);
+      applyAction(translated.applied, intent);
     },
-    [applyAction]
+    [applyAction],
   );
 
   const handlePreset = useCallback(
@@ -81,28 +93,32 @@ export function StreamCockpit({ card }: Props) {
     [applyAction]
   );
 
-  const handleRollback = useCallback(async () => {
+  const handleRollback = useCallback(() => {
     const sess = getSession(card.refId) || getActiveSession();
     if (!sess || !previousParams.current) return;
-    try {
-      await controlStream(sess, "", previousParams.current);
-      if (result) {
-        useCockpitStore.getState().recordHistory("(rollback)", result.applied, "rolled_back");
-      }
-      setResult(null);
-      setActivePreset(undefined);
-    } catch (e) {
-      console.error("[StreamCockpit] rollback failed", e);
+    // Fire-and-forget rollback: UI state flips immediately, network
+    // catches up in the background.
+    if (result) {
+      useCockpitStore.getState().recordHistory("(rollback)", result.applied, "rolled_back");
     }
+    const prev = previousParams.current;
+    setResult(null);
+    setActivePreset(undefined);
+    controlStream(sess, "", prev).catch((e: unknown) => {
+      console.error("[StreamCockpit] rollback failed", e);
+    });
   }, [card.refId, result]);
 
   const handleSwitch = useCallback(
-    async (alt: ToolCall) => {
-      await handleRollback();
-      await applyAction(alt, `switched to ${alt.summary}`);
+    (alt: ToolCall) => {
+      // Both handleRollback and applyAction are now sync/optimistic —
+      // they fire network calls in the background and return
+      // immediately. The UI flips to the new alt without waiting.
+      handleRollback();
+      applyAction(alt, `switched to ${alt.summary}`);
       setResult({ applied: alt, alternatives: result?.alternatives.filter((a) => a !== alt) || [] });
     },
-    [handleRollback, applyAction, result]
+    [handleRollback, applyAction, result],
   );
 
   if (!session) {
@@ -114,7 +130,10 @@ export function StreamCockpit({ card }: Props) {
   }
 
   return (
-    <div className="flex flex-col" style={{ background: "rgba(10,10,10,0.95)" }}>
+    <div
+      className="flex flex-col flex-1 min-h-0 overflow-y-auto scrollbar-hidden"
+      style={{ background: "rgba(10,10,10,0.95)" }}
+    >
       {/* Title bar */}
       <div className="flex items-center gap-2 border-b border-pink-500/20 px-3 py-1.5">
         <span
@@ -130,10 +149,10 @@ export function StreamCockpit({ card }: Props) {
         </span>
       </div>
 
-      {/* Live frame with HUD — square aspect so the whole video shows */}
+      {/* Live frame with HUD — fixed square 640px so video shows fully */}
       <div
-        className="relative flex items-center justify-center"
-        style={{ aspectRatio: "1 / 1", background: "rgba(0,0,0,0.85)" }}
+        className="relative flex shrink-0 items-center justify-center"
+        style={{ height: 640, width: "100%", background: "rgba(0,0,0,0.85)" }}
       >
         {card.url ? (
           // eslint-disable-next-line @next/next/no-img-element

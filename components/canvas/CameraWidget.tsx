@@ -19,13 +19,32 @@ import { useChatStore } from "@/lib/chat/store";
 export function CameraWidget() {
   const [active, setActive] = useState(false);
   const [minimized, setMinimized] = useState(false);
-  const [streaming, setStreaming] = useState(false);
+  // `streamCount` is derived state (length of sessionsRef at last update).
+  // The authoritative source is sessionsRef; streamCount just drives
+  // re-renders. `streaming` is true iff at least one stream is active.
+  const [streamCount, setStreamCount] = useState(0);
+  const streaming = streamCount > 0;
   const [status, setStatus] = useState("");
   const [promptInput, setPromptInput] = useState("");
   const [currentPrompt, setCurrentPrompt] = useState("");
-  const [useAgent, setUseAgent] = useState(true);
+  // Default to DIRECT mode. "AI" mode sends the text through the main
+  // chat agent which takes 2-5 seconds per prompt update because of the
+  // Gemini round-trip + tool schemas + reasoning. For simple descriptive
+  // prompts like "superman fights batman in marvel style" the direct
+  // path (controlStream → SDK → fal, ~1.5-3s dominated by fal apply
+  // latency) is strictly faster. Agent mode remains available for
+  // complex asks like "make it more dreamy" that benefit from
+  // interpretation, but is no longer the default.
+  const [useAgent, setUseAgent] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const sessionRef = useRef<Lv2vSession | null>(null);
+  // Map of active LV2V sessions keyed by the canvas card id that owns
+  // each stream. Multiple concurrent streams against the same webcam
+  // feed are supported — each session publishes its own captured
+  // frames at 10fps to its own trickle channel, so they don't share
+  // any state on the SDK side. The per-stream asyncio.Lock in
+  // sdk-service-build/app.py (feat/sdk-nonblocking-io branch)
+  // guarantees correct serialization per stream.
+  const sessionsRef = useRef<Map<string, Lv2vSession>>(new Map());
   const promptRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
@@ -52,17 +71,22 @@ export function CameraWidget() {
   }, []);
   const onDragEnd = useCallback(() => { dragRef.current = null; }, []);
 
-  // Clean up stream on page unload to prevent orphaned streams on the SDK
+  // Clean up ALL active streams on page unload to prevent orphans on the SDK.
+  // Each session is stopped independently; the SDK's reaper would also kill
+  // them after ~2min idle, but explicit stop is cleaner.
   useEffect(() => {
     const cleanup = () => {
-      if (sessionRef.current && !sessionRef.current.stopped) {
-        stopStream(sessionRef.current);
+      for (const session of sessionsRef.current.values()) {
+        if (!session.stopped) {
+          stopStream(session);
+        }
       }
+      sessionsRef.current.clear();
     };
     window.addEventListener("beforeunload", cleanup);
     return () => {
       window.removeEventListener("beforeunload", cleanup);
-      cleanup(); // also clean on component unmount (HMR, navigation)
+      cleanup();
     };
   }, []);
 
@@ -80,8 +104,24 @@ export function CameraWidget() {
     }
   }, [addMessage]);
 
-  // Track frame extractor for non-webcam sources (so we can clean up on stop)
-  const extractorRef = useRef<FrameExtractor | null>(null);
+  // Per-stream frame extractors for non-webcam sources, keyed by
+  // canvas card id so multiple concurrent streams can each own their
+  // own extractor (same webcam-style fan-out, for image/video sources).
+  const extractorsRef = useRef<Map<string, FrameExtractor>>(new Map());
+
+  // Helper: add a new session to the map and bump the re-render counter.
+  const registerSession = useCallback((cardId: string, session: Lv2vSession) => {
+    sessionsRef.current.set(cardId, session);
+    setStreamCount(sessionsRef.current.size);
+  }, []);
+
+  // Helper: remove a session from the map (after stop or error).
+  const unregisterSession = useCallback((cardId: string) => {
+    sessionsRef.current.delete(cardId);
+    extractorsRef.current.get(cardId)?.stop();
+    extractorsRef.current.delete(cardId);
+    setStreamCount(sessionsRef.current.size);
+  }, []);
 
   // Listen for agent-triggered LV2V start (from chat)
   useEffect(() => {
@@ -98,33 +138,36 @@ export function CameraWidget() {
       const hasNonWebcamSource = detail.source && detail.source.type !== "webcam" && detail.source.url;
 
       if (hasNonWebcamSource) {
-        // --- Non-webcam source: use FrameExtractor (image/video/url) ---
-        if (streaming) return;
-        setStreaming(true);
+        // --- Non-webcam source: each call creates a new stream + card,
+        // even if other streams (webcam or otherwise) are already
+        // running. Supports N concurrent streams per source card.
         setStatus("Starting stream from source\u2026");
         setCurrentPrompt(detail.prompt);
+        let cardId: string | undefined;
         try {
           const session = await startStream(detail.prompt, detail.params);
-          sessionRef.current = session;
 
-          // Use existing stream card from scope_start if provided, otherwise create one
           const cardRefId = detail.streamCardId
-            ? useCanvasStore.getState().cards.find(c => c.id === detail.streamCardId)?.refId || `lv2v_${Date.now()}`
+            ? useCanvasStore.getState().cards.find((c) => c.id === detail.streamCardId)?.refId || `lv2v_${Date.now()}`
             : `lv2v_${Date.now()}`;
-          let card;
-          if (detail.streamCardId) {
-            card = useCanvasStore.getState().cards.find(c => c.id === detail.streamCardId);
-          }
+          let card = detail.streamCardId
+            ? useCanvasStore.getState().cards.find((c) => c.id === detail.streamCardId)
+            : undefined;
           if (!card) {
-            card = addCard({ type: "stream", title: `LV2V: ${detail.prompt.slice(0, 25)}`, refId: cardRefId });
+            card = addCard({
+              type: "stream",
+              title: `LV2V: ${detail.prompt.slice(0, 25)}`,
+              refId: cardRefId,
+            });
           }
+          cardId = card.id;
           linkRefIdToStream(card.refId, session.streamId);
+          registerSession(cardId, session);
 
           setStatus("Waiting for pipeline\u2026");
           addMessage(`Starting LV2V from ${detail.source!.type} source\u2026`, "system");
           await waitForReady(session, (phase) => setStatus(phase));
 
-          // Initialize frame extractor for the source
           const sourceType = detail.source!.type as "image" | "video" | "url";
           const extractor = new FrameExtractor({
             type: sourceType,
@@ -133,28 +176,37 @@ export function CameraWidget() {
             quality: 0.8,
           });
           await extractor.init();
-          extractorRef.current = extractor;
+          extractorsRef.current.set(cardId, extractor);
 
-          // Use startPublishing with the extractor's captureFrame as the frame getter
           startPublishing(session, () => extractor.captureFrame(), 100);
 
           session.onFrame = (url) => updateCard(card!.id, { url });
           session.onStatus = (msg) => setStatus(msg);
-          session.onError = (err) => addMessage(`LV2V: ${err}`, "system");
+          session.onError = (err) => {
+            addMessage(`LV2V: ${err}`, "system");
+            if (cardId) unregisterSession(cardId);
+          };
           startPolling(session, 200);
 
-          setStatus("Streaming");
+          setStatus(`Streaming (${sessionsRef.current.size} active)`);
           addMessage(`LV2V started from ${sourceType}: ${detail.prompt}`, "agent");
         } catch (e) {
-          extractorRef.current?.stop();
-          extractorRef.current = null;
-          setStreaming(false);
+          if (cardId) unregisterSession(cardId);
           setStatus("");
-          addMessage(`LV2V error: ${e instanceof Error ? e.message : "Unknown"}`, "system");
+          addMessage(
+            `LV2V error: ${e instanceof Error ? e.message : "Unknown"}`,
+            "system",
+          );
         }
       } else {
-        // --- Webcam source (original flow) ---
-        if (!active && videoRef.current) {
+        // --- Webcam source: one webcam feed, N concurrent streams.
+        // Each lv2v-start event creates a new session and a new
+        // stream card. The webcam is only started once (first call);
+        // subsequent calls share the same video element, each running
+        // its own startPublishing interval that captures fresh frames
+        // from the shared video feed 10 times per second.
+        if (!videoRef.current) return;
+        if (!active || !videoRef.current.srcObject) {
           try {
             await startWebcam(videoRef.current);
             setActive(true);
@@ -165,84 +217,91 @@ export function CameraWidget() {
           }
           await new Promise((r) => setTimeout(r, 500));
         }
-        if (!streaming && videoRef.current) {
-          setStreaming(true);
-          setStatus("Starting stream\u2026");
-          setCurrentPrompt(detail.prompt);
-          try {
-            const session = await startStream(detail.prompt, detail.params);
-            sessionRef.current = session;
-            const cardRefId = `lv2v_${Date.now()}`;
-            const card = addCard({ type: "stream", title: `LV2V: ${detail.prompt.slice(0, 25)}`, refId: cardRefId });
-            linkRefIdToStream(cardRefId, session.streamId);
 
-            setStatus("Waiting for pipeline\u2026");
-            addMessage("Waiting for LV2V pipeline\u2026", "system");
-            await waitForReady(session, (phase) => setStatus(phase));
+        setStatus("Starting stream\u2026");
+        setCurrentPrompt(detail.prompt);
+        let cardId: string | undefined;
+        try {
+          const session = await startStream(detail.prompt, detail.params);
+          const cardRefId = `lv2v_${Date.now()}`;
+          const card = addCard({
+            type: "stream",
+            title: `LV2V: ${detail.prompt.slice(0, 25)}`,
+            refId: cardRefId,
+          });
+          cardId = card.id;
+          linkRefIdToStream(cardRefId, session.streamId);
+          registerSession(cardId, session);
 
-            const video = videoRef.current!;
-            if (!video.srcObject || video.videoWidth === 0) {
-              await startWebcam(video);
-              await new Promise((r) => setTimeout(r, 1000));
-            }
+          setStatus("Waiting for pipeline\u2026");
+          addMessage("Waiting for LV2V pipeline\u2026", "system");
+          await waitForReady(session, (phase) => setStatus(phase));
 
-            startPublishing(session, () => captureFrame(video), 100);
-            session.onFrame = (url) => updateCard(card.id, { url });
-            session.onStatus = (msg) => setStatus(msg);
-            session.onError = (err) => addMessage(`LV2V: ${err}`, "system");
-            startPolling(session, 200);
-
-            setStatus("Streaming");
-            addMessage(`LV2V started: ${detail.prompt}`, "agent");
-          } catch (e) {
-            setStreaming(false);
-            setStatus("");
-            addMessage(`LV2V error: ${e instanceof Error ? e.message : "Unknown"}`, "system");
+          const video = videoRef.current!;
+          if (!video.srcObject || video.videoWidth === 0) {
+            await startWebcam(video);
+            await new Promise((r) => setTimeout(r, 1000));
           }
+
+          startPublishing(session, () => captureFrame(video), 100);
+          session.onFrame = (url) => updateCard(card.id, { url });
+          session.onStatus = (msg) => setStatus(msg);
+          session.onError = (err) => {
+            addMessage(`LV2V: ${err}`, "system");
+            if (cardId) unregisterSession(cardId);
+          };
+          startPolling(session, 200);
+
+          setStatus(`Streaming (${sessionsRef.current.size} active)`);
+          addMessage(`LV2V started: ${detail.prompt}`, "agent");
+        } catch (e) {
+          if (cardId) unregisterSession(cardId);
+          setStatus("");
+          addMessage(
+            `LV2V error: ${e instanceof Error ? e.message : "Unknown"}`,
+            "system",
+          );
         }
       }
     };
     window.addEventListener("lv2v-start", handler);
     return () => window.removeEventListener("lv2v-start", handler);
-  }, [active, streaming, addCard, updateCard, addMessage]);
+  }, [active, addCard, updateCard, addMessage, registerSession, unregisterSession]);
 
   const handleStop = useCallback(() => {
+    // Stop ALL active sessions and clean up their extractors.
+    for (const [cardId, session] of sessionsRef.current.entries()) {
+      stopStream(session);
+      extractorsRef.current.get(cardId)?.stop();
+    }
+    sessionsRef.current.clear();
+    extractorsRef.current.clear();
+    setStreamCount(0);
+    setCurrentPrompt("");
     stopWebcam();
     setActive(false);
-    if (extractorRef.current) {
-      extractorRef.current.stop();
-      extractorRef.current = null;
-    }
-    if (sessionRef.current) {
-      stopStream(sessionRef.current);
-      sessionRef.current = null;
-      setStreaming(false);
-      setCurrentPrompt("");
-    }
   }, []);
 
   const handleLv2v = useCallback(async () => {
-    if (!videoRef.current || streaming) return;
+    if (!videoRef.current) return;
     const prompt = window.prompt("LV2V style prompt:", "cyberpunk neon city");
     if (!prompt) return;
 
-    setStreaming(true);
     setStatus("Starting stream\u2026");
     setCurrentPrompt(prompt);
+    let cardId: string | undefined;
 
     try {
       const session = await startStream(prompt);
-      sessionRef.current = session;
-
       const cardRefId = `lv2v_${Date.now()}`;
       const card = addCard({
         type: "stream",
         title: `LV2V: ${prompt.slice(0, 30)}`,
         refId: cardRefId,
       });
-
-      // Link card refId to SDK stream ID so agent can use either
+      cardId = card.id;
       linkRefIdToStream(cardRefId, session.streamId);
+      registerSession(cardId, session);
 
       setStatus("Waiting for pipeline (2-5 min cold start)\u2026");
       addMessage("Waiting for pipeline to be ready (2-5 min on cold start)\u2026", "system");
@@ -257,7 +316,7 @@ export function CameraWidget() {
         await new Promise((r) => setTimeout(r, 1000));
         if (!video.srcObject || video.videoWidth === 0) {
           addMessage("Camera unavailable \u2014 cannot publish frames", "system");
-          setStreaming(false);
+          if (cardId) unregisterSession(cardId);
           setStatus("");
           return;
         }
@@ -265,69 +324,89 @@ export function CameraWidget() {
 
       addMessage("Pipeline ready \u2014 starting frame capture", "agent");
 
-      // Publish webcam frames at ~10fps (only AFTER pipeline ready)
       startPublishing(session, () => captureFrame(video), 100);
 
-      // Wire up callbacks
-      session.onFrame = (url) => {
-        updateCard(card.id, { url });
-      };
-      session.onStatus = (msg) => {
-        setStatus(msg);
-      };
+      session.onFrame = (url) => updateCard(card.id, { url });
+      session.onStatus = (msg) => setStatus(msg);
       session.onError = (err) => {
         addMessage(`LV2V: ${err}`, "system");
+        if (cardId) unregisterSession(cardId);
       };
 
       startPolling(session, 200);
 
-      setStatus("Publishing cam @ 10fps\u2026");
+      setStatus(`Streaming (${sessionsRef.current.size} active)`);
       addMessage(`LV2V stream started: ${prompt}`, "agent");
     } catch (e) {
-      setStreaming(false);
+      if (cardId) unregisterSession(cardId);
       setStatus("");
       setCurrentPrompt("");
       addMessage(
         `LV2V error: ${e instanceof Error ? e.message : "Unknown"}`,
-        "system"
+        "system",
       );
     }
-  }, [streaming, addCard, updateCard, addMessage]);
+  }, [addCard, updateCard, addMessage, registerSession, unregisterSession]);
 
-  /** Send a direct control command to the LV2V stream */
+  /** Send a direct control command to EVERY active LV2V stream.
+   *
+   * With multi-stream support, the camera widget's inline prompt input
+   * broadcasts to all currently-running sessions. For per-stream
+   * control, use the individual stream card's cockpit UI instead.
+   *
+   * Optimistic UI: the confirmation message and currentPrompt state are
+   * updated synchronously BEFORE the network fires, so the user sees
+   * immediate feedback. The actual fal-side apply still takes ~1.5-3s
+   * (frame propagation through the pipeline) but that's irreducible.
+   * We fire-and-forget the controlStream() calls so the UI never blocks
+   * on the network round-trip.
+   */
   const handleDirectControl = useCallback(
-    async (text: string) => {
-      if (!sessionRef.current || !text.trim()) return;
-      try {
-        await controlStream(sessionRef.current, text.trim());
-        setCurrentPrompt(text.trim());
-        addMessage(`LV2V prompt: ${text.trim()}`, "system");
-      } catch (e) {
-        addMessage(
-          `Control error: ${e instanceof Error ? e.message : "Unknown"}`,
-          "system"
-        );
-      }
+    (text: string) => {
+      const sessions = Array.from(sessionsRef.current.values());
+      const trimmed = text.trim();
+      if (sessions.length === 0 || !trimmed) return;
+
+      // Optimistic: update local state + show confirmation IMMEDIATELY.
+      setCurrentPrompt(trimmed);
+      addMessage(
+        `\u2192 ${trimmed}${sessions.length > 1 ? ` (${sessions.length} streams)` : ""}`,
+        "system",
+      );
+
+      // Fire the network calls in parallel without awaiting. Errors
+      // surface as a follow-up system message but don't block the UI.
+      Promise.all(sessions.map((s) => controlStream(s, trimmed))).catch(
+        (e: unknown) => {
+          addMessage(
+            `Control error: ${e instanceof Error ? e.message : "Unknown"}`,
+            "system",
+          );
+        },
+      );
     },
-    [addMessage]
+    [addMessage],
   );
 
   /** Send intent to the agent to interpret via live-director skill */
   const handleAgentControl = useCallback(
     (text: string) => {
-      if (!sessionRef.current || !text.trim()) return;
-      const streamId = sessionRef.current.streamId;
-      // Send to chat agent with context about the active stream
+      const sessions = Array.from(sessionsRef.current.values());
+      if (sessions.length === 0 || !text.trim()) return;
+      // Use the most recently started session's stream id as the
+      // implicit target context — the agent can still look at the
+      // canvas to pick a different one if the intent mentions it.
+      const lastSession = sessions[sessions.length - 1];
       window.dispatchEvent(
         new CustomEvent("chat-prefill", {
           detail: {
-            text: `[LV2V stream ${streamId} active, current prompt: "${currentPrompt}"] ${text.trim()}`,
+            text: `[LV2V stream ${lastSession.streamId} active (${sessions.length} total), current prompt: "${currentPrompt}"] ${text.trim()}`,
             autoSend: true,
           },
-        })
+        }),
       );
     },
-    [currentPrompt]
+    [currentPrompt],
   );
 
   const handlePromptSubmit = useCallback(() => {
@@ -427,21 +506,33 @@ export function CameraWidget() {
         className={active && !minimized ? "w-full bg-black" : "hidden"}
       />
 
-      {/* Stream info bar — shows FPS, pipeline, session stats */}
-      {streaming && !minimized && (
+      {/* Stream info bar — shows FPS, pipeline, session stats.
+          With multi-stream support, the numbers are aggregated across
+          all active sessions (pub/recv are sums). For per-stream
+          detail, use each stream card's cockpit UI. */}
+      {streaming && !minimized && (() => {
+        const sessions = Array.from(sessionsRef.current.values());
+        const anyStopped = sessions.some((s) => s.stopped);
+        const allStopped = sessions.length > 0 && sessions.every((s) => s.stopped);
+        const sumPub = sessions.reduce((acc, s) => acc + (s.publishOk || 0), 0);
+        const sumRecv = sessions.reduce((acc, s) => acc + (s.totalRecv || 0), 0);
+        const sumErr = sessions.reduce((acc, s) => acc + (s.publishErr || 0), 0);
+        return (
         <div className="flex items-center gap-2 border-t border-[var(--border)] bg-white/[0.02] px-2 py-1 text-[8px] text-[var(--text-dim)]">
-          <span style={{ color: sessionRef.current?.stopped ? "#ef4444" : "#10b981" }}>
-            {sessionRef.current?.stopped ? "Stopped" : "Live"}
+          <span style={{ color: allStopped ? "#ef4444" : "#10b981" }}>
+            {allStopped ? "Stopped" : anyStopped ? "Partial" : "Live"}
           </span>
-          <span>pub:{sessionRef.current?.publishOk || 0}</span>
-          <span>recv:{sessionRef.current?.totalRecv || 0}</span>
-          {sessionRef.current?.publishErr ? (
-            <span style={{ color: "#f59e0b" }}>err:{sessionRef.current.publishErr}</span>
+          <span>streams:{sessions.length}</span>
+          <span>pub:{sumPub}</span>
+          <span>recv:{sumRecv}</span>
+          {sumErr ? (
+            <span style={{ color: "#f59e0b" }}>err:{sumErr}</span>
           ) : null}
           <span className="flex-1" />
           <span>longlive</span>
         </div>
-      )}
+        );
+      })()}
 
       {/* LV2V Prompt Control Bar — visible when streaming */}
       {streaming && !minimized && (
