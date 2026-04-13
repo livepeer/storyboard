@@ -1,7 +1,11 @@
 import { useSkillStore } from "./store";
 import { getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { useCanvasStore } from "@/lib/canvas/store";
-import { useSessionContext } from "@/lib/agents/session-context";
+import {
+  useSessionContext,
+  generateContextFromDescription,
+  type CreativeContext,
+} from "@/lib/agents/session-context";
 import { handleOrganize, handleLayoutCommand } from "@/lib/layout/commands";
 
 interface ParsedCommand {
@@ -46,6 +50,11 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return saveCards(cmd.args);
     case "context":
       return showContext(cmd.args);
+    case "context/gen":
+      // Allow `/context/gen <description>` as a shorthand alias for
+      // `/context gen <description>` (parser splits on first whitespace
+      // so this only fires if the user uses a slash separator).
+      return contextGen(cmd.args);
     default:
       return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /capabilities, /organize, /layout, /save, /export`;
   }
@@ -176,16 +185,24 @@ function showCapabilities(): string {
   return lines.join("\n");
 }
 
-function showContext(args?: string): string {
+async function showContext(args?: string): Promise<string> {
   const store = useSessionContext.getState();
 
   if (!args || args.trim() === "") {
     // /context — show current
     if (!store.context) {
-      return "No active creative context.\nUse /context edit <field> <value> to set, or paste a storyboard brief to auto-extract.";
+      return [
+        "No active creative context.",
+        "",
+        "Quick start:",
+        "  /context gen <description>       — let the agent build it from a description",
+        "  /context edit <field> <value>    — set a single field manually",
+        "",
+        "Or paste a storyboard brief and it will be auto-extracted.",
+      ].join("\n");
     }
     const ctx = store.context;
-    return [
+    const lines = [
       `Creative Context: ${store.summary}`,
       "",
       `  Style:      ${ctx.style || "(not set)"}`,
@@ -195,11 +212,23 @@ function showContext(args?: string): string {
       `  Rules:      ${ctx.rules || "(not set)"}`,
       `  Mood:       ${ctx.mood || "(not set)"}`,
       "",
-      "Commands: /context edit <field> <value> | /context add <field> <value> | /context clear",
-    ].join("\n");
+      "Commands: /context gen <description> | /context edit <field> <value> | /context add <field> <value> | /context clear",
+    ];
+    if (store.pendingGen) {
+      lines.push("");
+      lines.push(`(pending /context gen clarification — answer with /context gen <your answers>)`);
+    }
+    return lines.join("\n");
   }
 
   const sub = args.trim();
+
+  // /context gen <description> — LLM-generated/enriched context with
+  // multi-turn clarification support.
+  const genMatch = sub.match(/^gen(?:\s+([\s\S]+))?$/i);
+  if (genMatch) {
+    return contextGen(genMatch[1]?.trim() || "");
+  }
 
   // /context clear
   if (sub === "clear") {
@@ -210,10 +239,9 @@ function showContext(args?: string): string {
   // /context edit <field> <value> — overwrite a field
   const editMatch = sub.match(/^edit\s+(style|palette|characters|setting|rules|mood)\s+(.+)$/i);
   if (editMatch) {
-    const field = editMatch[1].toLowerCase() as keyof import("@/lib/agents/session-context").CreativeContext;
+    const field = editMatch[1].toLowerCase() as keyof CreativeContext;
     const value = editMatch[2].trim();
     if (!store.context) {
-      // Create new context with just this field
       store.setContext({ style: "", palette: "", characters: "", setting: "", rules: "", mood: "", [field]: value });
     } else {
       store.updateContext({ [field]: value });
@@ -229,7 +257,7 @@ function showContext(args?: string): string {
   // /context add <field> <value> — append to a field
   const addMatch = sub.match(/^add\s+(style|palette|characters|setting|rules|mood)\s+(.+)$/i);
   if (addMatch) {
-    const field = addMatch[1].toLowerCase() as keyof import("@/lib/agents/session-context").CreativeContext;
+    const field = addMatch[1].toLowerCase() as keyof CreativeContext;
     const value = addMatch[2].trim();
     if (!store.context) {
       store.setContext({ style: "", palette: "", characters: "", setting: "", rules: "", mood: "", [field]: value });
@@ -246,7 +274,137 @@ function showContext(args?: string): string {
     return "Usage: /context add <field> <value>\nFields: style, palette, characters, setting, rules, mood\nExample: /context add characters white cat companion";
   }
 
-  return `Unknown: /context ${sub}\nCommands: /context | /context edit <field> <value> | /context add <field> <value> | /context clear`;
+  return `Unknown: /context ${sub}\nCommands: /context | /context gen <description> | /context edit <field> <value> | /context add <field> <value> | /context clear`;
+}
+
+/**
+ * `/context gen <description>` — LLM produces (or extends) a CreativeContext
+ * from a freeform description.
+ *
+ * Behavior:
+ *  - Empty args: prints usage and bails.
+ *  - If a previous /context gen left a pendingGen (because the LLM asked
+ *    clarifying questions), the new args are treated as the user's answers
+ *    and merged with the original description, then re-sent to the LLM.
+ *  - Calls generateContextFromDescription. The LLM either returns a full
+ *    enriched CreativeContext (Format A) or a small list of clarifying
+ *    questions (Format B). On B we store a pendingGen and return the
+ *    questions to the user; the next /context gen finishes the loop.
+ *  - On success, if a context already exists, we EXTEND it (append new
+ *    detail to existing fields, preserve user-set values). Otherwise we
+ *    create the context from scratch.
+ *
+ * Latency: one Gemini round-trip (~1-3s). The slash command runner
+ * already prints the user's input as a chat message before awaiting,
+ * so the user sees their command echoed and a system response shortly
+ * after.
+ */
+async function contextGen(rawArgs: string): Promise<string> {
+  const args = (rawArgs || "").trim();
+  if (!args) {
+    return [
+      "Usage: /context gen <description>",
+      "",
+      "Examples:",
+      '  /context gen Studio Ghibli short film about a fisherman\'s daughter and her sea otter friend on a windy island',
+      '  /context gen cyberpunk noir detective in neon-drenched Tokyo, 2099, rainy nights, a lone synthetic cat companion',
+      "",
+      "If your description is too vague, the agent will ask 1-3 quick questions",
+      "you can answer by running /context gen <answers> again.",
+    ].join("\n");
+  }
+
+  const store = useSessionContext.getState();
+
+  // Multi-turn merge: if a clarification is pending, treat the new args
+  // as the answers to those questions and merge with the original
+  // description before re-asking the LLM.
+  let effective = args;
+  const pending = store.pendingGen;
+  // Expire pending gens older than 10 min so a stale one doesn't quietly
+  // re-merge into an unrelated new generation.
+  const isPendingFresh = pending && Date.now() - pending.startedAt < 10 * 60 * 1000;
+  if (isPendingFresh && pending) {
+    effective = [
+      pending.originalDescription,
+      "",
+      "Additional details:",
+      args,
+    ].join("\n");
+  }
+
+  const result = await generateContextFromDescription(effective);
+
+  if (result.kind === "error") {
+    return `Couldn't generate context: ${result.message}\nTry /context gen <description> again, or set fields manually with /context edit <field> <value>.`;
+  }
+
+  if (result.kind === "clarify") {
+    store.setPendingGen({
+      originalDescription: effective,
+      askedQuestions: result.questions,
+      startedAt: Date.now(),
+    });
+    return [
+      "I need a bit more to build a strong context. Quick questions:",
+      "",
+      ...result.questions.map((q, i) => `  ${i + 1}. ${q}`),
+      "",
+      "Reply by running /context gen <your answers, written naturally>",
+      "or fill specific fields directly with /context edit <field> <value>.",
+    ].join("\n");
+  }
+
+  // Got a full context. Clear any pending state and merge with existing.
+  store.clearPendingGen();
+  const existing = store.context;
+  let merged: CreativeContext;
+  let mode: "created" | "extended";
+
+  if (existing) {
+    // Extend existing context: for each field, if existing already has
+    // content and the new value is meaningfully different, append with
+    // a comma (mirrors /context add semantics). If existing is empty,
+    // adopt the new value. The user can always /context edit to
+    // overwrite a field cleanly.
+    const extend = (a: string, b: string): string => {
+      const aTrim = a.trim();
+      const bTrim = b.trim();
+      if (!aTrim) return bTrim;
+      if (!bTrim) return aTrim;
+      // Avoid duplicating if the new value is already a substring of the existing one
+      if (aTrim.toLowerCase().includes(bTrim.toLowerCase())) return aTrim;
+      return `${aTrim}, ${bTrim}`;
+    };
+    merged = {
+      style: extend(existing.style, result.context.style),
+      palette: extend(existing.palette, result.context.palette),
+      characters: extend(existing.characters, result.context.characters),
+      setting: extend(existing.setting, result.context.setting),
+      rules: extend(existing.rules, result.context.rules),
+      mood: extend(existing.mood, result.context.mood),
+    };
+    mode = "extended";
+  } else {
+    merged = result.context;
+    mode = "created";
+  }
+
+  store.setContext(merged);
+  const newStore = useSessionContext.getState();
+
+  return [
+    `Context ${mode}: ${newStore.summary}`,
+    "",
+    `  Style:      ${merged.style || "(not set)"}`,
+    `  Palette:    ${merged.palette || "(not set)"}`,
+    `  Characters: ${merged.characters || "(not set)"}`,
+    `  Setting:    ${merged.setting || "(not set)"}`,
+    `  Rules:      ${merged.rules || "(not set)"}`,
+    `  Mood:       ${merged.mood || "(not set)"}`,
+    "",
+    "Refine: /context edit <field> <value> | /context add <field> <value> | /context gen <more detail>",
+  ].join("\n");
 }
 
 function exportCanvas(): string {
