@@ -33,9 +33,12 @@ export function prePlan(
     const bottom = c.y + c.h;
     if (bottom > maxY) maxY = bottom;
   }
+  // Add extra clearance so new cards don't visually overlap with episode bounding boxes
+  // (episode labels extend ~20px padding + 32px header around their cards)
+  const episodeClearance = 60;
   const startY = existingCards.length === 0
     ? gap + HEADER_OFFSET
-    : maxY + gap + (preset.rowSeparator || 0);
+    : maxY + gap + Math.max(preset.rowSeparator || 0, episodeClearance);
 
   const positions: Array<{ x: number; y: number; w: number; h: number }> = [];
   for (let i = 0; i < newCount; i++) {

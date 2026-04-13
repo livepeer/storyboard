@@ -8,19 +8,20 @@ export function ActivityFeed() {
   const pinnedSkills = useCockpitStore((s) => s.pinnedSkills);
   const [collapsed, setCollapsed] = useState(false);
 
-  const recent = history.slice(-5).reverse();
+  // Show all history entries reversed (newest first), scrollable
+  const recent = [...history].reverse();
   if (recent.length === 0) return null;
 
   return (
     <div className="border-t border-white/5" style={{ background: "rgba(0,0,0,0.3)" }}>
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="w-full px-3 py-1 text-left text-[9px] uppercase tracking-wider text-white/40 hover:text-white/60"
+        className="sticky top-0 z-10 w-full bg-[var(--surface)]/95 px-3 py-1 text-left text-[9px] uppercase tracking-wider text-white/40 backdrop-blur hover:text-white/60"
       >
         {collapsed ? "\u25b6" : "\u25bc"} Activity ({history.length})
       </button>
       {!collapsed && (
-        <div className="max-h-32 overflow-y-auto px-3 pb-2 font-mono text-[9px]">
+        <div className="max-h-48 overflow-y-auto px-3 pb-2 font-mono text-[9px] scrollbar-hidden">
           {recent.map((entry, i) => (
             <div key={i} className="flex items-start gap-2 py-0.5">
               <span className="text-white/30">{new Date(entry.timestamp).toLocaleTimeString().slice(0, 8)}</span>

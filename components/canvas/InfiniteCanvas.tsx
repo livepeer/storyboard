@@ -5,6 +5,7 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { Card } from "./Card";
 import { ArrowLayer } from "./ArrowEdge";
 import { GroupButton } from "./GroupButton";
+import { EpisodeLabels } from "./EpisodeLabel";
 // EdgeInfoPopup is now inline in ArrowLayer (no separate component)
 
 export function InfiniteCanvas() {
@@ -138,6 +139,7 @@ export function InfiniteCanvas() {
           height: "100%",
         }}
       >
+        <EpisodeLabels />
         <ArrowLayer />
         {lasso && (
           <div
@@ -150,12 +152,20 @@ export function InfiniteCanvas() {
             }}
           />
         )}
-        {cards.map((card) => (
+        {cards.filter((c) => !c.pinned).map((card) => (
           <div key={card.id} data-card>
             <Card card={card} />
           </div>
         ))}
       </div>
+
+      {/* Pinned cards — fixed on screen, don't move with pan/zoom */}
+      {cards.filter((c) => c.pinned).map((card) => (
+        <div key={card.id} data-card className="absolute" style={{ zIndex: 20 }}>
+          <Card card={card} />
+        </div>
+      ))}
+
       {/* Edge popup is inline in ArrowLayer */}
       <GroupButton />
     </div>
