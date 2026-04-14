@@ -10,7 +10,7 @@ describe("T4 — Splash first paint [INV-10]", () => {
   it("renders splash within 30ms of process start (median of 5)", async () => {
     const samples: number[] = [];
     for (let i = 0; i < 5; i++) {
-      const proc = spawn("bun", [BIN], { stdio: ["pipe", "pipe", "pipe"] });
+      const proc = spawn("node", [BIN], { stdio: ["pipe", "pipe", "pipe"] });
       let stderr = "";
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {

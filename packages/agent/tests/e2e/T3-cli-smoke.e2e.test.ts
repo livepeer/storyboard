@@ -8,7 +8,7 @@ const BIN = join(__dirname, "../../dist/cli.js");
 
 describe("T3 — CLI smoke", () => {
   it("starts, prints splash marker, exits cleanly on SIGTERM", async () => {
-    const proc = spawn("bun", [BIN], { stdio: ["pipe", "pipe", "pipe"] });
+    const proc = spawn("node", [BIN], { stdio: ["pipe", "pipe", "pipe"] });
     let stderr = "";
     proc.stderr.on("data", (d) => (stderr += d.toString()));
     setTimeout(() => proc.kill("SIGTERM"), 800);
