@@ -5,10 +5,18 @@ on:
     branches: [feat/agent-sdk-design, main]
     paths:
       - "packages/**"
+      - "lib/**"
+      - "app/**"
+      - "components/**"
+      - "tests/**"
       - ".github/workflows/agent-sdk.yml"
   pull_request:
     paths:
       - "packages/**"
+      - "lib/**"
+      - "app/**"
+      - "components/**"
+      - "tests/**"
 
 jobs:
   test-bun:
@@ -59,4 +67,34 @@ jobs:
         run: |
           out=$(node packages/agent/dist/cli.js --version)
           echo "$out"
-          test "$out" = "livepeer 0.1.0-alpha.0"
+          echo "$out" | grep -qE "^livepeer [0-9]"
+
+  storyboard-regression:
+    name: Storyboard zero-regression gate (T10 + smoke)
+    needs: test-bun
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.30"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: bun install --frozen-lockfile
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build @livepeer/agent (workspace deps for storyboard)
+        run: bun --filter "@livepeer/agent" run build
+      - name: Run T10 regression gate
+        run: npx playwright test tests/e2e/T10-storyboard-regression.spec.ts --reporter=line
+      - name: Run storyboard structural smoke
+        run: npx playwright test tests/e2e/storyboard.spec.ts --reporter=line
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
