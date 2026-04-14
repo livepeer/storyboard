@@ -24,6 +24,23 @@ jobs:
       - run: bun --filter "@livepeer/agent" run test
       - run: bun --filter "@livepeer/agent" run build
 
+  bench:
+    name: Bench regression check
+    needs: test-bun
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.30"
+      - run: bun install --frozen-lockfile
+      - run: cd packages/agent && bun run build
+      - name: Run bench (>10% regression fails CI)
+        run: cd packages/agent && node dist/cli.js bench
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
   test-node:
     name: Test on Node 20
     runs-on: ubuntu-latest
