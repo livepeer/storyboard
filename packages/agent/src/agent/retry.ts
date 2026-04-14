@@ -18,8 +18,9 @@ export const DEFAULT_RETRY: RetryOptions = {
   maxAttempts: 3,
   baseDelayMs: 500,
   maxDelayMs: 8000,
-  shouldRetry: (e, attempt) => {
-    if (attempt >= 3) return false;
+  shouldRetry: (e, _attempt) => {
+    // Attempt cap is enforced by the retry() loop via maxAttempts.
+    // shouldRetry only decides whether THIS error class is retryable.
     const msg = e instanceof Error ? e.message.toLowerCase() : String(e).toLowerCase();
     if (msg.includes("rate limit") || msg.includes("429")) return true;
     if (msg.includes("503") || msg.includes("502") || msg.includes("504")) return true;
