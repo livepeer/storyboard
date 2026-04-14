@@ -17,3 +17,6 @@ export { WorkingMemoryStore } from "./memory/working.js";
 export { SessionMemoryStore } from "./memory/session.js";
 export { MockProvider } from "./providers/mock.js";
 export type { MockScript } from "./providers/mock.js";
+export { GeminiProvider } from "./providers/gemini.js";
+export type { GeminiConfig } from "./providers/gemini.js";
+export type { LLMProvider } from "./providers/types.js";
