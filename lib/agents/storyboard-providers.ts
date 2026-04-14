@@ -257,3 +257,145 @@ export class StoryboardGeminiProvider implements LLMProvider {
     return body;
   }
 }
+
+// --- Claude ---
+
+interface AnthropicTextBlock { type: "text"; text: string; }
+interface AnthropicToolUseBlock { type: "tool_use"; id: string; name: string; input: Record<string, unknown>; }
+interface AnthropicToolResultBlock { type: "tool_result"; tool_use_id: string; content: string; }
+type AnthropicContentBlock = AnthropicTextBlock | AnthropicToolUseBlock | AnthropicToolResultBlock;
+
+interface AnthropicMessage {
+  role: "user" | "assistant";
+  content: AnthropicContentBlock[] | string;
+}
+
+interface AnthropicResponse {
+  id: string;
+  content: AnthropicContentBlock[];
+  stop_reason: string;
+  usage?: { input_tokens?: number; output_tokens?: number };
+  _mcpResults?: Array<{ tool_use_id: string; name: string; result: string }>;
+}
+
+export interface StoryboardClaudeProviderOptions {
+  proxyUrl?: string;
+  /** MCP servers to pass through to the proxy. */
+  getMcpServers?: () => unknown[];
+}
+
+export class StoryboardClaudeProvider implements LLMProvider {
+  readonly name = "claude-proxy";
+  readonly tiers: Tier[] = [0, 1, 2, 3];
+
+  constructor(private opts: StoryboardClaudeProviderOptions = {}) {}
+
+  async *call(req: LLMRequest): AsyncIterable<LLMChunk> {
+    const { messages, system } = this.buildBody(req);
+    const tools = req.tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.parameters,
+    }));
+
+    const body: Record<string, unknown> = { messages, system, tools };
+    if (this.opts.getMcpServers) {
+      body.mcpServers = this.opts.getMcpServers();
+    }
+
+    const resp = await fetch(this.opts.proxyUrl ?? "/api/agent/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      if (resp.status === 429) {
+        yield { kind: "error", error: "Rate limited — please wait a moment and try again." };
+        return;
+      }
+      if (resp.status === 500 && text.includes("ANTHROPIC_API_KEY")) {
+        yield { kind: "error", error: "ANTHROPIC_API_KEY not configured. Add it via Vercel env vars or .env.local." };
+        return;
+      }
+      yield { kind: "error", error: `Claude proxy ${resp.status}: ${text.slice(0, 200)}` };
+      return;
+    }
+
+    const data = (await resp.json()) as AnthropicResponse;
+
+    for (const block of data.content ?? []) {
+      if (block.type === "text" && block.text) {
+        yield { kind: "text", text: block.text };
+      }
+      if (block.type === "tool_use") {
+        yield { kind: "tool_call_start", id: block.id, name: block.name };
+        yield { kind: "tool_call_args", id: block.id, args_delta: JSON.stringify(block.input ?? {}) };
+        yield { kind: "tool_call_end", id: block.id };
+      }
+    }
+
+    if (data.usage) {
+      yield {
+        kind: "usage",
+        usage: {
+          input: data.usage.input_tokens ?? 0,
+          output: data.usage.output_tokens ?? 0,
+        },
+      };
+    }
+    yield { kind: "done" };
+  }
+
+  private buildBody(req: LLMRequest): { messages: AnthropicMessage[]; system: string } {
+    let system = "";
+    const messages: AnthropicMessage[] = [];
+    for (const m of req.messages) {
+      if (m.role === "system") {
+        system += (system ? "\n" : "") + m.content;
+        continue;
+      }
+      if (m.role === "assistant") {
+        const blocks: AnthropicContentBlock[] = [];
+        if (m.content) blocks.push({ type: "text", text: m.content });
+        if (m.tool_calls) {
+          for (const tc of m.tool_calls) {
+            blocks.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.args });
+          }
+        }
+        if (blocks.length > 0) messages.push({ role: "assistant", content: blocks });
+        continue;
+      }
+      if (m.role === "tool") {
+        messages.push({
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: m.tool_call_id ?? "", content: m.content },
+          ],
+        });
+        continue;
+      }
+      // user
+      messages.push({ role: "user", content: m.content });
+    }
+    // Merge consecutive same-role messages (Anthropic requires alternation)
+    const merged: AnthropicMessage[] = [];
+    for (const msg of messages) {
+      const last = merged[merged.length - 1];
+      if (last && last.role === msg.role) {
+        // Concatenate content arrays (upgrade strings to text blocks)
+        const lastBlocks = typeof last.content === "string"
+          ? [{ type: "text" as const, text: last.content }]
+          : last.content;
+        const msgBlocks = typeof msg.content === "string"
+          ? [{ type: "text" as const, text: msg.content }]
+          : msg.content;
+        merged[merged.length - 1] = { role: last.role, content: [...lastBlocks, ...msgBlocks] };
+      } else {
+        merged.push(msg);
+      }
+    }
+    return { messages: merged, system };
+  }
+}
