@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "./types";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { runInference } from "@/lib/sdk/client";
-import { resolveCapability, isValidCapability } from "@/lib/sdk/capabilities";
+import { resolveCapability, isValidCapability, getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { useSkillStore } from "@/lib/skills/store";
 import { useChatStore } from "@/lib/chat/store";
 import { useSessionContext } from "@/lib/agents/session-context";
@@ -111,8 +111,16 @@ function selectCapability(
     }
     case "restyle":
       return { capability: "kontext-edit", type: "image" };
-    case "animate":
+    case "animate": {
+      // Route to Veo 3.1 (via fal.ai) when available — dramatically
+      // better quality + audio than LTX. Falls back to ltx-i2v if the
+      // live capability registry doesn't include veo-i2v.
+      const valid = getCachedCapabilities();
+      if (valid && valid.some((c) => c.name === "veo-i2v")) {
+        return { capability: "veo-i2v", type: "video" };
+      }
       return { capability: "ltx-i2v", type: "video" };
+    }
     case "upscale":
       return { capability: "topaz-upscale", type: "image" };
     case "remove_bg":
