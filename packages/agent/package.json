@@ -13,7 +13,31 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./cli": "./dist/cli.js"
+    "./cli": "./dist/cli.js",
+    "./tools/types": {
+      "types": "./dist/tools/types.d.ts",
+      "import": "./dist/tools/types.js"
+    },
+    "./tools/registry": {
+      "types": "./dist/tools/registry.d.ts",
+      "import": "./dist/tools/registry.js"
+    },
+    "./providers/mock": {
+      "types": "./dist/providers/mock.d.ts",
+      "import": "./dist/providers/mock.js"
+    },
+    "./memory/working": {
+      "types": "./dist/memory/working.d.ts",
+      "import": "./dist/memory/working.js"
+    },
+    "./memory/session": {
+      "types": "./dist/memory/session.d.ts",
+      "import": "./dist/memory/session.js"
+    },
+    "./agent/runner": {
+      "types": "./dist/agent/runner.d.ts",
+      "import": "./dist/agent/runner.js"
+    }
   },
   "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
