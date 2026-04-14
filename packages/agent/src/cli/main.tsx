@@ -4,7 +4,7 @@ import { Splash } from "./splash.js";
 
 export async function runCli(): Promise<void> {
   const t0 = performance.now();
-  const { unmount, waitUntilExit } = render(<Splash version="0.1.0-alpha.0" />);
+  const { unmount, waitUntilExit } = render(<Splash version="1.0.0-rc.1" />);
   // First paint marker — fires immediately after render() returns, before any await.
   console.error(`splash:${(performance.now() - t0).toFixed(2)}`);
 
