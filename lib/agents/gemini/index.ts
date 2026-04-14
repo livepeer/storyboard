@@ -4,47 +4,23 @@ import type {
   CanvasContext,
   ConfigField,
 } from "../types";
-import { listTools, executeTool } from "@/lib/tools/registry";
+import {
+  AgentRunner,
+  ToolRegistry,
+  WorkingMemoryStore,
+  SessionMemoryStore,
+} from "@livepeer/agent";
+import { listTools as listStoryboardTools } from "@/lib/tools/registry";
 import { useChatStore } from "@/lib/chat/store";
 import { buildAgentContext } from "../context-builder";
 import { useWorkingMemory } from "../working-memory";
 import { classifyIntent } from "../intent";
-
-/**
- * Gemini message format.
- * roles: "user" | "model"
- * parts: text, functionCall, or functionResponse
- */
-interface GeminiPart {
-  text?: string;
-  functionCall?: { name: string; id?: string; args: Record<string, unknown> };
-  functionResponse?: { name: string; id?: string; response: Record<string, unknown> };
-}
-
-interface GeminiMessage {
-  role: "user" | "model";
-  parts: GeminiPart[];
-}
-
-interface GeminiResponse {
-  candidates?: Array<{
-    content: {
-      role: string;
-      parts: GeminiPart[];
-    };
-    finishReason?: string;
-  }>;
-  error?: { message: string };
-  usageMetadata?: {
-    promptTokenCount?: number;
-    candidatesTokenCount?: number;
-  };
-}
+import { StoryboardGeminiProvider } from "../storyboard-providers";
+import { wrapStoryboardTool } from "../runner-adapter";
 
 const MAX_TOOL_ROUNDS = 20;
 
 let stopped = false;
-let messages: GeminiMessage[] = [];
 
 /** Produce a brief human-readable result summary for a tool */
 function briefToolResult(name: string, data: unknown): string {
@@ -77,59 +53,6 @@ function say(text: string, role: "agent" | "system" = "agent") {
 
 function setProcessing(v: boolean) {
   useChatStore.getState().setProcessing(v);
-}
-
-/**
- * Convert our tool registry to Gemini's functionDeclarations format.
- */
-function buildToolSchemas() {
-  return [
-    {
-      functionDeclarations: listTools().map((t) => ({
-        name: t.name,
-        description: t.description,
-        parameters: t.parameters,
-      })),
-    },
-  ];
-}
-
-/**
- * Call the /api/agent/gemini proxy route.
- */
-async function callApi(
-  contents: GeminiMessage[],
-  tools: ReturnType<typeof buildToolSchemas>,
-  systemInstruction?: string
-): Promise<GeminiResponse> {
-  // Gemini uses system_instruction at the top level, not as a message
-  const body: Record<string, unknown> = { contents, tools };
-  if (systemInstruction) {
-    body.system_instruction = {
-      parts: [{ text: systemInstruction }],
-    };
-  }
-
-  const resp = await fetch("/api/agent/gemini", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    if (resp.status === 429) {
-      throw new Error("Rate limited — please wait a moment and try again.");
-    }
-    if (resp.status === 500 && text.includes("GEMINI_API_KEY")) {
-      throw new Error(
-        "GEMINI_API_KEY not configured. Add it via Vercel env vars or .env.local."
-      );
-    }
-    throw new Error(`API error ${resp.status}: ${text.slice(0, 200)}`);
-  }
-
-  return resp.json();
 }
 
 export const geminiPlugin: AgentPlugin = {
@@ -184,263 +107,108 @@ export const geminiPlugin: AgentPlugin = {
         })),
         selectedCard: context.selectedCard,
       });
-      const tools = buildToolSchemas();
 
-      // Limit conversation history to prevent token overflow
-      // Keep last 20 messages max — old ones get compacted anyway
-      if (messages.length > 20) {
-        messages = messages.slice(-20);
-      }
+      console.log(`[Gemini] runStream: system=${system.length} chars, text="${text.slice(0, 80)}"`);
 
-      // Append user message
-      messages.push({ role: "user", parts: [{ text }] });
-
-      console.log(`[Gemini] Sending: ${messages.length} messages, ${tools.length} tools, system=${system.length} chars`);
-
-      // Tool-use loop — track results for completion summary
+      // Track results for completion summary
       let lastRoundHadToolCalls = false;
       let agentGaveText = false;
       const completedTools: Array<{ name: string; success: boolean; summary?: string }> = [];
       const startTime = Date.now();
 
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      // Build runner with StoryboardGeminiProvider (routes through /api/agent/gemini proxy)
+      const provider = new StoryboardGeminiProvider();
+      const tools = new ToolRegistry();
+      for (const sbTool of listStoryboardTools()) {
+        tools.register(wrapStoryboardTool(sbTool));
+      }
+
+      // Inject the system prompt via WorkingMemory criticalConstraints.
+      // AgentRunner.runStream() marshals working.marshal().text into a system message
+      // at the start of each run, so the LLM always sees the full context.
+      const working = new WorkingMemoryStore();
+      if (system) {
+        working.setCriticalConstraints([system]);
+      }
+      const session = new SessionMemoryStore();
+      const runner = new AgentRunner(provider, tools, working, session);
+
+      for await (const event of runner.runStream({ user: text, maxIterations: MAX_TOOL_ROUNDS })) {
         if (stopped) {
           yield { type: "text", content: "Stopped." };
           break;
         }
 
-        // Sanitize messages: ensure strict user/model alternation.
-        // Gemini requires this — merge consecutive same-role messages.
-        const sanitized: GeminiMessage[] = [];
-        for (const m of messages) {
-          const last = sanitized[sanitized.length - 1];
-          if (last && last.role === m.role) {
-            // Merge into previous message of same role
-            last.parts.push(...m.parts);
-          } else {
-            sanitized.push({ role: m.role, parts: [...m.parts] });
-          }
-        }
-
-        // Use sanitized messages directly (compaction only when > 12 messages)
-        let apiMessages: GeminiMessage[];
-        if (sanitized.length > 12) {
-          // Keep last 8 messages, summarize the rest
-          const kept = sanitized.slice(-8);
-          const dropped = sanitized.slice(0, -8);
-          const summary = dropped
-            .map((m) => m.parts.map((p) => p.text || "").filter(Boolean).join(" "))
-            .filter(Boolean)
-            .join("; ");
-          apiMessages = summary
-            ? [{ role: "user", parts: [{ text: `[Prior context: ${summary.slice(0, 500)}]` }] }, ...kept]
-            : kept;
-          // Ensure first message is user role (Gemini requirement)
-          if (apiMessages[0]?.role !== "user") {
-            apiMessages.unshift({ role: "user", parts: [{ text: "Continue." }] });
-          }
-        } else {
-          apiMessages = sanitized;
-        }
-
-        // Ensure conversation starts with user message
-        if (apiMessages.length > 0 && apiMessages[0].role !== "user") {
-          apiMessages.unshift({ role: "user", parts: [{ text: "Continue." }] });
-        }
-
-        let response: GeminiResponse;
-        try {
-          response = await callApi(apiMessages, tools, system);
-        } catch (e) {
-          const errMsg = e instanceof Error ? e.message : String(e);
-          // Gemini 400 on turn ordering — reset conversation and retry with just the user prompt
-          if (errMsg.includes("function call turn") || errMsg.includes("function response turn")) {
-            console.warn("[Gemini] Turn ordering error — resetting conversation");
-            messages = [{ role: "user", parts: [{ text }] }];
-            response = await callApi(messages, tools, system);
-          } else {
-            throw e;
-          }
-        }
-
-        if (response.error) {
-          // Same recovery for turn-ordering errors in response body
-          if (response.error.message?.includes("function call turn")) {
-            console.warn("[Gemini] Turn ordering error in response — resetting");
-            messages = [{ role: "user", parts: [{ text }] }];
-            continue;
-          }
-          throw new Error(response.error.message);
-        }
-
-        const candidate = response.candidates?.[0];
-        if (!candidate?.content?.parts) {
-          const reason = candidate?.finishReason || "No response";
-          console.warn(`[Gemini] Empty response: finishReason=${reason}, round=${round}, lastToolCalls=${lastRoundHadToolCalls}, messages=${messages.length}`);
-
-          // MALFORMED_FUNCTION_CALL: auto-retry with shorter instruction
-          if (reason === "MALFORMED_FUNCTION_CALL" && round < MAX_TOOL_ROUNDS - 1) {
-            messages.push({
-              role: "user",
-              parts: [{ text: "Function call too large. Use project_create for 6+ scenes with prompts UNDER 20 WORDS each. For 1-5 items use create_media with max 3 steps. Summarize — don't copy descriptions." }],
-            });
-            continue;
-          }
-
-          // STOP with no content: Gemini didn't act.
-          // Detect multi-scene vs single-image and give appropriate instructions.
-          if (reason === "STOP" && round <= 1 && !lastRoundHadToolCalls) {
-            console.warn("[Gemini] Empty STOP on round", round, "— analyzing prompt type");
-
-            // Detect multi-scene: look for scene/shot numbering patterns
-            const isMultiScene = /scene\s*\d|shot\s*\d|\d\s*scene|\d[.\-)\s]+\w/i.test(text)
-              || (text.match(/scene/gi) || []).length >= 3
-              || text.length > 1500;
-
-            if (isMultiScene) {
-              // Route to project_create — the prompt is a storyboard brief
-              console.warn("[Gemini] Detected multi-scene prompt, routing to project_create");
-              messages[messages.length - 1] = {
-                role: "user",
-                parts: [{ text: `The user wants a multi-scene storyboard. Call project_create with:
-- brief: A 1-sentence summary of the project
-- style_guide: Extract visual_style, color_palette, mood, prompt_prefix from the brief
-- scenes: Array of scenes. For EACH scene: index, title (short), prompt (UNDER 20 WORDS — just the key visual), action: "generate"
-
-CRITICAL: Each scene prompt must be UNDER 20 WORDS. Summarize — do NOT copy the user's description.
-
-Here is the brief:
-${text.slice(0, 2000)}` }],
-              };
-            } else {
-              // Single image — enhance creatively
-              messages[messages.length - 1] = {
-                role: "user",
-                parts: [{ text: `Create a stunning image of: "${text.slice(0, 200)}". Call create_media with ONE step, prompt under 30 words. Be creative. Do NOT ask questions.` }],
-              };
+        switch (event.kind) {
+          case "text":
+            if (event.text) {
+              yield { type: "text", content: event.text };
+              say(event.text, "agent");
+              agentGaveText = true;
             }
-            continue;
-          }
+            break;
 
-          if (!lastRoundHadToolCalls) {
-            // Context-only messages (from preprocessor) — Gemini has nothing to do.
-            // Don't show an error; the preprocessor already handled the request.
-            if (text.startsWith("[Context:")) {
-              console.log("[Gemini] Context-only message — skipping (preprocessor handled)");
-              break;
-            }
-            if (reason === "MALFORMED_FUNCTION_CALL") {
-              say("Too complex — try a simpler prompt or fewer scenes.", "system");
-            } else if (reason === "STOP") {
-              say("Couldn't process that. Try rephrasing?", "system");
-            } else if (reason === "MAX_TOKENS") {
-              say("Response too long — try fewer scenes.", "system");
-            } else if (reason === "SAFETY") {
-              say("Blocked by safety filter.", "system");
-            } else if (reason === "RECITATION") {
-              say("Blocked — try rephrasing.", "system");
-            } else {
-              say(`Error: ${reason}`, "system");
-            }
-          }
-          break;
-        }
-
-        const parts = candidate.content.parts;
-        const functionCalls: Array<{ name: string; id?: string; args: Record<string, unknown> }> = [];
-
-        // Process response parts
-        for (const part of parts) {
-          if (part.text) {
-            yield { type: "text", content: part.text };
-            say(part.text, "agent");
-            agentGaveText = true;
-          }
-          if (part.functionCall) {
-            functionCalls.push(part.functionCall);
+          case "tool_call":
+            lastRoundHadToolCalls = true;
             yield {
               type: "tool_call",
-              name: part.functionCall.name,
-              input: part.functionCall.args,
+              name: event.name,
+              input: event.args,
             };
-          }
-        }
+            // Emit a progress message for long-running generation tools so
+            // the chat shows activity immediately (before the tool finishes).
+            if (event.name === "project_generate") {
+              say("Generating scenes...", "system");
+            }
+            break;
 
-        // Append model message to history
-        messages.push({
-          role: "model",
-          parts,
-        });
-
-        // If no function calls, we're done
-        lastRoundHadToolCalls = functionCalls.length > 0;
-        if (functionCalls.length === 0) {
-          break;
-        }
-
-        // Execute tools and send results back as a user message with functionResponse parts
-        const responseParts: GeminiPart[] = [];
-        let hasProjectCreate = false;
-        let projectId: string | null = null;
-        let hasProjectGenerate = false;
-        let moreRemaining = false;
-
-        for (const fc of functionCalls) {
-          const result = await executeTool(fc.name, fc.args);
-
-          yield {
-            type: "tool_result",
-            name: fc.name,
-            result: result.data ?? result.error,
-          };
-
-          // Track for completion summary
-          completedTools.push({
-            name: fc.name,
-            success: result.success,
-            summary: result.success
-              ? briefToolResult(fc.name, result.data)
-              : (result.error || "failed"),
-          });
-
-          // Track project workflow state for auto-continuation
-          if (fc.name === "project_create" && result.success) {
-            hasProjectCreate = true;
-            projectId = (result.data as Record<string, unknown>)?.project_id as string;
-          }
-          if (fc.name === "project_generate" && result.success) {
-            hasProjectGenerate = true;
-            const remaining = (result.data as Record<string, unknown>)?.remaining as number;
-            if (remaining > 0) moreRemaining = true;
+          case "tool_result": {
+            // Parse the JSON string back into a shape for the UI
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(event.content);
+            } catch {
+              parsed = { raw: event.content };
+            }
+            yield {
+              type: "tool_result",
+              name: event.name,
+              result: parsed,
+            };
+            completedTools.push({
+              name: event.name,
+              success: event.ok,
+              summary: event.ok ? briefToolResult(event.name, parsed) : undefined,
+            });
+            // Emit inline progress for project_generate so the chat shows
+            // generation status after each batch (UI feedback, matches test
+            // expectations for "Generating scenes|scenes ready|done").
+            if (event.name === "project_generate" && event.ok && parsed && typeof parsed === "object") {
+              const d = parsed as Record<string, unknown>;
+              const completed = d.completed as number | undefined;
+              const total = d.total as number | undefined;
+              const remaining = d.remaining as number | undefined;
+              if (total !== undefined && completed !== undefined) {
+                const progressMsg = remaining === 0 || remaining === undefined
+                  ? `All ${completed} scenes ready.`
+                  : `Generating scenes — ${completed}/${total} done`;
+                say(progressMsg, "system");
+              }
+            }
+            break;
           }
 
-          responseParts.push({
-            functionResponse: {
-              name: fc.name,
-              id: fc.id,
-              response: result.success
-                ? (result.data as Record<string, unknown>) ?? {}
-                : { error: result.error },
-            },
-          });
-        }
+          case "error":
+            yield { type: "error", content: event.error };
+            say(`Gemini error: ${event.error}`, "system");
+            break;
 
-        // Append tool results as user message.
-        // Merge any continuation nudges INTO the same user message to avoid
-        // consecutive user turns (Gemini requires strict user/model alternation).
-        const userParts: GeminiPart[] = [...responseParts];
-
-        if (hasProjectCreate && projectId && !hasProjectGenerate) {
-          userParts.push({ text: `Project created. Now call project_generate with project_id="${projectId}" to start generating scenes.` });
+          case "turn_done":
+          case "usage":
+          case "done":
+            // No UI action needed for these internal runner events
+            break;
         }
-        if (hasProjectGenerate && moreRemaining) {
-          userParts.push({ text: "More scenes remaining. Call project_generate again with the same project_id." });
-        }
-
-        messages.push({
-          role: "user",
-          parts: userParts,
-        });
       }
 
       // Update working memory with action results
@@ -464,7 +232,7 @@ ${text.slice(0, 2000)}` }],
         const fail = completedTools.length - ok;
 
         // Build summary
-        const parts: string[] = [];
+        const summaryParts: string[] = [];
 
         // Group by tool name for concise output
         const byName = new Map<string, { ok: number; fail: number; summaries: string[] }>();
@@ -487,20 +255,25 @@ ${text.slice(0, 2000)}` }],
           };
           const label = toolLabel[name] || name;
           if (info.fail > 0 && info.ok === 0) {
-            parts.push(`${label}: failed`);
+            summaryParts.push(`${label}: failed`);
           } else if (info.fail > 0) {
-            parts.push(`${label}: ${info.ok} ok, ${info.fail} failed`);
+            summaryParts.push(`${label}: ${info.ok} ok, ${info.fail} failed`);
           } else if (info.summaries[0]) {
-            parts.push(`${label}: ${info.summaries[0]}`);
+            summaryParts.push(`${label}: ${info.summaries[0]}`);
           }
         }
 
         const summaryText = fail === 0
-          ? `Done in ${elapsed}s${parts.length ? " — " + parts.join(", ") : ""}`
-          : `${ok}/${completedTools.length} succeeded (${elapsed}s)${parts.length ? " — " + parts.join(", ") : ""}`;
+          ? `Done in ${elapsed}s${summaryParts.length ? " — " + summaryParts.join(", ") : ""}`
+          : `${ok}/${completedTools.length} succeeded (${elapsed}s)${summaryParts.length ? " — " + summaryParts.join(", ") : ""}`;
 
         say(summaryText, "system");
         yield { type: "text", content: summaryText };
+      }
+
+      // If no tools were called and no text was given, handle gracefully
+      if (!lastRoundHadToolCalls && !agentGaveText && !text.startsWith("[Context:")) {
+        say("Couldn't process that. Try rephrasing?", "system");
       }
 
       yield { type: "done" };
@@ -515,5 +288,6 @@ ${text.slice(0, 2000)}` }],
 };
 
 export function resetGeminiConversation() {
-  messages = [];
+  // No-op: conversation state is now managed per-run by AgentRunner.
+  // Called by UI reset buttons — safe to keep as a no-op.
 }
