@@ -35,15 +35,19 @@ const DEFAULT_MODELS: Record<Tier, string> = {
 const DEFAULT_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 
 export class OpenAIProvider implements LLMProvider {
-  readonly name = "openai";
+  readonly name: string = "openai";
   readonly tiers: Tier[] = [0, 1, 2, 3];
 
   protected readonly endpoint: string;
   protected readonly defaultModels: Record<Tier, string>;
 
-  constructor(protected config: OpenAIConfig) {
-    this.endpoint = config.endpoint ?? DEFAULT_ENDPOINT;
-    this.defaultModels = DEFAULT_MODELS;
+  constructor(
+    protected config: OpenAIConfig,
+    defaultModels: Record<Tier, string> = DEFAULT_MODELS,
+    defaultEndpoint: string = DEFAULT_ENDPOINT,
+  ) {
+    this.endpoint = config.endpoint ?? defaultEndpoint;
+    this.defaultModels = defaultModels;
   }
 
   async *call(req: LLMRequest, signal?: AbortSignal): AsyncIterable<LLMChunk> {
@@ -104,42 +108,16 @@ export class OpenAIProvider implements LLMProvider {
         const data = line.slice(6).trim();
         if (data === "[DONE]") break;
         if (!data) continue;
-
         try {
           const parsed = JSON.parse(data);
-
-          // Usage appears in the final chunk (stream_options.include_usage)
           if (parsed.usage) {
             totalUsage = {
               input: parsed.usage.prompt_tokens ?? 0,
               output: parsed.usage.completion_tokens ?? 0,
             };
           }
-
-          const delta = parsed.choices?.[0]?.delta;
-          if (!delta) continue;
-
-          // Text delta
-          if (typeof delta.content === "string" && delta.content.length > 0) {
-            yield { kind: "text", text: delta.content };
-          }
-
-          // Tool call deltas
-          if (Array.isArray(delta.tool_calls)) {
-            for (const tc of delta.tool_calls) {
-              const idx = tc.index as number;
-
-              if (tc.id) {
-                // First delta for this call — emit start
-                partialCalls.set(idx, { id: tc.id, name: tc.function?.name ?? "", argsStarted: false });
-                yield { kind: "tool_call_start", id: tc.id, name: tc.function?.name ?? "" };
-              }
-
-              const call = partialCalls.get(idx);
-              if (call && tc.function?.arguments) {
-                yield { kind: "tool_call_args", id: call.id, args_delta: tc.function.arguments };
-              }
-            }
+          for (const chunk of this.parseChunk(parsed, partialCalls)) {
+            yield chunk;
           }
         } catch {
           /* skip malformed chunks */
@@ -186,6 +164,30 @@ export class OpenAIProvider implements LLMProvider {
       }
     }
     return messages;
+  }
+
+  private *parseChunk(
+    parsed: any,
+    partialCalls: Map<number, { id: string; name: string; argsStarted: boolean }>,
+  ): Iterable<LLMChunk> {
+    const delta = parsed.choices?.[0]?.delta;
+    if (!delta) return;
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      yield { kind: "text", text: delta.content };
+    }
+    if (Array.isArray(delta.tool_calls)) {
+      for (const tc of delta.tool_calls) {
+        const idx = tc.index as number;
+        if (tc.id) {
+          partialCalls.set(idx, { id: tc.id, name: tc.function?.name ?? "", argsStarted: false });
+          yield { kind: "tool_call_start", id: tc.id, name: tc.function?.name ?? "" };
+        }
+        const call = partialCalls.get(idx);
+        if (call && tc.function?.arguments) {
+          yield { kind: "tool_call_args", id: call.id, args_delta: tc.function.arguments };
+        }
+      }
+    }
   }
 
   private toolToFunction(t: ToolSchema): unknown {

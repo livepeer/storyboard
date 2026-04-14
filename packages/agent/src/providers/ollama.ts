@@ -26,15 +26,17 @@ const OLLAMA_DEFAULT_MODELS: Record<Tier, string> = {
 };
 
 export class OllamaProvider extends OpenAIProvider {
-  override readonly name = "ollama";
+  override readonly name: string = "ollama";
 
   constructor(config: OllamaConfig = {}) {
-    super({
-      apiKey: config.apiKey ?? "ollama",
-      endpoint: config.endpoint ?? OLLAMA_DEFAULT_ENDPOINT,
-      models: config.models,
-    });
-    // Override defaultModels to use llama3.1 family
-    (this as any).defaultModels = OLLAMA_DEFAULT_MODELS;
+    super(
+      {
+        apiKey: config.apiKey ?? "ollama",
+        endpoint: config.endpoint ?? OLLAMA_DEFAULT_ENDPOINT,
+        models: config.models,
+      },
+      OLLAMA_DEFAULT_MODELS,
+      OLLAMA_DEFAULT_ENDPOINT,
+    );
   }
 }
