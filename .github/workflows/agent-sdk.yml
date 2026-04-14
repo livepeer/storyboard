@@ -37,4 +37,9 @@ jobs:
           bun-version: "1.1.30"
       - run: bun install --frozen-lockfile
       - run: cd packages/agent && npx tsc --noEmit
-      - run: cd packages/agent && node --version
+      - run: cd packages/agent && bun run build
+      - name: Verify CLI runs on Node 20
+        run: |
+          out=$(node packages/agent/dist/cli.js --version)
+          echo "$out"
+          test "$out" = "livepeer 0.1.0-alpha.0"
