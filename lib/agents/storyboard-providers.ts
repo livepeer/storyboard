@@ -399,3 +399,126 @@ export class StoryboardClaudeProvider implements LLMProvider {
     return { messages: merged, system };
   }
 }
+
+// --- OpenAI ---
+
+interface OaiToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+interface OaiMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  tool_calls?: OaiToolCall[];
+  tool_call_id?: string;
+}
+
+interface OaiResponse {
+  choices?: Array<{
+    message: OaiMessage;
+    finish_reason?: string;
+  }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  error?: { message: string };
+}
+
+export class StoryboardOpenAIProvider implements LLMProvider {
+  readonly name = "openai-proxy";
+  readonly tiers: Tier[] = [0, 1, 2, 3];
+
+  constructor(private proxyUrl: string = "/api/agent/openai") {}
+
+  async *call(req: LLMRequest): AsyncIterable<LLMChunk> {
+    const messages = this.buildMessages(req);
+    const tools = req.tools.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+
+    const resp = await fetch(this.proxyUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages, tools }),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      yield { kind: "error", error: `OpenAI proxy ${resp.status}: ${text.slice(0, 200)}` };
+      return;
+    }
+
+    const data = (await resp.json()) as OaiResponse;
+    if (data.error) {
+      yield { kind: "error", error: data.error.message };
+      return;
+    }
+
+    const message = data.choices?.[0]?.message;
+    if (message) {
+      if (typeof message.content === "string" && message.content.length > 0) {
+        yield { kind: "text", text: message.content };
+      }
+      if (message.tool_calls) {
+        for (const tc of message.tool_calls) {
+          yield { kind: "tool_call_start", id: tc.id, name: tc.function.name };
+          yield { kind: "tool_call_args", id: tc.id, args_delta: tc.function.arguments };
+          yield { kind: "tool_call_end", id: tc.id };
+        }
+      }
+    }
+
+    if (data.usage) {
+      yield {
+        kind: "usage",
+        usage: {
+          input: data.usage.prompt_tokens ?? 0,
+          output: data.usage.completion_tokens ?? 0,
+        },
+      };
+    }
+    yield { kind: "done" };
+  }
+
+  private buildMessages(req: LLMRequest): OaiMessage[] {
+    const out: OaiMessage[] = [];
+    for (const m of req.messages) {
+      if (m.role === "system") {
+        out.push({ role: "system", content: m.content });
+        continue;
+      }
+      if (m.role === "assistant") {
+        if (m.tool_calls && m.tool_calls.length > 0) {
+          out.push({
+            role: "assistant",
+            content: m.content || null,
+            tool_calls: m.tool_calls.map((tc) => ({
+              id: tc.id,
+              type: "function",
+              function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+            })),
+          });
+        } else {
+          out.push({ role: "assistant", content: m.content });
+        }
+        continue;
+      }
+      if (m.role === "tool") {
+        out.push({
+          role: "tool",
+          content: m.content,
+          tool_call_id: m.tool_call_id ?? "",
+        });
+        continue;
+      }
+      // user
+      out.push({ role: "user", content: m.content });
+    }
+    return out;
+  }
+}
