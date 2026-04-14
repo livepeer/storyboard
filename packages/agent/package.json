@@ -42,7 +42,7 @@
   "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
     "build": "bun build src/index.ts --target=node --outdir=dist --external react --external ink --external ink-text-input --external react-devtools-core --external ws && bun build src/cli/index.ts --target=node --outfile=dist/cli.js --external react --external ink --external ink-text-input --external react-devtools-core --external ws --define 'process.env.DEV=\"false\"' && mkdir -p dist/bench/fixtures && cp src/bench/baseline.json dist/bench/baseline.json && cp src/bench/fixtures/*.txt dist/bench/fixtures/ && tsc --emitDeclarationOnly --outDir dist",
-    "build:lib": "tsc -p tsconfig.json && mkdir -p dist/bench/fixtures && cp src/bench/baseline.json dist/bench/baseline.json && cp src/bench/fixtures/*.txt dist/bench/fixtures/",
+    "build:lib": "tsc -p tsconfig.lib.json && mkdir -p dist/bench/fixtures && cp src/bench/baseline.json dist/bench/baseline.json && cp src/bench/fixtures/*.txt dist/bench/fixtures/",
     "build:binary": "bun build src/cli/index.ts --compile --outfile=dist/livepeer",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
