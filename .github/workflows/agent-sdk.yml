@@ -1,0 +1,40 @@
+name: agent-sdk
+
+on:
+  push:
+    branches: [feat/agent-sdk-design, main]
+    paths:
+      - "packages/**"
+      - ".github/workflows/agent-sdk.yml"
+  pull_request:
+    paths:
+      - "packages/**"
+
+jobs:
+  test-bun:
+    name: Test on Bun
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.30"
+      - run: bun install --frozen-lockfile
+      - run: bun --filter "@livepeer/agent" run typecheck
+      - run: bun --filter "@livepeer/agent" run test
+      - run: bun --filter "@livepeer/agent" run build
+
+  test-node:
+    name: Test on Node 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.30"
+      - run: bun install --frozen-lockfile
+      - run: cd packages/agent && npx tsc --noEmit
+      - run: cd packages/agent && node --version
