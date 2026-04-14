@@ -24,7 +24,7 @@ export class MockProvider implements LLMProvider {
     this.tiers = script.tiers ?? [0, 1, 2, 3];
   }
 
-  async *call(req: LLMRequest): AsyncIterable<LLMChunk> {
+  async *call(req: LLMRequest, _signal?: AbortSignal): AsyncIterable<LLMChunk> {
     this.received.push(req);
     const chunks = this.script.responses[this.callIndex] ?? [];
     this.callIndex++;
