@@ -70,10 +70,10 @@ export class LongtermMemory {
           session.recordToolCall(e.call.call, e.call.result);
           break;
         case "artifact":
-          session.recordArtifact(e.artifact);
+          session.restoreArtifact(e.artifact);
           break;
         case "decision":
-          session.recordDecision(e.decision);
+          session.restoreDecision(e.decision);
           break;
         case "pin":
           working.pin(e.fact.text);

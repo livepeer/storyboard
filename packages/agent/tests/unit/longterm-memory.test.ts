@@ -53,6 +53,12 @@ describe("LongtermMemory", () => {
     expect(eventCount).toBe(3);
     expect(working.snapshot().context.style).toBe("ghibli");
     expect(session.snapshot().artifact_registry).toHaveLength(1);
+    // Resumed artifact must keep its original id, ts, and branch — show() depends on it.
+    const restored = session.snapshot().artifact_registry[0];
+    expect(restored.id).toBe("a1");
+    expect(restored.ts).toBe(2);
+    expect(restored.branch).toBe("main");
+    expect(session.show("a1")).toBeDefined();
   });
 
   it("listProjects returns all project dirs", async () => {

@@ -70,6 +70,16 @@ export class SessionMemoryStore {
     return decision;
   }
 
+  /** Replay an artifact verbatim (used by LongtermMemory.resume). Preserves id/ts/branch. */
+  restoreArtifact(a: Artifact): void {
+    this.mem.artifact_registry.push(a);
+  }
+
+  /** Replay a decision verbatim (used by LongtermMemory.resume). Preserves id/ts/branch. */
+  restoreDecision(d: Decision): void {
+    this.mem.decisions_log.push(d);
+  }
+
   /** Keyword search across artifact prompts and conversation content. */
   recall(query: string, limit = 10): Array<Artifact | ConversationTurn> {
     const q = query.toLowerCase();
