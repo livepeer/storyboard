@@ -8,7 +8,7 @@
  */
 
 import type { LLMProvider, LLMRequest, ToolSchema } from "../providers/types.js";
-import type { Message, ConversationTurn, ToolCall, ToolResult, Tier, TokenUsage } from "../types.js";
+import type { Message, ConversationTurn, ToolCall, ToolResult, Tier, TokenUsage, RunResult, RunEvent } from "../types.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { WorkingMemoryStore } from "../memory/working.js";
 import type { SessionMemoryStore } from "../memory/session.js";
@@ -25,12 +25,8 @@ export interface RunOptions {
   toolContext?: unknown;
 }
 
-export interface RunResult {
-  finalText: string;
-  turns: ConversationTurn[];
-  totalUsage: TokenUsage;
-  iterations: number;
-}
+// Re-export RunResult so existing imports (`import { RunResult } from "./runner"`) still work.
+export type { RunResult } from "../types.js";
 
 export class AgentRunner {
   constructor(
@@ -40,7 +36,16 @@ export class AgentRunner {
     private session: SessionMemoryStore,
   ) {}
 
-  async run(options: RunOptions): Promise<RunResult> {
+  /**
+   * Streaming variant: yields RunEvent values as the tool-use loop
+   * executes. Consumers (CLI, browser plugins) render progressively
+   * instead of waiting for the final RunResult.
+   *
+   * The terminal event is always { kind: "done", result } unless an
+   * unrecoverable error occurs, in which case { kind: "error", error }
+   * is yielded and the generator terminates without "done".
+   */
+  async *runStream(options: RunOptions): AsyncGenerator<RunEvent> {
     const maxIter = options.maxIterations ?? 10;
     const tier = options.tier ?? 1;
     const toolContext = options.toolContext ?? {};
@@ -84,7 +89,7 @@ export class AgentRunner {
       // Wrap provider call in retry (Layer 2 resilience)
       const stream = await retry(async () => this.provider.call(req));
 
-      // Collect chunks from the provider stream
+      // Collect chunks from the provider stream, yielding events as we go
       let textBuf = "";
       const partialCalls = new Map<string, { name: string; argsStr: string }>();
       let usage: TokenUsage | undefined;
@@ -93,6 +98,7 @@ export class AgentRunner {
         switch (chunk.kind) {
           case "text":
             textBuf += chunk.text;
+            yield { kind: "text", text: chunk.text };
             break;
           case "tool_call_start":
             partialCalls.set(chunk.id, { name: chunk.name, argsStr: "" });
@@ -100,16 +106,29 @@ export class AgentRunner {
           case "tool_call_args":
             partialCalls.get(chunk.id)!.argsStr += chunk.args_delta;
             break;
-          case "tool_call_end":
-            // Args are complete; nothing to do here, finalization happens after stream ends
+          case "tool_call_end": {
+            // Args are complete — emit the assembled tool_call event
+            const partial = partialCalls.get(chunk.id);
+            if (partial) {
+              let args: Record<string, unknown>;
+              try {
+                args = JSON.parse(partial.argsStr || "{}");
+              } catch {
+                args = {};
+              }
+              yield { kind: "tool_call", id: chunk.id, name: partial.name, args };
+            }
             break;
+          }
           case "usage":
             usage = chunk.usage;
+            yield { kind: "usage", usage: chunk.usage };
             break;
           case "done":
             break;
           case "error":
-            throw new Error(`Provider error: ${chunk.error}`);
+            yield { kind: "error", error: `Provider error: ${chunk.error}` };
+            return;
         }
       }
 
@@ -146,6 +165,8 @@ export class AgentRunner {
       this.session.recordTurn(assistantTurn);
       messages.push(assistantTurn.message);
 
+      yield { kind: "turn_done", turn: assistantTurn };
+
       if (finalCalls.length === 0) {
         // No more tool calls — we're done
         finalText = textBuf;
@@ -168,6 +189,7 @@ export class AgentRunner {
             content: errResult.content,
           });
           this.session.recordToolCall(call, errResult);
+          yield { kind: "tool_result", id: call.id, name: call.name, ok: false, content: errResult.content };
           continue;
         }
         try {
@@ -180,6 +202,7 @@ export class AgentRunner {
             content: out,
           });
           this.session.recordToolCall(call, result);
+          yield { kind: "tool_result", id: call.id, name: call.name, ok: true, content: out };
         } catch (e) {
           const errMsg = e instanceof Error ? e.message : String(e);
           const errResult: ToolResult = { tool_call_id: call.id, content: errMsg, ok: false };
@@ -190,10 +213,31 @@ export class AgentRunner {
             content: errMsg,
           });
           this.session.recordToolCall(call, errResult);
+          yield { kind: "tool_result", id: call.id, name: call.name, ok: false, content: errMsg };
         }
       }
     }
 
-    return { finalText, turns, totalUsage, iterations: iter };
+    yield { kind: "done", result: { finalText, turns, totalUsage, iterations: iter } };
+  }
+
+  /**
+   * One-shot variant: collects all runStream events and returns the
+   * terminal RunResult. All existing callers continue to work unchanged.
+   */
+  async run(options: RunOptions): Promise<RunResult> {
+    let finalResult: RunResult | undefined;
+    for await (const event of this.runStream(options)) {
+      if (event.kind === "done") {
+        finalResult = event.result;
+      }
+      if (event.kind === "error") {
+        throw new Error(event.error);
+      }
+    }
+    if (!finalResult) {
+      throw new Error("runStream ended without emitting 'done'");
+    }
+    return finalResult;
   }
 }

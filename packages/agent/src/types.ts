@@ -50,3 +50,28 @@ export interface ConversationTurn {
   tier?: Tier;
   usage?: TokenUsage;
 }
+
+/**
+ * Final result returned by AgentRunner.run().
+ * Also embedded in the terminal RunEvent { kind: "done" }.
+ */
+export interface RunResult {
+  finalText: string;
+  turns: ConversationTurn[];
+  totalUsage: TokenUsage;
+  iterations: number;
+}
+
+/**
+ * Streaming event emitted by AgentRunner.runStream() as the tool-use
+ * loop executes. Consumers (CLI, browser plugins) can render these
+ * progressively instead of waiting for the final RunResult.
+ */
+export type RunEvent =
+  | { kind: "text"; text: string }
+  | { kind: "tool_call"; id: ToolCallId; name: string; args: Record<string, unknown> }
+  | { kind: "tool_result"; id: ToolCallId; name: string; ok: boolean; content: string }
+  | { kind: "turn_done"; turn: ConversationTurn }
+  | { kind: "usage"; usage: TokenUsage }
+  | { kind: "done"; result: RunResult }
+  | { kind: "error"; error: string };
