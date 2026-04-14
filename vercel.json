@@ -1,6 +1,6 @@
 {
   "framework": "nextjs",
   "regions": ["iad1"],
-  "installCommand": "npm install",
+  "installCommand": "bun install --frozen-lockfile",
   "buildCommand": "npm run build:workspaces && next build"
 }
