@@ -84,7 +84,9 @@ interface MediaStep {
 function selectCapability(
   action: string,
   styleHint?: string,
-  modelOverride?: string
+  modelOverride?: string,
+  hasSourceUrl?: boolean,
+  promptText?: string
 ): { capability: string; type: CardType } {
   // If model_override provided, resolve it (fuzzy match against live capabilities)
   if (modelOverride) {
@@ -101,9 +103,28 @@ function selectCapability(
     // Could not resolve — fall through to action-based selection
   }
 
+  // Detect "user wants video" from the prompt text so we can route
+  // text-to-video correctly when the agent picks the wrong action.
+  const lowerPrompt = (promptText ?? "").toLowerCase();
+  const lowerHint = (styleHint ?? "").toLowerCase();
+  const asksForVideo =
+    /\bvideo\b|\bclip\b|\banimat\w*|\bfootage\b|\bcinematic\b|\b\d+[- ]second\b/.test(lowerPrompt) ||
+    /\bvideo\b|\bclip\b|\banimat\w*|\bcinematic\b/.test(lowerHint);
+  const valid = getCachedCapabilities();
+  const hasVeoT2V = !!valid && valid.some((c) => c.name === "veo-t2v");
+  const hasVeoI2V = !!valid && valid.some((c) => c.name === "veo-i2v");
+
   switch (action) {
     case "generate": {
-      const hint = styleHint?.toLowerCase() || "";
+      // Text-to-video path: the agent picked "generate" but the user
+      // clearly wants a video. Route to veo-t2v (or ltx-t2v fallback).
+      if (asksForVideo) {
+        if (hasVeoT2V) return { capability: "veo-t2v", type: "video" };
+        if (valid && valid.some((c) => c.name === "ltx-t2v")) {
+          return { capability: "ltx-t2v", type: "video" };
+        }
+      }
+      const hint = lowerHint;
       if (hint.includes("fast") || hint.includes("draft")) return { capability: "flux-schnell", type: "image" };
       if (hint.includes("professional") || hint.includes("illustration")) return { capability: "recraft-v4", type: "image" };
       if (hint.includes("photo")) return { capability: "flux-dev", type: "image" };
@@ -112,13 +133,21 @@ function selectCapability(
     case "restyle":
       return { capability: "kontext-edit", type: "image" };
     case "animate": {
+      // animate = image → video. Requires a source_url to work.
+      // If the agent called animate WITHOUT a source (common bug: user
+      // says "make an 8-second video" and the LLM thinks "animate"),
+      // fall through to text-to-video so the prompt still produces
+      // a clip instead of erroring out.
+      if (!hasSourceUrl) {
+        if (hasVeoT2V) return { capability: "veo-t2v", type: "video" };
+        if (valid && valid.some((c) => c.name === "ltx-t2v")) {
+          return { capability: "ltx-t2v", type: "video" };
+        }
+      }
       // Route to Veo 3.1 (via fal.ai) when available — dramatically
       // better quality + audio than LTX. Falls back to ltx-i2v if the
       // live capability registry doesn't include veo-i2v.
-      const valid = getCachedCapabilities();
-      if (valid && valid.some((c) => c.name === "veo-i2v")) {
-        return { capability: "veo-i2v", type: "video" };
-      }
+      if (hasVeoI2V) return { capability: "veo-i2v", type: "video" };
       return { capability: "ltx-i2v", type: "video" };
     }
     case "upscale":
@@ -254,11 +283,18 @@ export const createMediaTool: ToolDefinition = {
         console.log(`[create_media] Session context injected (${sessionPrefix.split(/\s+/).length} words): "${sessionPrefix.slice(0, 80)}..."`);
       }
 
-      // Resolve capability through live registry (fuzzy-matches invalid names)
+      // Resolve capability through live registry (fuzzy-matches invalid names).
+      // Pass hasSourceUrl + promptText so the resolver can:
+      // - route animate-without-source to veo-t2v instead of failing on veo-i2v
+      // - route generate-with-video-intent to veo-t2v instead of flux-dev
+      const stepSourceUrl = step.source_url
+        || (step.depends_on !== undefined && results[step.depends_on]?.url);
       const { capability, type } = selectCapability(
         step.action,
         step.style_hint,
-        step.model_override || ("modelHint" in styled ? styled.modelHint : undefined) as string | undefined
+        step.model_override || ("modelHint" in styled ? styled.modelHint : undefined) as string | undefined,
+        !!stepSourceUrl,
+        effectivePrompt,
       );
 
       // Friendly names: short, memorable, easy to reference in chat
