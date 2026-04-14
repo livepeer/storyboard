@@ -1,4 +1,5 @@
 import type { LayoutSkill, LayoutContext, CardPosition, LayoutPreset } from "./types";
+import type { Card } from "@/lib/canvas/types";
 import { BASE_CARD_W, BASE_CARD_H, HEADER_OFFSET } from "./types";
 
 export function runLayout(ctx: LayoutContext, skill: LayoutSkill): CardPosition[] {
@@ -48,14 +49,14 @@ function groupCards(
   ordered: LayoutContext["cards"],
   ctx: LayoutContext,
   groupBy: string
-): LayoutContext["cards"][][] {
+): Card[][] {
   if (groupBy === "episode" && ctx.episodes.length > 0) return groupByEpisode(ordered, ctx);
   if (groupBy === "batch") return groupByBatch(ordered);
   return [ordered];
 }
 
-function groupByBatch(ordered: LayoutContext["cards"]): LayoutContext["cards"][][] {
-  const groups: LayoutContext["cards"][][] = [];
+function groupByBatch(ordered: LayoutContext["cards"]): Card[][] {
+  const groups: Card[][] = [];
   const batchMap = new Map<string, number>();
   for (const card of ordered) {
     const bid = card.batchId;
@@ -70,7 +71,7 @@ function groupByBatch(ordered: LayoutContext["cards"]): LayoutContext["cards"][]
   return groups;
 }
 
-function groupByEpisode(ordered: LayoutContext["cards"], ctx: LayoutContext): LayoutContext["cards"][][] {
+function groupByEpisode(ordered: LayoutContext["cards"], ctx: LayoutContext): Card[][] {
   const epMap = new Map<string, LayoutContext["cards"]>();
   const ungrouped: LayoutContext["cards"][number][] = [];
   for (const ep of ctx.episodes) epMap.set(ep.id, []);
@@ -79,7 +80,7 @@ function groupByEpisode(ordered: LayoutContext["cards"], ctx: LayoutContext): La
     if (ep) epMap.get(ep.id)!.push(card);
     else ungrouped.push(card);
   }
-  const groups: LayoutContext["cards"][][] = [];
+  const groups: Card[][] = [];
   for (const ep of ctx.episodes) {
     const epCards = epMap.get(ep.id)!;
     if (epCards.length > 0) groups.push(epCards);
@@ -89,7 +90,7 @@ function groupByEpisode(ordered: LayoutContext["cards"], ctx: LayoutContext): La
 }
 
 function positionRows(
-  groups: LayoutContext["cards"][][],
+  groups: Card[][],
   cardW: number,
   cardH: number,
   gap: number,
@@ -150,7 +151,7 @@ function positionRows(
 }
 
 function positionCenterOut(
-  groups: LayoutContext["cards"][][],
+  groups: Card[][],
   cardW: number,
   cardH: number,
   gap: number,
