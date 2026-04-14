@@ -23,7 +23,7 @@ import {
   WorkingMemoryStore,
   SessionMemoryStore,
 } from "@livepeer/agent";
-import { GeminiProvider } from "@livepeer/agent";
+import { GeminiProvider } from "@livepeer/agent/providers/gemini";
 
 const provider = new GeminiProvider({ apiKey: process.env.GEMINI_API_KEY! });
 const tools = new ToolRegistry();
