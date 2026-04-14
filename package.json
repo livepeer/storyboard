@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:workspaces": "npm run build:lib --workspace=@livepeer/agent && npm run build --workspace=@livepeer/agent-pack-projects && npm run build --workspace=@livepeer/agent-pack-canvas",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
