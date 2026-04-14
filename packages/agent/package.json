@@ -1,0 +1,35 @@
+{
+  "name": "@livepeer/agent",
+  "version": "0.1.0-alpha.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": { "livepeer": "./dist/cli.js" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./cli": "./dist/cli.js"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "bun build src/index.ts --target=bun --outdir=dist && bun build src/cli/index.ts --target=bun --outfile=dist/cli.js",
+    "build:binary": "bun build src/cli/index.ts --compile --outfile=dist/livepeer",
+    "test": "vitest run",
+    "test:e2e": "vitest run tests/e2e",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ink": "^5.0.0",
+    "react": "^18.3.0",
+    "yaml": "^2.5.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "engines": { "node": ">=20", "bun": ">=1.0" }
+}

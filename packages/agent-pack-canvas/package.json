@@ -1,0 +1,16 @@
+{
+  "name": "@livepeer/agent-pack-canvas",
+  "version": "0.1.0-alpha.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "bun build src/index.ts --target=bun --outdir=dist",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": { "@livepeer/agent": "workspace:*" },
+  "devDependencies": { "typescript": "^5.5.0", "vitest": "^2.0.0" }
+}
