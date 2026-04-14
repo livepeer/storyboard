@@ -1,0 +1,87 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# STAGING BYOC + SDK Service Configuration — Storyboard A3
+# ──────────────────────────────────────────────────────────────────────────────
+# Parallel infrastructure for storyboard-a3. Does NOT touch existing VMs.
+# Uses same wallets/secrets as main staging for simplicity.
+
+# ─── BYOC Orchestrator ───────────────────────────────────────────────────────
+byoc:
+  - name: byoc-a3-staging-1
+    region: us-west1
+    zone: us-west1-b
+    machine_type: e2-medium
+    domain: byoc-a3-staging-1.daydream.monster
+    eth_addr: "0x180859c337d14edf588c685f3f7ab4472ab6a252"
+    wallet_secret: scope-stg-orch-wallet
+    status: active
+
+# ─── SDK Service ─────────────────────────────────────────────────────────────
+sdk:
+  - name: sdk-a3-staging-1
+    region: us-west1
+    zone: us-west1-b
+    machine_type: e2-small
+    domain: sdk-a3-staging-1.daydream.monster
+    status: active
+    env:
+      # LV2V uses the shared Scope orchestrators (not the A3 BYOC orch)
+      LV2V_ORCH_URLS: "https://orch-staging-1.daydream.monster:8935,https://orch-staging-2.daydream.monster:8935"
+
+# ─── Capabilities (same as main staging) ────────────────────────────────────
+capabilities:
+  - name: nano-banana
+    model_id: fal-ai/nano-banana-2
+    capacity: 4
+    price_per_unit: 1
+  - name: recraft-v4
+    model_id: fal-ai/recraft/v4/pro/text-to-image
+    capacity: 4
+    price_per_unit: 2
+  - name: flux-schnell
+    model_id: fal-ai/flux/schnell
+    capacity: 4
+    price_per_unit: 1
+  - name: flux-dev
+    model_id: fal-ai/flux/dev
+    capacity: 4
+    price_per_unit: 2
+  - name: ltx-t2v
+    model_id: fal-ai/ltx-2.3/text-to-video
+    capacity: 2
+    price_per_unit: 3
+  - name: ltx-i2v
+    model_id: fal-ai/ltx-2.3/image-to-video
+    capacity: 2
+    price_per_unit: 3
+  - name: kontext-edit
+    model_id: fal-ai/flux-pro/kontext
+    capacity: 4
+    price_per_unit: 3
+  - name: bg-remove
+    model_id: fal-ai/bg-remove
+    capacity: 4
+    price_per_unit: 1
+  - name: topaz-upscale
+    model_id: fal-ai/topaz-upscale
+    capacity: 4
+    price_per_unit: 1
+  - name: chatterbox-tts
+    model_id: fal-ai/chatterbox/text-to-speech
+    capacity: 4
+    price_per_unit: 1
+  - name: gemini-image
+    model_id: gemini/gemini-2.5-flash-image
+    capacity: 4
+    price_per_unit: 2
+  - name: gemini-text
+    model_id: gemini/gemini-2.5-flash
+    capacity: 4
+    price_per_unit: 1
+
+# ─── Provider Config ─────────────────────────────────────────────────────────
+proxy:
+  provider: fal-ai
+  api_key_secret: scope-stg-fal-api-key
+  extra_providers:
+    gemini:
+      api_key_secret: scope-stg-gemini-api-key
