@@ -21,4 +21,5 @@ if (args.includes("--mcp")) {
   process.exit(0);
 }
 
-console.log(`livepeer agent v${VERSION} (CLI placeholder, Phase 8 lands the real TUI)`);
+const { runCli } = await import("./main.js");
+await runCli();
