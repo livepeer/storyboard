@@ -15,7 +15,7 @@
     "build": "bun build src/index.ts --target=bun --outdir=dist && bun build src/cli/index.ts --target=bun --outfile=dist/cli.js && tsc --emitDeclarationOnly --outDir dist",
     "build:binary": "bun build src/cli/index.ts --compile --outfile=dist/livepeer",
     "test": "vitest run",
-    "test:e2e": "vitest run tests/e2e",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
