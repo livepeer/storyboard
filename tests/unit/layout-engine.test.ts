@@ -39,21 +39,58 @@ describe("Layout Engine", () => {
     expect(pos[0].x).toBeLessThan(pos[2].x);
   });
 
-  it("narrative: each batch gets its own row", () => {
+  it("narrative: each substantive batch (≥3 cards) gets its own row", () => {
     const cards = [
-      makeCard("0", "img-1", "b1"), makeCard("1", "img-2", "b1"),
-      makeCard("2", "img-3", "b2"), makeCard("3", "img-4", "b2"),
+      makeCard("0", "img-1", "b1"), makeCard("1", "img-2", "b1"), makeCard("2", "img-3", "b1"),
+      makeCard("3", "img-4", "b2"), makeCard("4", "img-5", "b2"), makeCard("5", "img-6", "b2"),
     ];
     const pos = runLayout(makeCtx(cards), getBuiltInSkill("narrative")!);
-    expect(pos[0].y).toBeLessThan(pos[2].y);
+    expect(pos[0].y).toBeLessThan(pos[3].y);
     expect(pos[0].y).toBe(pos[1].y);
+    expect(pos[3].y).toBe(pos[5].y);
   });
 
-  it("narrative: rowSeparator adds extra gap between groups", () => {
+  it("narrative: rowSeparator adds extra gap between substantive groups", () => {
+    const cards = [
+      makeCard("0", "img-1", "b1"), makeCard("1", "img-2", "b1"), makeCard("2", "img-3", "b1"),
+      makeCard("3", "img-4", "b2"), makeCard("4", "img-5", "b2"), makeCard("5", "img-6", "b2"),
+    ];
+    const pos = runLayout(makeCtx(cards), getBuiltInSkill("narrative")!);
+    const yGap = pos[3].y - pos[0].y;
+    expect(yGap).toBeGreaterThan(280 + 24);
+  });
+
+  // --- Regression tests for tiny-batch merge (Bug 2) ---
+  // Each create_media call gets a fresh batchId, so iterative 1-card
+  // clarifications would otherwise put every card on its own row.
+  // groupByBatch now merges trailing batches < 3 cards.
+
+  it("narrative: 5-card batch + five 1-card iterations → fewer than 6 rows", () => {
+    const firstBatch = [
+      makeCard("0", "img-1", "b1"), makeCard("1", "img-2", "b1"),
+      makeCard("2", "img-3", "b1"), makeCard("3", "img-4", "b1"),
+      makeCard("4", "img-5", "b1"),
+    ];
+    const iterations = Array.from({ length: 5 }, (_, i) =>
+      makeCard(String(5 + i), `img-${6 + i}`, `b_iter_${i}`)
+    );
+    const pos = runLayout(makeCtx([...firstBatch, ...iterations]), getBuiltInSkill("narrative")!);
+    const ys = new Set(pos.map((p) => p.y));
+    expect(pos).toHaveLength(10);
+    expect(ys.size).toBeLessThanOrEqual(2);
+  });
+
+  it("narrative: cards with no batchId merge into a single group", () => {
+    const cards = Array.from({ length: 5 }, (_, i) => makeCard(String(i), `img-${i + 1}`));
+    const pos = runLayout(makeCtx(cards), getBuiltInSkill("narrative")!);
+    const ys = new Set(pos.map((p) => p.y));
+    expect(ys.size).toBe(1);
+  });
+
+  it("narrative: two 1-card batches produce one row (merged)", () => {
     const cards = [makeCard("0", "img-1", "b1"), makeCard("1", "img-2", "b2")];
     const pos = runLayout(makeCtx(cards), getBuiltInSkill("narrative")!);
-    const yGap = pos[1].y - pos[0].y;
-    expect(yGap).toBeGreaterThan(280 + 24);
+    expect(pos[0].y).toBe(pos[1].y);
   });
 
   it("no cards returns empty", () => {

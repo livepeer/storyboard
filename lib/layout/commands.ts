@@ -4,19 +4,60 @@ import { organizeCanvas } from "./agent";
 import type { LayoutPreset } from "./types";
 import { BASE_CARD_W } from "./types";
 
+/** Aliases so the CLAUDE.md-documented commands (grid, flow) actually work.
+ *  Keep in sync with the skill IDs in lib/layout/skills.ts. */
+const ORGANIZE_ALIASES: Record<string, string> = {
+  grid: "basic",
+  flow: "narrative",
+  story: "narrative",
+  sequence: "narrative",
+  comic: "graphic-novel",
+  novel: "graphic-novel",
+  storyboard: "movie-board",
+  film: "movie-board",
+  cinema: "movie-board",
+  moodboard: "ads-board",
+  ads: "ads-board",
+  brainstorm: "ads-board",
+  even: "balanced",
+  manual: "freeform",
+  none: "freeform",
+};
+
 export function handleOrganize(args: string): string {
   const store = useCanvasStore.getState();
   if (store.cards.length === 0) return "Canvas is empty \u2014 nothing to organize.";
 
-  const skillId = args.trim().toLowerCase() || undefined;
+  const raw = args.trim().toLowerCase();
+  const layoutStore = useLayoutStore.getState();
+  // Resolve aliases first, then check that the resulting ID is valid.
+  // If the user typed something we don't recognize AT ALL, return an
+  // error instead of silently falling back to basic — they deserve
+  // feedback that the name was wrong.
+  let skillId: string | undefined;
+  if (raw) {
+    skillId = ORGANIZE_ALIASES[raw] || raw;
+    if (!layoutStore.getSkill(skillId)) {
+      const names = layoutStore.getAllSkills().map((s) => s.id).join(", ");
+      const aliases = Object.entries(ORGANIZE_ALIASES)
+        .map(([a, t]) => `${a}\u2192${t}`)
+        .join(", ");
+      return (
+        `Unknown layout "${raw}".\n` +
+        `Available: ${names}.\n` +
+        `Aliases: ${aliases}.`
+      );
+    }
+  }
+
   const positions = organizeCanvas(skillId);
   store.applyLayout(positions);
 
-  const layoutStore = useLayoutStore.getState();
   const skill = skillId ? layoutStore.getSkill(skillId) : null;
   const name = skill?.name || "auto-selected";
+  const aliasNote = raw && skillId !== raw ? ` (alias for ${skillId})` : "";
 
-  return `Organized ${store.cards.length} cards using ${name}.\nTip: /layout list \u2014 see all layout options`;
+  return `Organized ${store.cards.length} cards using ${name}${aliasNote}.\nTip: /layout list \u2014 see all layout options`;
 }
 
 export function handleLayoutCommand(args: string): string {

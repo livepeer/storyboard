@@ -55,20 +55,51 @@ function groupCards(
   return [ordered];
 }
 
+/**
+ * Group cards by batchId, then merge trailing small groups into the
+ * previous substantive group. Rationale: each `create_media` call gets
+ * a fresh `batch_${Date.now()}` id (see compound-tools.ts:278), so an
+ * iterative clarification flow ("cat+bulldog" → "outdoor" → "with more
+ * bulldog" → "brighter") produces many 1-card batches. Narrative layout
+ * would otherwise put each on its own row, visually fragmenting what is
+ * logically one session.
+ *
+ * Merge rule: a group with fewer than MIN_BATCH_FOR_NEW_ROW cards is
+ * appended to the previous group, as long as the previous group has
+ * room under MAX_MERGED_GROUP. A new substantive group (≥ 3 cards)
+ * always starts on its own row.
+ */
+const MIN_BATCH_FOR_NEW_ROW = 3;
+const MAX_MERGED_GROUP = 8; // matches narrative preset's cols
+
 function groupByBatch(ordered: LayoutContext["cards"]): Card[][] {
-  const groups: Card[][] = [];
+  const raw: Card[][] = [];
   const batchMap = new Map<string, number>();
   for (const card of ordered) {
     const bid = card.batchId;
     if (bid && batchMap.has(bid)) {
-      groups[batchMap.get(bid)!].push(card);
+      raw[batchMap.get(bid)!].push(card);
     } else {
-      const idx = groups.length;
+      const idx = raw.length;
       if (bid) batchMap.set(bid, idx);
-      groups.push([card]);
+      raw.push([card]);
     }
   }
-  return groups;
+  // Merge tiny trailing batches into the previous group where possible.
+  const merged: Card[][] = [];
+  for (const g of raw) {
+    const last = merged[merged.length - 1];
+    if (
+      last &&
+      g.length < MIN_BATCH_FOR_NEW_ROW &&
+      last.length < MAX_MERGED_GROUP
+    ) {
+      last.push(...g);
+    } else {
+      merged.push([...g]);
+    }
+  }
+  return merged;
 }
 
 function groupByEpisode(ordered: LayoutContext["cards"], ctx: LayoutContext): Card[][] {
