@@ -504,14 +504,108 @@ export const geminiPlugin: AgentPlugin = {
       const session = new SessionMemoryStore();
       const runner = new AgentRunner(provider, tools, working, session);
 
-      // Scene animate fast path: we've already resolved the source URL
-      // and duration, so there's no ambiguity. Calling Gemini here lets
-      // it sometimes decompose the request into multiple create_media
-      // steps (splitting audio from video, etc.), causing partial veo-i2v
-      // failures. Bypass the LLM entirely — invoke create_media once
-      // with one deterministically-built step, yield the same events the
-      // runner would, and fall through to the completion-summary block.
-      if (sceneAnimateDetected && sceneIterationIndex >= 0 && activeProj && resolvedSceneCardUrl) {
+      // Stream-brief fast path: we've extracted the scene descriptions
+      // deterministically (extractedScenes). Gemini has repeatedly
+      // proven unreliable at following "use this text verbatim" — it
+      // keeps calling scope_start with style-only prompts and dropping
+      // the scene content entirely. Bypass the LLM for this path and
+      // call scope_start directly, once per scene, with the extracted
+      // text. Same yield pattern as the scene-animate fast path.
+      if (
+        isNewBrief &&
+        wantsLiveStream &&
+        extractedScenes.length > 0
+      ) {
+        console.log(
+          `[Gemini] Stream fast path: calling scope_start ${extractedScenes.length} times with extracted scene text`
+        );
+        const { listTools: lt } = await import("@/lib/tools/registry");
+        const scopeStartTool = lt().find((t) => t.name === "scope_start");
+        if (!scopeStartTool) {
+          yield { type: "error", content: "scope_start tool not registered" };
+          completedTools.push({ name: "scope_start", success: false });
+        } else {
+          for (const scene of extractedScenes) {
+            const fullPrompt = styleHint
+              ? `${scene.text}, ${styleHint}`
+              : scene.text;
+            const args = {
+              prompt: fullPrompt,
+              graph_template: "text-only",
+              preset: "cinematic",
+            };
+            console.log(
+              `[Gemini] scope_start Scene ${scene.index}: "${fullPrompt.slice(0, 80)}..."`
+            );
+            yield { type: "tool_call", name: "scope_start", input: args };
+            lastRoundHadToolCalls = true;
+            say(`Starting stream for scene ${scene.index}...`, "system");
+            try {
+              const result = await scopeStartTool.execute(args);
+              const ok = !!result.success;
+              yield {
+                type: "tool_result",
+                name: "scope_start",
+                result: ok ? result.data : { error: result.error ?? "unknown" },
+              };
+              completedTools.push({
+                name: "scope_start",
+                success: ok,
+                summary: ok ? `scene ${scene.index} streaming` : undefined,
+              });
+            } catch (e) {
+              const raw = e instanceof Error ? e.message : "Unknown error";
+              console.warn(`[Gemini] scope_start scene ${scene.index} threw:`, raw);
+              yield { type: "error", content: `Scene ${scene.index}: ${raw}` };
+              completedTools.push({ name: "scope_start", success: false });
+            }
+          }
+        }
+      } else if (
+        isNewBrief &&
+        wantsVideos &&
+        extractedScenes.length > 0
+      ) {
+        // Video brief fast path: call create_media ONCE with N steps,
+        // each using a pre-extracted scene text. Same deterministic
+        // logic as the live-stream path but going to veo-t2v/ltx-t2v
+        // instead of scope_start.
+        console.log(
+          `[Gemini] Video fast path: create_media with ${extractedScenes.length} steps`
+        );
+        const { listTools: lt } = await import("@/lib/tools/registry");
+        const createMediaTool = lt().find((t) => t.name === "create_media");
+        if (!createMediaTool) {
+          yield { type: "error", content: "create_media tool not registered" };
+          completedTools.push({ name: "create_media", success: false });
+        } else {
+          const steps = extractedScenes.map((s) => ({
+            action: "generate",
+            prompt: styleHint ? `${s.text}, ${styleHint}` : s.text,
+          }));
+          yield { type: "tool_call", name: "create_media", input: { steps } };
+          lastRoundHadToolCalls = true;
+          say(`Generating ${steps.length} videos...`, "system");
+          try {
+            const result = await createMediaTool.execute({ steps });
+            const ok = !!result.success;
+            yield {
+              type: "tool_result",
+              name: "create_media",
+              result: ok ? result.data : { error: result.error ?? "unknown" },
+            };
+            completedTools.push({
+              name: "create_media",
+              success: ok,
+              summary: ok ? `${steps.length} videos queued` : undefined,
+            });
+          } catch (e) {
+            const raw = e instanceof Error ? e.message : "Unknown error";
+            yield { type: "error", content: `Video generation failed: ${raw}` };
+            completedTools.push({ name: "create_media", success: false });
+          }
+        }
+      } else if (sceneAnimateDetected && sceneIterationIndex >= 0 && activeProj && resolvedSceneCardUrl) {
         // Extract motion description from the user's text by stripping
         // "animate scene N (...)", duration markers, and ambient audio
         // clauses. What remains is the visual motion description.
