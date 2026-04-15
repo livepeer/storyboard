@@ -22,6 +22,43 @@ import { setCurrentUserText } from "@/lib/tools/compound-tools";
 
 const MAX_TOOL_ROUNDS = 20;
 
+/**
+ * Extract per-scene descriptions from a multi-scene brief, verbatim.
+ * Used by the stream-brief fast path so we pass the user's actual
+ * scene text to scope_start / create_media instead of asking Gemini
+ * to summarize it (which produces generic blobs like "a village
+ * scene" and loses every specific detail).
+ *
+ * Split before each "scene N" marker (case-insensitive, supports
+ * "scene 1", "Scene #1", etc.). For each block, strip the leading
+ * marker + optional "(stream N)" parenthetical + colon/comma/dash
+ * separator, then normalize whitespace. Keep the remaining user text
+ * up to 400 chars.
+ *
+ * Exported for unit tests.
+ */
+export function extractSceneBlocks(
+  text: string,
+  enabled: boolean
+): Array<{ index: number; text: string }> {
+  if (!enabled) return [];
+  const out: Array<{ index: number; text: string }> = [];
+  const parts = text.split(/(?=\bscene\s*#?\s*\d+\b)/i);
+  for (const block of parts) {
+    const m = block.match(/^\s*scene\s*#?\s*(\d+)\b/i);
+    if (!m) continue;
+    const idx = parseInt(m[1], 10);
+    let body = block.slice(m[0].length);
+    body = body.replace(/^\s*\([^)]*\)/, "");
+    body = body.replace(/^\s*[:,\-\u2014]+\s*/, "");
+    body = body.replace(/\s+/g, " ").trim();
+    if (body.length > 3) {
+      out.push({ index: idx, text: body.slice(0, 400) });
+    }
+  }
+  return out;
+}
+
 let stopped = false;
 
 /**
@@ -266,25 +303,58 @@ export const geminiPlugin: AgentPlugin = {
         : multipleSceneMatches > 0
           ? multipleSceneMatches
           : 0;
+      // Extract scene descriptions VERBATIM from the user's text so we
+      // can pass them to scope_start / create_media directly instead of
+      // asking Gemini to summarize them (which produces generic blobs
+      // like "a village scene" and loses every specific detail). Split
+      // on "scene N" markers, keep whatever text the user wrote between
+      // markers as the prompt for that scene.
+      const extractedScenes = extractSceneBlocks(text, isNewBrief);
+
+      // Look for an explicit style hint so it lands in each per-scene
+      // prompt even if Gemini is tempted to drop it.
+      const styleMatch = text.match(
+        /\b(studio ghibli|ghibli|anime|watercolor|oil painting|pixar|photorealistic|noir|cyberpunk|cinematic)\b[^.,]*(style)?/i
+      );
+      const styleHint = styleMatch ? styleMatch[0].trim() : "";
+
       let streamOverrideDirective = "";
-      if (isNewBrief && (wantsLiveStream || wantsVideos)) {
+      if (isNewBrief && (wantsLiveStream || wantsVideos) && extractedScenes.length > 0) {
+        const n = extractedScenes.length;
+        // Build a bullet list of {index, exact text} the LLM can read.
+        const sceneList = extractedScenes
+          .map(
+            (s) =>
+              `  Scene ${s.index}: "${s.text}"${styleHint ? ` [${styleHint}]` : ""}`
+          )
+          .join("\n");
+
         if (wantsLiveStream) {
           streamOverrideDirective =
-            `\n\n## Override: Live Stream Brief\n` +
-            `User wants ${streamCount || "multiple"} LIVE streams (LV2V), NOT a static image storyboard. ` +
-            `Do NOT call project_create or project_generate. For each scene, call scope_start with: ` +
-            `graph={"nodes":[{"id":"longlive","type":"pipeline","pipeline_id":"longlive"},{"id":"output","type":"sink"}],"edges":[{"from":"longlive","from_port":"video","to_node":"output","to_port":"video","kind":"stream"}]}, ` +
-            `prompts="<scene description under 25 words>", and an appropriate preset. ` +
-            `Call scope_start once per scene so the user gets ${streamCount || "N"} concurrent streams.`;
+            `\n\n## Override: Live Stream Brief (${n} streams)\n` +
+            `User wants ${n} LIVE streams (LV2V), NOT a static image storyboard.\n` +
+            `Do NOT call project_create or project_generate.\n\n` +
+            `Scene prompts extracted from the user's text — use each VERBATIM, do not summarize or rewrite:\n` +
+            sceneList +
+            `\n\nFor each scene, call scope_start with:\n` +
+            `  - graph: {"nodes":[{"id":"longlive","type":"pipeline","pipeline_id":"longlive"},{"id":"output","type":"sink"}],"edges":[{"from":"longlive","from_port":"video","to_node":"output","to_port":"video","kind":"stream"}]}\n` +
+            `  - prompts: the Scene N text above, character-for-character\n` +
+            `  - preset: pick one that matches the style (dreamy / cinematic / anime / painterly)\n` +
+            `Make ${n} scope_start calls total, one per scene. Start all streams.`;
         } else {
           streamOverrideDirective =
-            `\n\n## Override: Video Brief\n` +
-            `User wants ${streamCount || "multiple"} VIDEOS, NOT a static image storyboard. ` +
-            `Do NOT call project_create or project_generate. Call create_media ONCE with ${streamCount || "N"} steps, each with action="generate" and a motion-rich text prompt under 25 words. ` +
-            `The capability resolver will route to veo-t2v / ltx-t2v automatically. Include the style from the user's brief (e.g. "studio ghibli style").`;
+            `\n\n## Override: Video Brief (${n} videos)\n` +
+            `User wants ${n} VIDEOS, NOT a static image storyboard.\n` +
+            `Do NOT call project_create or project_generate.\n\n` +
+            `Scene prompts extracted from the user's text — use each VERBATIM, do not summarize or rewrite:\n` +
+            sceneList +
+            `\n\nCall create_media ONCE with exactly ${n} steps. For each step:\n` +
+            `  - action: "generate"\n` +
+            `  - prompt: the Scene N text above, character-for-character${styleHint ? ` (style is already included)` : ""}\n` +
+            `The capability resolver will route to veo-t2v / ltx-t2v automatically.`;
         }
         console.log(
-          `[Gemini] Stream override: wantsLiveStream=${wantsLiveStream}, wantsVideos=${wantsVideos}, count=${streamCount}`
+          `[Gemini] Stream override: wantsLiveStream=${wantsLiveStream}, wantsVideos=${wantsVideos}, extractedScenes=${extractedScenes.length}, styleHint="${styleHint}"`
         );
       }
       if (activeProj && isNewBrief) {
