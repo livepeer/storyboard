@@ -651,8 +651,8 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
     handled: false,
     agentPrompt:
       createdProjects.length === 1
-        ? `Project "${createdProjects[0].projectId}" created with ${createdProjects[0].totalScenes} scenes. Call project_generate with project_id="${createdProjects[0].projectId}" to start generating. Keep calling project_generate until all scenes are done. After completion call canvas_organize.`
-        : `${createdProjects.length} projects created:\n${generateInstruction}\n\nFor EACH project above, call project_generate with that project_id, and keep calling project_generate for that same project until all its scenes are done. Then move to the next project. After all projects are complete, call canvas_organize once.`,
+        ? `Project "${createdProjects[0].projectId}" created with ${createdProjects[0].totalScenes} scenes. Call project_generate ONCE with project_id="${createdProjects[0].projectId}". It will generate ALL scenes in a single call — do not call it again. Then call canvas_organize.`
+        : `${createdProjects.length} projects created:\n${generateInstruction}\n\nFor EACH project above, call project_generate ONCE with that project_id. Each call generates ALL scenes for that project in one shot — do NOT call project_generate multiple times for the same project. After all projects are done, call canvas_organize once.`,
   };
 }
 
