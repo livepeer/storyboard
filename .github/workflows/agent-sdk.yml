@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.1.30"
+          bun-version: "1.2.18"
       - run: bun install --frozen-lockfile
       - run: bun --filter "@livepeer/agent" run typecheck
       - run: bun --filter "@livepeer/agent" run test
@@ -41,7 +41,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.1.30"
+          bun-version: "1.2.18"
       - run: bun install --frozen-lockfile
       - run: cd packages/agent && bun run build
       - name: Run bench (>10% regression fails CI)
@@ -59,7 +59,7 @@ jobs:
           node-version: "20"
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.1.30"
+          bun-version: "1.2.18"
       - run: bun install --frozen-lockfile
       - run: cd packages/agent && npx tsc --noEmit
       - run: cd packages/agent && bun run build
@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.1.30"
+          bun-version: "1.2.18"
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
