@@ -292,6 +292,7 @@ export function ChatPanel() {
       const cmd = parseCommand(text.trim());
       if (cmd) {
         addMessage(text.trim(), "user");
+        setInput("");
         executeCommand(cmd).then((result) => addMessage(result, "system"));
         return;
       }

@@ -14,6 +14,7 @@ import { listTools as listStoryboardTools } from "@/lib/tools/registry";
 import { useChatStore } from "@/lib/chat/store";
 import { buildAgentContext } from "../context-builder";
 import { useWorkingMemory } from "../working-memory";
+import { useActiveRequest } from "../active-request";
 import { classifyIntent } from "../intent";
 import { StoryboardGeminiProvider } from "../storyboard-providers";
 import { wrapStoryboardTool } from "../runner-adapter";
@@ -176,6 +177,17 @@ export const geminiPlugin: AgentPlugin = {
       // Make the user's raw text available to downstream tools (used
       // by compound-tools' selectCapability to detect edit-intent).
       setCurrentUserText(text);
+
+      // Update ActiveRequest BEFORE buildAgentContext so the injected
+      // "Active request:" line reflects this turn's patch. Pure
+      // deterministic extractor — no LLM cost. Handles new request,
+      // clarification answer, and correction. See
+      // lib/agents/active-request.ts for the classifier.
+      useActiveRequest.getState().applyTurn(text);
+
+      // L2: log the user turn to the rolling digest so prior turns
+      // survive as ~200 words of "Session: ..." context across runs.
+      useWorkingMemory.getState().appendDigest(`user: ${text.slice(0, 120)}`);
 
       // Find the best candidate project for "scene N" references:
       // prefer active, fall back to the most recently created project
@@ -424,6 +436,55 @@ export const geminiPlugin: AgentPlugin = {
         });
       }
       wmem.syncFromProjectStore();
+
+      // L2: log the agent's outcome to the rolling digest. One line.
+      const outcomeBits: string[] = [];
+      if (completedTools.length > 0) {
+        const ok = completedTools.filter(t => t.success).length;
+        outcomeBits.push(`ran ${ok}/${completedTools.length} ${completedTools.map(t => t.name).slice(0, 3).join("+")}`);
+      }
+      if (outcomeBits.length > 0) {
+        wmem.appendDigest(`agent: ${outcomeBits.join(", ").slice(0, 120)}`);
+      }
+
+      // L3: auto-seed CreativeContext on first substantive generation.
+      // Only runs once per session (flag on sessionStorage). If the
+      // user already ran /context gen, this is a no-op. The seeded
+      // context carries style/characters across future turns even if
+      // ActiveRequest expires.
+      try {
+        const hasGeneratedMedia = completedTools.some(
+          (t) => t.success && (t.name === "create_media" || t.name === "project_generate")
+        );
+        if (hasGeneratedMedia && typeof window !== "undefined") {
+          const seedKey = "storyboard:creative-context-autoseeded";
+          const alreadySeeded = window.sessionStorage.getItem(seedKey) === "1";
+          const { useSessionContext } = await import("../session-context");
+          const existing = useSessionContext.getState().context;
+          if (!alreadySeeded && !existing) {
+            const active = useActiveRequest.getState().snapshot();
+            const seedText = [active.subject, ...active.modifiers].filter(Boolean).join(", ");
+            if (seedText.trim().length >= 5) {
+              // Seed only the fields we can derive deterministically.
+              // Style/palette/mood need an LLM to extract properly —
+              // leave them empty so /context show tells the user to
+              // enrich via /context gen, but subject/characters land.
+              useSessionContext.getState().setContext({
+                style: "",
+                palette: "",
+                characters: active.subject.slice(0, 200),
+                setting: active.modifiers.slice(0, 3).join(", ").slice(0, 200),
+                rules: "",
+                mood: "",
+              });
+              window.sessionStorage.setItem(seedKey, "1");
+              console.log(`[Gemini] Auto-seeded CreativeContext from ActiveRequest: ${seedText.slice(0, 80)}`);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[Gemini] Auto-seed failed (non-fatal):", e);
+      }
 
       // Completion summary — if agent didn't say anything after finishing tools,
       // generate a brief summary so the user knows what happened.
