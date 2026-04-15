@@ -231,6 +231,7 @@ export const geminiPlugin: AgentPlugin = {
       let sceneIterationDetected = false;
       let sceneAnimateDetected = false;
       let sceneIterationIndex = -1;
+      let resolvedSceneCardUrl: string | undefined;
       if (activeProj) {
         // Match "scene 4", "scene #4", "the 4th scene", "scene four", etc.
         const numMatch = text.match(/\bscene\s*#?\s*(\d+)\b/i);
@@ -263,17 +264,16 @@ export const geminiPlugin: AgentPlugin = {
 
           // Try to resolve scene N's existing card URL so we can pass
           // it as source_url without a round-trip to canvas_get.
-          let sceneCardUrl: string | undefined;
           try {
             const refId = activeProj.scenes[idx]?.cardRefId;
             if (refId) {
               const { useCanvasStore } = await import("@/lib/canvas/store");
               const card = useCanvasStore.getState().cards.find((c: { refId?: string; url?: string }) => c.refId === refId);
-              sceneCardUrl = card?.url;
+              resolvedSceneCardUrl = card?.url;
             }
           } catch { /* non-fatal — Gemini will call canvas_get if needed */ }
 
-          if (isAnimateScene && sceneCardUrl) {
+          if (isAnimateScene && resolvedSceneCardUrl) {
             // Animate-scene path: call create_media with action=animate
             // and source_url pre-populated. compound-tools will route
             // this to veo-i2v (or ltx-i2v fallback) via selectCapability.
@@ -282,7 +282,7 @@ export const geminiPlugin: AgentPlugin = {
             const duration = durMatch ? Math.min(30, parseInt(durMatch[1], 10)) : 8;
             sceneDirective =
               `\n\nAnimate scene ${sceneNum}. Call create_media with exactly ONE step: ` +
-              `{action:"animate", source_url:"${sceneCardUrl}", duration:${duration}, prompt:"<extract the motion and mood description from the user, under 25 words>"}. ` +
+              `{action:"animate", source_url:"${resolvedSceneCardUrl}", duration:${duration}, prompt:"<extract the motion and mood description from the user, under 25 words>"}. ` +
               `Do not call project_iterate.`;
             console.log(`[Gemini] Scene animate detected: scene ${sceneNum} (idx ${idx}) → veo-i2v with source_url, duration=${duration}s`);
           } else {
@@ -374,6 +374,67 @@ export const geminiPlugin: AgentPlugin = {
       const session = new SessionMemoryStore();
       const runner = new AgentRunner(provider, tools, working, session);
 
+      // Scene animate fast path: we've already resolved the source URL
+      // and duration, so there's no ambiguity. Calling Gemini here lets
+      // it sometimes decompose the request into multiple create_media
+      // steps (splitting audio from video, etc.), causing partial veo-i2v
+      // failures. Bypass the LLM entirely — invoke create_media once
+      // with one deterministically-built step, yield the same events the
+      // runner would, and fall through to the completion-summary block.
+      if (sceneAnimateDetected && sceneIterationIndex >= 0 && activeProj && resolvedSceneCardUrl) {
+        // Extract motion description from the user's text by stripping
+        // "animate scene N (...)", duration markers, and ambient audio
+        // clauses. What remains is the visual motion description.
+        const motionPrompt = (() => {
+          let rest = text
+            .replace(/^[^:]*?\bscene\s*#?\s*\d+\s*(?:\([^)]*\))?\s*:?\s*/i, "")
+            .trim();
+          rest = rest.replace(/\b\d+\s*s(?:ec|econds?)?\b/gi, "").trim();
+          rest = rest.replace(/,?\s*ambient\s*audio\s*[-—:].*$/i, "").trim();
+          rest = rest.replace(/,?\s*audio\s*:.*$/i, "").trim();
+          rest = rest.replace(/\s+/g, " ").replace(/^[,\s]+|[,\s]+$/g, "");
+          return rest.slice(0, 300) || "smooth cinematic camera motion";
+        })();
+        const durMatch = text.match(/\b(\d+)\s*s(?:ec|econds?)?\b/i);
+        const duration = durMatch ? Math.min(30, parseInt(durMatch[1], 10)) : 8;
+        const step = {
+          action: "animate",
+          source_url: resolvedSceneCardUrl,
+          duration,
+          prompt: motionPrompt,
+        };
+        console.log(`[Gemini] Scene animate fast path: step=`, step);
+
+        // Emit the same tool_call/tool_result events the runner would,
+        // so the UI card path is identical.
+        yield { type: "tool_call", name: "create_media", input: { steps: [step] } };
+        lastRoundHadToolCalls = true;
+        say(`Animating scene ${sceneIterationIndex + 1}...`, "system");
+
+        // Load the registered tool wrapper so our call goes through the
+        // exact same execute path as Gemini-originated calls.
+        const { listTools } = await import("@/lib/tools/registry");
+        const sbTool = listTools().find((t) => t.name === "create_media");
+        if (!sbTool) {
+          yield { type: "error", content: "create_media tool not registered" };
+          return;
+        }
+        const result = await sbTool.execute({ steps: [step] });
+        const ok = !!result.success;
+        yield {
+          type: "tool_result",
+          name: "create_media",
+          result: ok ? result.data : { error: result.error ?? "unknown" },
+        };
+        completedTools.push({
+          name: "create_media",
+          success: ok,
+          summary: ok
+            ? `1 animated (veo-i2v) for scene ${sceneIterationIndex + 1}`
+            : undefined,
+        });
+        // Fall through to the completion summary block below.
+      } else {
       for await (const event of runner.runStream({ user: text, maxIterations: MAX_TOOL_ROUNDS })) {
         if (stopped) {
           yield { type: "text", content: "Stopped." };
@@ -464,6 +525,7 @@ export const geminiPlugin: AgentPlugin = {
             break;
         }
       }
+      } // end else (runStream path)
 
       // Update working memory with action results
       const wmem = useWorkingMemory.getState();
