@@ -563,6 +563,87 @@ export const geminiPlugin: AgentPlugin = {
         }
       } else if (
         isNewBrief &&
+        !wantsLiveStream &&
+        !wantsVideos &&
+        extractedScenes.length > 0
+      ) {
+        // Image storyboard fast path: user typed a multi-scene brief
+        // WITHOUT stream/video keywords. Bypass Gemini and call
+        // project_create + project_generate directly. Same reliability
+        // story as the stream / video fast paths — Gemini otherwise
+        // either asks "yes/no" confirmation or decomposes the call
+        // oddly, costing 3-5x the tokens for zero user benefit.
+        console.log(
+          `[Gemini] Image storyboard fast path: project_create with ${extractedScenes.length} scenes`
+        );
+        const { listTools: lt } = await import("@/lib/tools/registry");
+        const projectCreateTool = lt().find((t) => t.name === "project_create");
+        const projectGenerateTool = lt().find((t) => t.name === "project_generate");
+        if (!projectCreateTool || !projectGenerateTool) {
+          yield { type: "error", content: "project_create / project_generate not registered" };
+          completedTools.push({ name: "project_create", success: false });
+        } else {
+          const scenesPayload = extractedScenes.map((s) => ({
+            index: s.index - 1, // 0-based per tool schema
+            title: s.text.slice(0, 50),
+            prompt: styleHint ? `${s.text}, ${styleHint}` : s.text,
+            action: "generate",
+          }));
+          const createArgs = {
+            brief: text.slice(0, 500),
+            scenes: scenesPayload,
+            ...(styleHint ? { style_guide: { visual_style: styleHint, prompt_prefix: styleHint } } : {}),
+          };
+          yield { type: "tool_call", name: "project_create", input: createArgs };
+          lastRoundHadToolCalls = true;
+          say(`Creating project with ${scenesPayload.length} scenes…`, "system");
+          try {
+            const createResult = await projectCreateTool.execute(createArgs);
+            const createOk = !!createResult.success;
+            yield {
+              type: "tool_result",
+              name: "project_create",
+              result: createOk ? createResult.data : { error: createResult.error ?? "unknown" },
+            };
+            completedTools.push({
+              name: "project_create",
+              success: createOk,
+              summary: createOk ? `${scenesPayload.length} scenes planned` : undefined,
+            });
+            if (createOk && createResult.data && typeof createResult.data === "object") {
+              const projectId = (createResult.data as Record<string, unknown>).project_id as string | undefined;
+              if (projectId) {
+                touchedProjectIds.add(projectId);
+                yield { type: "tool_call", name: "project_generate", input: { project_id: projectId } };
+                say(`Generating ${scenesPayload.length} scenes…`, "system");
+                try {
+                  const genResult = await projectGenerateTool.execute({ project_id: projectId });
+                  const genOk = !!genResult.success;
+                  yield {
+                    type: "tool_result",
+                    name: "project_generate",
+                    result: genOk ? genResult.data : { error: genResult.error ?? "unknown" },
+                  };
+                  completedTools.push({
+                    name: "project_generate",
+                    success: genOk,
+                    summary: genOk ? `${scenesPayload.length} generated` : undefined,
+                  });
+                } catch (e) {
+                  const raw = e instanceof Error ? e.message : "Unknown error";
+                  yield { type: "error", content: `project_generate failed: ${raw}` };
+                  completedTools.push({ name: "project_generate", success: false });
+                }
+              }
+            }
+          } catch (e) {
+            const raw = e instanceof Error ? e.message : "Unknown error";
+            yield { type: "error", content: `project_create failed: ${raw}` };
+            completedTools.push({ name: "project_create", success: false });
+          }
+        }
+      } else if (
+        isNewBrief &&
         wantsVideos &&
         extractedScenes.length > 0
       ) {
