@@ -244,6 +244,49 @@ export const geminiPlugin: AgentPlugin = {
         (text.match(/\bscene\s*#?\s*\d+\b/gi) || []).length;
       const isNewBrief =
         intent.type === "new_project" || multipleSceneMatches >= 2;
+
+      // Stream / video intent in a new multi-scene brief. The default
+      // new_project directive (see context-builder.ts) tells Gemini to
+      // call project_create → project_generate, which is the IMAGE
+      // path. When the user explicitly wants live streams or videos,
+      // we need to override that with guidance to use scope_start
+      // (LV2V) or veo-t2v (pre-rendered video) instead. Without this
+      // the agent silently returns 3 images for "3 live streams".
+      const lowerText = text.toLowerCase();
+      const wantsLiveStream = /\blive\s+streams?\b|\blv2v\b/.test(lowerText);
+      const wantsVideos =
+        /\b(video|videos|animated|animation|animations|clip|clips|film|films)\b/.test(
+          lowerText
+        ) && !wantsLiveStream;
+      const streamCountMatch = lowerText.match(
+        /\b(\d+)\s+(?:live\s+)?(?:streams?|videos?|clips?|animations?)\b/
+      );
+      const streamCount = streamCountMatch
+        ? parseInt(streamCountMatch[1], 10)
+        : multipleSceneMatches > 0
+          ? multipleSceneMatches
+          : 0;
+      let streamOverrideDirective = "";
+      if (isNewBrief && (wantsLiveStream || wantsVideos)) {
+        if (wantsLiveStream) {
+          streamOverrideDirective =
+            `\n\n## Override: Live Stream Brief\n` +
+            `User wants ${streamCount || "multiple"} LIVE streams (LV2V), NOT a static image storyboard. ` +
+            `Do NOT call project_create or project_generate. For each scene, call scope_start with: ` +
+            `graph={"nodes":[{"id":"longlive","type":"pipeline","pipeline_id":"longlive"},{"id":"output","type":"sink"}],"edges":[{"from":"longlive","from_port":"video","to_node":"output","to_port":"video","kind":"stream"}]}, ` +
+            `prompts="<scene description under 25 words>", and an appropriate preset. ` +
+            `Call scope_start once per scene so the user gets ${streamCount || "N"} concurrent streams.`;
+        } else {
+          streamOverrideDirective =
+            `\n\n## Override: Video Brief\n` +
+            `User wants ${streamCount || "multiple"} VIDEOS, NOT a static image storyboard. ` +
+            `Do NOT call project_create or project_generate. Call create_media ONCE with ${streamCount || "N"} steps, each with action="generate" and a motion-rich text prompt under 25 words. ` +
+            `The capability resolver will route to veo-t2v / ltx-t2v automatically. Include the style from the user's brief (e.g. "studio ghibli style").`;
+        }
+        console.log(
+          `[Gemini] Stream override: wantsLiveStream=${wantsLiveStream}, wantsVideos=${wantsVideos}, count=${streamCount}`
+        );
+      }
       if (activeProj && isNewBrief) {
         console.log(
           `[Gemini] Skipping scene-iteration: intent=${intent.type}, multipleSceneMatches=${multipleSceneMatches} — treating as new multi-scene brief`
@@ -311,7 +354,7 @@ export const geminiPlugin: AgentPlugin = {
           }
         }
       }
-      const finalSystem = system + sceneDirective;
+      const finalSystem = system + sceneDirective + streamOverrideDirective;
 
       console.log(`[Gemini] runStream: system=${finalSystem.length} chars, text="${text.slice(0, 80)}"`);
 
