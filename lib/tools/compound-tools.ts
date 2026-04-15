@@ -312,12 +312,23 @@ export const createMediaTool: ToolDefinition = {
       // Apply session creative context + style-override skills
       // Session context = persistent style/character/setting from the original brief
       // Style overrides = loaded skills (ghibli, kids-drawing, etc.)
+      //
+      // IMPORTANT: for action:"animate" steps (image-to-video), we use
+      // a motion-only prefix that keeps style+mood+palette but drops
+      // characters+setting. The source image already carries character
+      // and setting visually; re-declaring them in the prompt confuses
+      // the video model AND trips safety filters (Google Veo rejects
+      // "young girl + fire" even when the scene is a benign lantern
+      // festival). See buildMotionPrefixFromContext for the rationale.
       let sessionPrefix = "";
       if (step.action !== "tts") {
+        const isAnimate = step.action === "animate";
         // Check for active episode — use its effective context if present
         try {
           const { useEpisodeStore } = await import("@/lib/episodes/store");
-          const { buildPrefixFromContext } = await import("@/lib/agents/session-context");
+          const { buildPrefixFromContext, buildMotionPrefixFromContext } = await import(
+            "@/lib/agents/session-context"
+          );
           const epStore = useEpisodeStore.getState();
           const activeEp = epStore.getActiveEpisode();
           if (activeEp) {
@@ -325,14 +336,26 @@ export const createMediaTool: ToolDefinition = {
             if (storyboardCtx) {
               const effective = epStore.getEffectiveContext(activeEp.id, storyboardCtx);
               if (effective) {
-                sessionPrefix = buildPrefixFromContext(effective);
+                sessionPrefix = isAnimate
+                  ? buildMotionPrefixFromContext(effective)
+                  : buildPrefixFromContext(effective);
               }
             }
           }
         } catch { /* episode store not available */ }
         // Fallback to session context if no episode active
         if (!sessionPrefix) {
-          sessionPrefix = useSessionContext.getState().buildPrefix();
+          if (isAnimate) {
+            const ctx = useSessionContext.getState().context;
+            if (ctx) {
+              const { buildMotionPrefixFromContext } = await import(
+                "@/lib/agents/session-context"
+              );
+              sessionPrefix = buildMotionPrefixFromContext(ctx);
+            }
+          } else {
+            sessionPrefix = useSessionContext.getState().buildPrefix();
+          }
         }
       }
       const styled = step.action !== "tts"

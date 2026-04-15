@@ -87,6 +87,38 @@ export function buildPrefixFromContext(ctx: CreativeContext): string {
   return (words.length > 60 ? words.slice(0, 60).join(" ") : prefix) + ", ";
 }
 
+/**
+ * Motion-only prefix for image-to-video animate steps.
+ *
+ * Why this exists: the full CreativeContext prefix is tuned for image
+ * generation, where you want character descriptions carried across
+ * scenes for consistency. When animating an existing scene card
+ * (action:"animate" with source_url), the character is already in the
+ * source image visually — re-declaring it in the text prompt:
+ *
+ *   1. Confuses the video model ("also draw this character" vs
+ *      "just animate what's already there")
+ *   2. Trips Google Veo / fal safety filters. Veo is aggressive about
+ *      any minor description (girl, boy, child, young, kid) combined
+ *      with fire, water, distress, or weapons. Even benign scenes
+ *      like "young girl releasing a sky lantern" get rejected at the
+ *      video-generation stage because characters + flame imagery
+ *      cross that threshold.
+ *
+ * So for animate, keep only style + mood + palette (aesthetic
+ * direction) and drop characters + setting (already in the image).
+ */
+export function buildMotionPrefixFromContext(ctx: CreativeContext): string {
+  const parts: string[] = [];
+  if (ctx.style) parts.push(ctx.style);
+  if (ctx.mood) parts.push(ctx.mood);
+  if (ctx.palette) parts.push(ctx.palette);
+  const prefix = parts.join(", ");
+  if (!prefix) return "";
+  const words = prefix.split(/\s+/);
+  return (words.length > 40 ? words.slice(0, 40).join(" ") : prefix) + ", ";
+}
+
 export const useSessionContext = create<SessionContextState>((set, get) => ({
   context: null,
   createdAt: 0,
