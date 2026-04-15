@@ -28,9 +28,9 @@ jobs:
         with:
           bun-version: "1.2.18"
       - run: bun install --frozen-lockfile
-      - run: bun --filter "@livepeer/agent" run typecheck
-      - run: bun --filter "@livepeer/agent" run test
-      - run: bun --filter "@livepeer/agent" run build
+      - run: cd packages/agent && bun run typecheck
+      - run: cd packages/agent && bun run test
+      - run: cd packages/agent && bun run build
 
   bench:
     name: Bench regression check
@@ -61,7 +61,12 @@ jobs:
         with:
           bun-version: "1.2.18"
       - run: bun install --frozen-lockfile
-      - run: cd packages/agent && npx tsc --noEmit
+      # Use tsconfig.lib.json which excludes src/cli/**/*.tsx — the
+      # CLI uses ink (React 18-tuned types) and hoisted @types/react
+      # at the repo root is React 19, causing "Box cannot be used as
+      # a JSX component" errors. The library build itself is React-
+      # agnostic, so excluding the CLI is the correct fix.
+      - run: cd packages/agent && npx tsc --noEmit -p tsconfig.lib.json
       - run: cd packages/agent && bun run build
       - name: Verify CLI runs on Node 20
         run: |
@@ -86,7 +91,7 @@ jobs:
       - name: Install Playwright chromium
         run: npx playwright install --with-deps chromium
       - name: Build @livepeer/agent (workspace deps for storyboard)
-        run: bun --filter "@livepeer/agent" run build
+        run: cd packages/agent && bun run build
       - name: Run T10 regression gate
         run: npx playwright test tests/e2e/T10-storyboard-regression.spec.ts --reporter=line
       - name: Run storyboard structural smoke
