@@ -243,7 +243,7 @@ describe("context-builder integration: Active request line in system prompt", ()
     useActiveRequest.getState().applyTurn("city");
 
     const system = buildAgentContext(
-      { type: "default" },
+      { type: "none" },
       {
         project: null,
         digest: "",
@@ -266,7 +266,7 @@ describe("context-builder integration: Active request line in system prompt", ()
     const { buildAgentContext } = await import("@/lib/agents/context-builder");
     useActiveRequest.getState().reset();
     const system = buildAgentContext(
-      { type: "default" },
+      { type: "none" },
       {
         project: null,
         digest: "",

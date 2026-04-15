@@ -229,6 +229,7 @@ export const geminiPlugin: AgentPlugin = {
       // steps, which regenerates half the project.
       let sceneDirective = "";
       let sceneIterationDetected = false;
+      let sceneAnimateDetected = false;
       let sceneIterationIndex = -1;
       if (activeProj) {
         // Match "scene 4", "scene #4", "the 4th scene", "scene four", etc.
@@ -245,12 +246,52 @@ export const geminiPlugin: AgentPlugin = {
           const idx = sceneNum - 1;
           sceneIterationDetected = true;
           sceneIterationIndex = idx;
-          // Short directive — the tool filter below also removes
-          // create_media/project_generate so there's no alternative
-          // for Gemini to pick. Keep the prompt minimal.
-          sceneDirective =
-            `\n\nCall project_iterate with project_id="${activeProj.id}" and scene_indices=[${idx}]. Pass the user's request as the feedback field.`;
-          console.log(`[Gemini] Scene iteration detected: scene ${sceneNum} (idx ${idx}) of project ${activeProj.id}`);
+
+          // Detect animate intent WITHIN the scene iteration. If the
+          // user wants to turn scene N into a video, project_iterate is
+          // wrong — it only regenerates the scene's existing media type
+          // (image). We need to route through create_media with
+          // action=animate + source_url=<scene's current image URL>.
+          //
+          // Triggers: explicit "animate" verb, explicit "video"/"clip"
+          // noun, or explicit duration paired with motion language.
+          const hasAnimateVerb = /\banimate\b/i.test(text);
+          const hasVideoNoun = /\b(video|clip|animation|motion|movie|film)\b/i.test(text);
+          const hasDurationHint = /\b\d+\s*s(?:ec|econds?)?\b/i.test(text);
+          const hasMotionLang = /\b(tilt|pan|zoom|drift|dolly|crane|tracking|fade|dissolve|upward|downward|sweep|glide|rotate|orbit|push|pull|slow motion)\b/i.test(text);
+          const isAnimateScene = hasAnimateVerb || hasVideoNoun || (hasMotionLang && hasDurationHint);
+
+          // Try to resolve scene N's existing card URL so we can pass
+          // it as source_url without a round-trip to canvas_get.
+          let sceneCardUrl: string | undefined;
+          try {
+            const refId = activeProj.scenes[idx]?.cardRefId;
+            if (refId) {
+              const { useCanvasStore } = await import("@/lib/canvas/store");
+              const card = useCanvasStore.getState().cards.find((c: { refId?: string; url?: string }) => c.refId === refId);
+              sceneCardUrl = card?.url;
+            }
+          } catch { /* non-fatal — Gemini will call canvas_get if needed */ }
+
+          if (isAnimateScene && sceneCardUrl) {
+            // Animate-scene path: call create_media with action=animate
+            // and source_url pre-populated. compound-tools will route
+            // this to veo-i2v (or ltx-i2v fallback) via selectCapability.
+            sceneAnimateDetected = true;
+            const durMatch = text.match(/\b(\d+)\s*s(?:ec|econds?)?\b/i);
+            const duration = durMatch ? Math.min(30, parseInt(durMatch[1], 10)) : 8;
+            sceneDirective =
+              `\n\nAnimate scene ${sceneNum}. Call create_media with exactly ONE step: ` +
+              `{action:"animate", source_url:"${sceneCardUrl}", duration:${duration}, prompt:"<extract the motion and mood description from the user, under 25 words>"}. ` +
+              `Do not call project_iterate.`;
+            console.log(`[Gemini] Scene animate detected: scene ${sceneNum} (idx ${idx}) → veo-i2v with source_url, duration=${duration}s`);
+          } else {
+            // Image-iterate path (existing behavior): regenerate the
+            // scene's image with the user's feedback.
+            sceneDirective =
+              `\n\nCall project_iterate with project_id="${activeProj.id}" and scene_indices=[${idx}]. Pass the user's request as the feedback field.`;
+            console.log(`[Gemini] Scene iteration detected: scene ${sceneNum} (idx ${idx}) of project ${activeProj.id}`);
+          }
         }
       }
       const finalSystem = system + sceneDirective;
