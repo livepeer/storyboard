@@ -417,22 +417,30 @@ export const geminiPlugin: AgentPlugin = {
         const sbTool = listTools().find((t) => t.name === "create_media");
         if (!sbTool) {
           yield { type: "error", content: "create_media tool not registered" };
-          return;
+          completedTools.push({ name: "create_media", success: false });
+        } else {
+          try {
+            const result = await sbTool.execute({ steps: [step] });
+            const ok = !!result.success;
+            yield {
+              type: "tool_result",
+              name: "create_media",
+              result: ok ? result.data : { error: result.error ?? "unknown" },
+            };
+            completedTools.push({
+              name: "create_media",
+              success: ok,
+              summary: ok
+                ? `1 animated (veo-i2v) for scene ${sceneIterationIndex + 1}`
+                : undefined,
+            });
+          } catch (e) {
+            const raw = e instanceof Error ? e.message : "Unknown error";
+            console.warn("[Gemini] Scene animate fast path threw:", raw);
+            yield { type: "error", content: `Animation failed: ${raw}` };
+            completedTools.push({ name: "create_media", success: false });
+          }
         }
-        const result = await sbTool.execute({ steps: [step] });
-        const ok = !!result.success;
-        yield {
-          type: "tool_result",
-          name: "create_media",
-          result: ok ? result.data : { error: result.error ?? "unknown" },
-        };
-        completedTools.push({
-          name: "create_media",
-          success: ok,
-          summary: ok
-            ? `1 animated (veo-i2v) for scene ${sceneIterationIndex + 1}`
-            : undefined,
-        });
         // Fall through to the completion summary block below.
       } else {
       for await (const event of runner.runStream({ user: text, maxIterations: MAX_TOOL_ROUNDS })) {

@@ -70,6 +70,10 @@ function EpisodeLabelBox({
     dragged: boolean;
     origins: Array<{ id: string; x: number; y: number; pinned: boolean; pinX?: number; pinY?: number }>;
   } | null>(null);
+  // React's synthetic click fires AFTER pointerup, so we can't suppress
+  // it just by nulling dragRef. Stash a short-lived "just dragged" flag
+  // and check it from onClick.
+  const justDraggedRef = useRef(false);
 
   const onEpisodeDragStart = useCallback(
     (e: React.PointerEvent) => {
@@ -124,15 +128,17 @@ function EpisodeLabelBox({
 
   const onEpisodeDragEnd = useCallback((e: React.PointerEvent) => {
     if (!dragRef.current) return;
-    // If the user barely moved, fall through to the onClick handler.
-    // If they dragged, swallow the click so we don't re-select and
-    // clear any accidental text-selection side effect.
     const moved = dragRef.current.dragged;
     dragRef.current = null;
     try {
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     } catch { /* not captured */ }
     if (moved) {
+      // React's synthetic click fires AFTER pointerup on the same
+      // target. Raise a tiny flag so onClick knows to bail. Cleared on
+      // the next microtask so the very next click still works normally.
+      justDraggedRef.current = true;
+      setTimeout(() => { justDraggedRef.current = false; }, 0);
       e.stopPropagation();
       e.preventDefault();
     }
@@ -210,11 +216,9 @@ function EpisodeLabelBox({
         onPointerUp={onEpisodeDragEnd}
         onPointerCancel={onEpisodeDragEnd}
         onClick={(e) => {
-          // If the user dragged, the drag handler swallowed the event
-          // already. Otherwise treat this as a click to select all
-          // cards in the episode (so a non-drag click still works as
-          // a multi-select shortcut).
-          if (dragRef.current) return;
+          // If the user just finished a drag, the drag flag is set.
+          // Don't re-select (which would clear nothing but feels wrong).
+          if (justDraggedRef.current) return;
           // Don't propagate to canvas — we're handling it here.
           e.stopPropagation();
           useCanvasStore.getState().selectCards(cards.map((c) => c.id));

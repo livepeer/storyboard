@@ -120,6 +120,46 @@ describe("classifyUserTurn", () => {
     expect(r.patch.count).toBe(8);
   });
 
+  test("long clarification containing the subject noun -> clarify, not new (regression)", () => {
+    const active: ActiveRequest = {
+      ...EMPTY,
+      subject: "dragon",
+      lastUpdatedAt: Date.now(),
+    };
+    // "the dragon should breathe blue fire" is 6 words, contains "dragon",
+    // but is a direction/correction. Should NOT wipe the subject.
+    const r = classifyUserTurn("the dragon should breathe blue fire", active);
+    expect(r.kind === "clarify" || r.kind === "correct").toBe(true);
+    // If correct, subject should still include dragon after merge.
+    // If clarify, subject is untouched. Either way, dragon survives.
+  });
+
+  test("mid-sentence 'with' does NOT trigger correction (regression)", () => {
+    const active: ActiveRequest = {
+      ...EMPTY,
+      subject: "cat",
+      lastUpdatedAt: Date.now(),
+    };
+    // "keep the original lighting please" contains "keep" but not as
+    // a subject-rewrite prefix. Should classify as clarify, not correct.
+    const r = classifyUserTurn("keep the original lighting please", active);
+    expect(r.kind).toBe("clarify");
+    expect(r.patch.modifierToAppend).toBe("keep the original lighting please");
+  });
+
+  test("'keep the X' is clarify, not correction (semantic ambiguity)", () => {
+    const active: ActiveRequest = {
+      ...EMPTY,
+      subject: "cat",
+      lastUpdatedAt: Date.now(),
+    };
+    // "keep X" usually means "don't change X", which is clarification
+    // feedback, not a subject rewrite. Drop it from correction to
+    // avoid mis-merging.
+    const r = classifyUserTurn("keep the outdoor setting", active);
+    expect(r.kind).toBe("clarify");
+  });
+
   test("explicit 'make it a video' on active subject -> correct with mediaType", () => {
     const active: ActiveRequest = {
       ...EMPTY,

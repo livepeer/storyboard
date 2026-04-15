@@ -58,6 +58,26 @@ describe("buildAttemptChain", () => {
     expect(chain).toEqual(["fnord"]);
   });
 
+  test("initial capability not in live registry → drop it, start at first live sibling (regression)", () => {
+    // Simulates a cold cache where flux-dev isn't cached yet, but
+    // flux-schnell and recraft-v4 are. We should NOT waste a round-trip
+    // on flux-dev — start the chain at flux-schnell.
+    const partial = new Set(["flux-schnell", "recraft-v4"]);
+    const chain = buildAttemptChain("flux-dev", partial);
+    expect(chain).not.toContain("flux-dev");
+    expect(chain[0]).toBe("flux-schnell");
+    expect(chain).toContain("recraft-v4");
+  });
+
+  test("initial not in live registry AND no live fallbacks → keep initial anyway (empty cache)", () => {
+    // With an empty live set (cache not yet populated), don't drop the
+    // initial — there's nothing to replace it with, and the SDK may
+    // actually have the capability even if our cache doesn't know yet.
+    const empty = new Set<string>();
+    const chain = buildAttemptChain("flux-dev", empty);
+    expect(chain).toEqual(["flux-dev"]);
+  });
+
   test("de-duplicates even if chain repeats initial", () => {
     const chain = buildAttemptChain("flux-dev", ALL_LIVE);
     const unique = new Set(chain);

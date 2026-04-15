@@ -69,7 +69,13 @@ export const FALLBACK_CHAINS: Record<string, string[]> = {
  */
 export function buildAttemptChain(initialCap: string, liveCapNames: Set<string>): string[] {
   const chain = FALLBACK_CHAINS[initialCap] ?? [];
-  const attempts = [initialCap, ...chain.filter((c) => liveCapNames.has(c))];
+  const liveFallbacks = chain.filter((c) => liveCapNames.has(c));
+  // If the initial capability itself isn't live (cold cache, etc.),
+  // don't waste a round-trip on it — start with the first live sibling.
+  // Only drop it if we actually have a live alternative.
+  const attempts = liveCapNames.size > 0 && !liveCapNames.has(initialCap) && liveFallbacks.length > 0
+    ? liveFallbacks
+    : [initialCap, ...liveFallbacks];
   // De-duplicate while preserving order
   return Array.from(new Set(attempts));
 }

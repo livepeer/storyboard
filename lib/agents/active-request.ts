@@ -184,12 +184,19 @@ export function classifyUserTurn(
   // 3. New request detection. Looks for either:
   //    - an explicit create verb ("make", "create", "generate", "draw", "give me", "show me")
   //    - a count noun pattern ("5 pictures of X", "3 videos of X")
-  //    - a long, subject-bearing message (> 8 words with a noun phrase)
+  //    - a long, subject-bearing message (only when there is NO
+  //      active subject — otherwise we'd wipe state on clarifications
+  //      that happen to contain the subject noun, like "the dragon
+  //      should breathe blue fire" for an active subject "dragon").
   const createMatch =
     text.match(/\b(?:make|create|generate|draw|design|produce|give\s+me|show\s+me|i\s+want|i'd\s+like)\s+(?:(\d+)\s+)?(?:(?:a|an|some|the)\s+)?(.{3,})/i);
   const countOfMatch = text.match(/^\s*(\d+)\s+(\w+)\s+of\s+(.{3,})/i);
+  // Only infer "new" from length+noun when there's no active subject.
+  // With an active subject, require an explicit create verb to reset.
   const isLikelyNewSubject =
-    wordCount >= 5 && hasSubjectNoun(lower) && !isClarificationAnswer(lower, current);
+    !current.subject &&
+    wordCount >= 5 &&
+    hasSubjectNoun(lower);
 
   if (countOfMatch) {
     const n = parseInt(countOfMatch[1], 10);
@@ -223,13 +230,19 @@ export function classifyUserTurn(
     };
   }
 
-  // 4. If we have an active subject, try clarification and correction.
+  // 4. If we have an active subject, try correction first (specific
+  //    prefix-anchored keywords), then fall back to clarification.
   if (current.subject) {
-    // 4a. Explicit correction — "with X", "also with X", "add X", "now add X",
-    //     "also include X", "include X", "keep X", "recreate with X",
-    //     "redo with X", "regenerate with X", "correct to X", "actually X".
+    // 4a. Explicit correction — PREFIX-anchored so the correction verb
+    //     must be at the start of the message. Avoids matching on
+    //     mid-sentence "with" in long clarifications. Dropped "keep"
+    //     intentionally ("keep the lighting" is usually a clarify,
+    //     not a subject rewrite). Phrases handled:
+    //     "with X", "also with X", "add X", "now add X", "include X",
+    //     "recreate with X", "redo with X", "regenerate with X",
+    //     "correct to X", "actually X", "it should have X".
     const correctionMatch = text.match(
-      /\b(?:with|also\s+with|also\s+include|include|keep|add|now\s+add|correct(?:ion)?(?:\s+to)?|actually|it\s+should\s+(?:be|have)|should\s+(?:be|have)|recreate\s+with|redo\s+with|regenerate\s+with)\s+(.+)/i
+      /^(?:also\s+)?(?:with|include|add|now\s+add|correct(?:ion)?(?:\s+to)?|actually|it\s+should\s+(?:be|have)|should\s+(?:be|have)|recreate\s+with|redo\s+with|regenerate\s+with)\s+(.+)/i
     );
     if (correctionMatch) {
       const addendum = cleanSubject(correctionMatch[1]);
@@ -242,7 +255,8 @@ export function classifyUserTurn(
       }
     }
 
-    // 4b. Short answer clarification. ≤4 words, no verb, likely a modifier.
+    // 4b. Short answer clarification. ≤5 words without an action verb —
+    //     almost always an answer to a follow-up question.
     if (wordCount <= 5 && !hasActionVerb(lower)) {
       return {
         kind: "clarify",
