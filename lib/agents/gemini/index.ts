@@ -232,7 +232,24 @@ export const geminiPlugin: AgentPlugin = {
       let sceneAnimateDetected = false;
       let sceneIterationIndex = -1;
       let resolvedSceneCardUrl: string | undefined;
-      if (activeProj) {
+      // Skip scene-iteration detection if the user is clearly starting
+      // a new project. Otherwise a brief that says "Scene 1 ... Scene 2
+      // ... Scene 3" would trigger project_iterate on the stale active
+      // project's scene 1, hard-filter out scope_start + create_media,
+      // and silently do nothing. Two signals:
+      //   1. intent classifier already said "new_project"
+      //   2. the text contains multiple "Scene N" markers — a multi-
+      //      scene brief, not a single-scene adjustment
+      const multipleSceneMatches =
+        (text.match(/\bscene\s*#?\s*\d+\b/gi) || []).length;
+      const isNewBrief =
+        intent.type === "new_project" || multipleSceneMatches >= 2;
+      if (activeProj && isNewBrief) {
+        console.log(
+          `[Gemini] Skipping scene-iteration: intent=${intent.type}, multipleSceneMatches=${multipleSceneMatches} — treating as new multi-scene brief`
+        );
+      }
+      if (activeProj && !isNewBrief) {
         // Match "scene 4", "scene #4", "the 4th scene", "scene four", etc.
         const numMatch = text.match(/\bscene\s*#?\s*(\d+)\b/i);
         const ordinalMap: Record<string, number> = {

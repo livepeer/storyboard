@@ -19,6 +19,23 @@ describe("Intent Classifier", () => {
     });
   });
 
+  describe("multi-scene brief with active project (regression)", () => {
+    it("treats a multi-scene 'create N streams' brief as new_project even when active project exists", () => {
+      // Regression for the scene-iteration false positive: a user
+      // typing a new multi-scene stream brief that happens to say
+      // "scene 1", "Scene 2", "Scene 3" should NOT be classified as
+      // an iteration of the stale active project's scene 1.
+      const brief =
+        "create 3 streams that show the following scene\n" +
+        "scene 1 (stream 1): show a tux cat and a bulldog living in a village\n" +
+        "Scene 2: they have trouble with a monster bear\n" +
+        "Scene 3: they become friends and live happily after\n" +
+        "using lv2v and t2v, studio ghibli style";
+      const intent = classifyIntent(brief, true, 3);
+      expect(intent.type).toBe("new_project");
+    });
+  });
+
   describe("with active project", () => {
     it("detects continue keywords", () => {
       expect(classifyIntent("continue", true, 3).type).toBe("continue");
