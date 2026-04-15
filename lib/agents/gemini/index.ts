@@ -269,6 +269,23 @@ export const geminiPlugin: AgentPlugin = {
       // get registered with the core runner for this single run.
       const allowedTools = pickToolsForIntent(intent.type, text);
 
+      // Preprocessor handoff detection: when ChatPanel.preprocessPrompt
+      // has already created projects and passed a rewritten instruction
+      // like 'Project "proj_..." created with 6 scenes. Call
+      // project_generate ONCE ...', Gemini should call project_generate,
+      // NOT create_media. Force that by removing create_media from the
+      // tool set when the text looks like a preprocessor handoff.
+      const isPreprocHandoff = /\bProject\s+"proj_[^"]+"\s+created\b/i.test(text)
+        && /\bproject_generate\b/i.test(text);
+      if (isPreprocHandoff) {
+        allowedTools.delete("create_media");
+        allowedTools.delete("project_create");
+        allowedTools.delete("project_iterate");
+        allowedTools.add("project_generate");
+        allowedTools.add("canvas_organize");
+        console.log(`[Gemini] Preprocessor handoff detected — forcing project_generate path (removed create_media, project_create, project_iterate)`);
+      }
+
       // Scene iteration override: when we detected "scene N" in the
       // user text, FORCE project_iterate by removing create_media and
       // project_generate from the tool set. Gemini is biased toward
