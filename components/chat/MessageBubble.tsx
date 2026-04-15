@@ -10,6 +10,17 @@ const roleStyles: Record<string, string> = {
   system: "self-center font-mono text-[10px] text-[var(--text-dim)]",
 };
 
+/** Distinct visual style for user messages that are slash commands
+ * (/context, /organize, /skills load, etc). Tinted blue so the user
+ * can scan the transcript and tell at a glance which lines were
+ * commands vs. free-form prompts. */
+const SLASH_COMMAND_STYLE =
+  "self-end bg-blue-500/15 border border-blue-500/30 font-mono text-[11px] text-blue-300";
+
+function isSlashCommand(text: string): boolean {
+  return /^\s*\/\w/.test(text);
+}
+
 /** Check if a system message is an error that needs red highlighting */
 function isErrorMessage(text: string): boolean {
   const lower = text.toLowerCase();
@@ -83,6 +94,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
   }, [message.text]);
 
   const isError = message.role === "system" && isErrorMessage(message.text);
+  const isUserCommand = message.role === "user" && isSlashCommand(message.text);
   const isCopyable = message.role === "user" || message.role === "agent";
 
   return (
@@ -92,7 +104,9 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
       } ${
         isError
           ? "self-center font-mono text-[10px] bg-red-500/8 border border-red-500/20 text-red-400"
-          : (roleStyles[message.role] || roleStyles.agent)
+          : isUserCommand
+            ? SLASH_COMMAND_STYLE
+            : (roleStyles[message.role] || roleStyles.agent)
       }`}
       onClick={isCopyable ? handleCopy : undefined}
       title={isCopyable ? "Click to copy" : undefined}
