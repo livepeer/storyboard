@@ -7,6 +7,23 @@ import { useChatStore } from "@/lib/chat/store";
 import { useSessionContext } from "@/lib/agents/session-context";
 import type { CardType } from "@/lib/canvas/types";
 
+/**
+ * Module-level cache of the current user message. Set by the active
+ * plugin (gemini/claude/openai) BEFORE invoking runStream, read by
+ * selectCapability when it needs to detect edit-intent vs motion-intent.
+ *
+ * Why: Gemini rewrites the user's request as a pure scene description
+ * in step.prompt when calling create_media, so the edit verbs ("with a
+ * tear", "add shadows", "deeper") get stripped. To detect the user's
+ * actual intent, we need the original text. Threading it through the
+ * SDK runner → tool context was too invasive for a hot-fix; a module-
+ * level pointer is simpler and single-consumer.
+ */
+let currentUserText = "";
+export function setCurrentUserText(text: string): void {
+  currentUserText = text;
+}
+
 /** Convert raw technical errors into short, user-friendly messages */
 function humanizeError(raw: string): string {
   const lower = raw.toLowerCase();
@@ -109,20 +126,36 @@ function selectCapability(
   // "8-second") from the CreativeContext, so a loose regex matches
   // every generate call when there's a cinematic context active. The
   // rule: require BOTH an explicit duration AND a video noun.
+  //
+  // We also check `currentUserText` (set by the plugin before
+  // runStream) because Gemini often rewrites the user's edit request
+  // as a pure scene description in step.prompt, stripping the edit
+  // verbs. The user-text fallback catches cases where the user
+  // clearly wanted an edit but Gemini's expansion lost the intent.
   const lowerPrompt = (promptText ?? "").toLowerCase();
+  const lowerUser = (currentUserText || "").toLowerCase();
+  const combinedText = `${lowerPrompt} ${lowerUser}`.trim();
   const lowerHint = (styleHint ?? "").toLowerCase();
-  const hasVideoNoun = /\b(video|clip|footage|animation)\b/.test(lowerPrompt);
-  const hasDuration = /\b\d+[- ]second\b/.test(lowerPrompt);
-  const explicitMakeVideo = /\b(make|generate|create|produce)\s+(a|an|me\s+a|me\s+an)?\s*\d*[- ]?\s*seconds?\s*(video|clip|animation|movie)\b/.test(lowerPrompt);
+  // Video-intent check uses USER text (strict) not Gemini's rewritten
+  // prompt. This prevents cinematic style inheritance from routing
+  // image requests to veo-t2v.
+  const hasVideoNoun = /\b(video|clip|footage|animation)\b/.test(lowerUser);
+  const hasDuration = /\b\d+[- ]second\b/.test(lowerUser);
+  const explicitMakeVideo = /\b(make|generate|create|produce)\s+(a|an|me\s+a|me\s+an)?\s*\d*[- ]?\s*seconds?\s*(video|clip|animation|movie)\b/.test(lowerUser);
   const asksForVideo = (hasVideoNoun && hasDuration) || explicitMakeVideo;
 
   // Motion verbs that indicate the user wants an animation (image -> video).
-  // If none of these are present AND the prompt has visual-edit verbs, the
-  // user most likely wants to EDIT an image, not animate it.
+  // Checked on BOTH the user text AND Gemini's expanded prompt (either
+  // source is allowed to signal motion).
   const motionVerbs = /\b(pan|tilt|zoom|push(?:-in| in)?|pull(?:-out| out)?|dolly|drift|sweep|rotate|move|fly|float|rise|fall|swirl|spin|shake|tremble|rustl\w*|flutter\w*|wind|breeze|ripple|wave|flow|cascade|gust|storm|rain|snow|drip|splash)\b/;
-  const editVerbs = /\b(add|remove|change|make\s+\w+\s+(darker|lighter|brighter|softer|warmer|cooler|redder|bluer|greener)|with\s+a\s|without\s|replace|adjust|tweak|darken|lighten|brighten|deepen|soften|sharpen|crop|blur|recolor|tint)\b/;
-  const hasMotion = motionVerbs.test(lowerPrompt);
-  const hasEditIntent = editVerbs.test(lowerPrompt);
+  // Edit verbs — checked primarily on USER text (Gemini strips them
+  // when rewriting prompts). Extended keyword set: explicit iteration
+  // words ("regenerate", "redo", "redraw", "iterate", "fix"), visual
+  // modifiers ("deeper shadows", "tear", "still"), and any "scene N"
+  // reference (a strong signal the user is editing an existing scene).
+  const editVerbs = /\b(add|remove|change|make\s+\w+\s+(darker|lighter|brighter|softer|warmer|cooler|redder|bluer|greener)|with\s+(a|an|some|deeper|softer|stronger)\s|without\s|replace|adjust|tweak|darken|lighten|brighten|deepen|soften|sharpen|crop|blur|recolor|tint|regenerate|redo|redraw|re-?do|iterate|fix|refine|tweak|update|edit|modify|scene\s*#?\s*\d+|deeper\s+\w+|a\s+single\s+|too\s+(bright|dark|warm|cold|busy|empty|light)|feels\s+(too|like|kind\s+of))\b/;
+  const hasMotion = motionVerbs.test(combinedText);
+  const hasEditIntent = editVerbs.test(lowerUser) || editVerbs.test(lowerPrompt);
 
   const valid = getCachedCapabilities();
   const hasVeoT2V = !!valid && valid.some((c) => c.name === "veo-t2v");

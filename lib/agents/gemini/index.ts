@@ -17,6 +17,7 @@ import { useWorkingMemory } from "../working-memory";
 import { classifyIntent } from "../intent";
 import { StoryboardGeminiProvider } from "../storyboard-providers";
 import { wrapStoryboardTool } from "../runner-adapter";
+import { setCurrentUserText } from "@/lib/tools/compound-tools";
 
 const MAX_TOOL_ROUNDS = 20;
 
@@ -172,7 +173,21 @@ export const geminiPlugin: AgentPlugin = {
     try {
       // Build intent-aware system prompt from working memory
       const projStore = (await import("@/lib/projects/store")).useProjectStore.getState();
-      const activeProj = projStore.getActiveProject();
+      // Make the user's raw text available to downstream tools (used
+      // by compound-tools' selectCapability to detect edit-intent).
+      setCurrentUserText(text);
+
+      // Find the best candidate project for "scene N" references:
+      // prefer active, fall back to the most recently created project
+      // with >= N scenes. This handles the case where the user just
+      // created a project but the store hasn't marked it active yet.
+      let activeProj = projStore.getActiveProject();
+      if (!activeProj) {
+        const all = projStore.projects ?? [];
+        if (all.length > 0) {
+          activeProj = all[all.length - 1];
+        }
+      }
       const pendingCount = activeProj
         ? activeProj.scenes.filter((s: { status: string }) => s.status === "pending" || s.status === "regenerating").length
         : 0;
@@ -201,6 +216,8 @@ export const geminiPlugin: AgentPlugin = {
       // create_media and decomposes the request into N parallel
       // steps, which regenerates half the project.
       let sceneDirective = "";
+      let sceneIterationDetected = false;
+      let sceneIterationIndex = -1;
       if (activeProj) {
         // Match "scene 4", "scene #4", "the 4th scene", "scene four", etc.
         const numMatch = text.match(/\bscene\s*#?\s*(\d+)\b/i);
@@ -214,6 +231,8 @@ export const geminiPlugin: AgentPlugin = {
                        : null;
         if (sceneNum !== null && sceneNum >= 1 && sceneNum <= activeProj.scenes.length) {
           const idx = sceneNum - 1;
+          sceneIterationDetected = true;
+          sceneIterationIndex = idx;
           sceneDirective =
             `\n\nCRITICAL DIRECTIVE (must follow exactly):\n` +
             `The user is referring to scene ${sceneNum} (index ${idx}) of the active project "${activeProj.id}".\n` +
@@ -221,7 +240,7 @@ export const geminiPlugin: AgentPlugin = {
             `Arguments: { project_id: "${activeProj.id}", scene_indices: [${idx}], feedback: "<the user's full request verbatim>" }\n` +
             `Do NOT call create_media. Do NOT decompose into multiple steps. Do NOT regenerate any other scene.\n` +
             `project_iterate will mark only scene ${idx} as regenerating and re-run that single scene with the feedback.`;
-          console.log(`[Gemini] Scene iteration hint: scene ${sceneNum} (idx ${idx}) of project ${activeProj.id}`);
+          console.log(`[Gemini] Scene iteration detected: scene ${sceneNum} (idx ${idx}) of project ${activeProj.id} — removing create_media from tool set`);
         }
       }
       const finalSystem = system + sceneDirective;
@@ -249,6 +268,20 @@ export const geminiPlugin: AgentPlugin = {
       // tools relevant to this intent). Only tools in the allowed set
       // get registered with the core runner for this single run.
       const allowedTools = pickToolsForIntent(intent.type, text);
+
+      // Scene iteration override: when we detected "scene N" in the
+      // user text, FORCE project_iterate by removing create_media and
+      // project_generate from the tool set. Gemini is biased toward
+      // create_media and ignores the directive ~30% of the time, so
+      // removing the alternative forces the correct path.
+      if (sceneIterationDetected) {
+        allowedTools.delete("create_media");
+        allowedTools.delete("project_generate");
+        // project_iterate must still be allowed
+        allowedTools.add("project_iterate");
+        console.log(`[Gemini] Scene iteration override: removed create_media + project_generate, forcing project_iterate`);
+      }
+
       let registeredCount = 0;
       for (const sbTool of listStoryboardTools()) {
         if (allowedTools.has(sbTool.name)) {
@@ -256,7 +289,7 @@ export const geminiPlugin: AgentPlugin = {
           registeredCount++;
         }
       }
-      console.log(`[Gemini] Tool filtering: intent=${intent.type}, registered ${registeredCount}/${listStoryboardTools().length} tools`);
+      console.log(`[Gemini] Tool filtering: intent=${intent.type}, sceneIter=${sceneIterationDetected}, registered ${registeredCount}/${listStoryboardTools().length} tools`);
 
       // Inject the system prompt via WorkingMemory criticalConstraints.
       // AgentRunner.runStream() marshals working.marshal().text into a system message
