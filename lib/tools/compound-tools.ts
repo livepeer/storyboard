@@ -103,21 +103,37 @@ function selectCapability(
     // Could not resolve — fall through to action-based selection
   }
 
-  // Detect "user wants video" from the prompt text so we can route
-  // text-to-video correctly when the agent picks the wrong action.
+  // Detect "user wants video" from the prompt text. This must be
+  // STRICT — the step.prompt here is what Gemini wrote, not what the
+  // user said. Gemini inherits style language ("cinematic", "Ghibli",
+  // "8-second") from the CreativeContext, so a loose regex matches
+  // every generate call when there's a cinematic context active. The
+  // rule: require BOTH an explicit duration AND a video noun.
   const lowerPrompt = (promptText ?? "").toLowerCase();
   const lowerHint = (styleHint ?? "").toLowerCase();
-  const asksForVideo =
-    /\bvideo\b|\bclip\b|\banimat\w*|\bfootage\b|\bcinematic\b|\b\d+[- ]second\b/.test(lowerPrompt) ||
-    /\bvideo\b|\bclip\b|\banimat\w*|\bcinematic\b/.test(lowerHint);
+  const hasVideoNoun = /\b(video|clip|footage|animation)\b/.test(lowerPrompt);
+  const hasDuration = /\b\d+[- ]second\b/.test(lowerPrompt);
+  const explicitMakeVideo = /\b(make|generate|create|produce)\s+(a|an|me\s+a|me\s+an)?\s*\d*[- ]?\s*seconds?\s*(video|clip|animation|movie)\b/.test(lowerPrompt);
+  const asksForVideo = (hasVideoNoun && hasDuration) || explicitMakeVideo;
+
+  // Motion verbs that indicate the user wants an animation (image -> video).
+  // If none of these are present AND the prompt has visual-edit verbs, the
+  // user most likely wants to EDIT an image, not animate it.
+  const motionVerbs = /\b(pan|tilt|zoom|push(?:-in| in)?|pull(?:-out| out)?|dolly|drift|sweep|rotate|move|fly|float|rise|fall|swirl|spin|shake|tremble|rustl\w*|flutter\w*|wind|breeze|ripple|wave|flow|cascade|gust|storm|rain|snow|drip|splash)\b/;
+  const editVerbs = /\b(add|remove|change|make\s+\w+\s+(darker|lighter|brighter|softer|warmer|cooler|redder|bluer|greener)|with\s+a\s|without\s|replace|adjust|tweak|darken|lighten|brighten|deepen|soften|sharpen|crop|blur|recolor|tint)\b/;
+  const hasMotion = motionVerbs.test(lowerPrompt);
+  const hasEditIntent = editVerbs.test(lowerPrompt);
+
   const valid = getCachedCapabilities();
   const hasVeoT2V = !!valid && valid.some((c) => c.name === "veo-t2v");
   const hasVeoI2V = !!valid && valid.some((c) => c.name === "veo-i2v");
 
   switch (action) {
     case "generate": {
-      // Text-to-video path: the agent picked "generate" but the user
-      // clearly wants a video. Route to veo-t2v (or ltx-t2v fallback).
+      // Text-to-video path: ONLY if the prompt has an unambiguous video
+      // intent (duration + video noun, or "make a video" phrasing).
+      // Plain "cinematic watercolor" inherited from a style context
+      // should NOT fire this branch.
       if (asksForVideo) {
         if (hasVeoT2V) return { capability: "veo-t2v", type: "video" };
         if (valid && valid.some((c) => c.name === "ltx-t2v")) {
@@ -134,15 +150,26 @@ function selectCapability(
       return { capability: "kontext-edit", type: "image" };
     case "animate": {
       // animate = image → video. Requires a source_url to work.
-      // If the agent called animate WITHOUT a source (common bug: user
-      // says "make an 8-second video" and the LLM thinks "animate"),
-      // fall through to text-to-video so the prompt still produces
-      // a clip instead of erroring out.
+      // Three branches, most specific first:
+      //
+      // 1) animate WITHOUT source: user said "make a video" but no
+      //    canvas card was attached. Rescue with text-to-video (veo-t2v).
+      // 2) animate WITH source BUT the prompt has visual-edit verbs
+      //    (add/remove/change/darker/with a...) AND NO motion verbs:
+      //    the LLM misclassified an image edit as an animation. Route
+      //    to kontext-edit (image→image) to produce a refined still.
+      // 3) animate WITH source AND motion: the real animation case.
+      //    Route to veo-i2v (with ltx-i2v fallback).
       if (!hasSourceUrl) {
         if (hasVeoT2V) return { capability: "veo-t2v", type: "video" };
         if (valid && valid.some((c) => c.name === "ltx-t2v")) {
           return { capability: "ltx-t2v", type: "video" };
         }
+      }
+      if (hasSourceUrl && hasEditIntent && !hasMotion) {
+        // Image edit disguised as an animate call. Produce a still,
+        // not a video. kontext-edit is image-to-image refinement.
+        return { capability: "kontext-edit", type: "image" };
       }
       // Route to Veo 3.1 (via fal.ai) when available — dramatically
       // better quality + audio than LTX. Falls back to ltx-i2v if the
