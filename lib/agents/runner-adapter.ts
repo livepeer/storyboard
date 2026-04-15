@@ -64,13 +64,47 @@ export interface AdapterOptions {
  * mcp_exposed is always false — storyboard tools are internal to the
  * app and not part of the 8-tool MCP surface [INV-7].
  */
+/**
+ * Compress a tool description to ~80 chars by taking the first sentence
+ * only. Gemini and Claude don't need multi-paragraph essays — the tool
+ * name + one sentence is plenty of context.
+ */
+function compressDesc(full: string): string {
+  const trimmed = full.trim();
+  if (trimmed.length <= 80) return trimmed;
+  // Take first sentence (up to first period-space or period-end)
+  const firstSentence = trimmed.match(/^[^.!?]+[.!?]/);
+  if (firstSentence && firstSentence[0].length <= 120) return firstSentence[0].trim();
+  // Fallback: hard-truncate at 80 chars
+  return trimmed.slice(0, 77) + "...";
+}
+
+/**
+ * Strip parameter descriptions recursively. Keeps the JSON Schema
+ * structure (type/required/enum/properties) but drops the "description"
+ * fields that blow up token counts. Each param description is ~20-40
+ * tokens and they add up fast across 10+ tools.
+ */
+function stripParamDescriptions(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") return schema;
+  if (Array.isArray(schema)) return schema.map(stripParamDescriptions);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+    if (k === "description") continue; // drop descriptions inside params
+    out[k] = stripParamDescriptions(v);
+  }
+  return out;
+}
+
 export function wrapStoryboardTool(
   sbTool: StoryboardToolDefinition
 ): CoreToolDefinition {
   return {
     name: sbTool.name,
-    description: sbTool.description,
-    parameters: sbTool.parameters as Record<string, unknown>,
+    description: compressDesc(sbTool.description),
+    // Strip parameter-level descriptions. JSON Schema structure is
+    // preserved so Gemini's function-call shape is still valid.
+    parameters: stripParamDescriptions(sbTool.parameters) as Record<string, unknown>,
     mcp_exposed: false,
     async execute(args, _ctx) {
       const result = await sbTool.execute(args as Record<string, unknown>);

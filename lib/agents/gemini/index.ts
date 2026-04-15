@@ -233,14 +233,12 @@ export const geminiPlugin: AgentPlugin = {
           const idx = sceneNum - 1;
           sceneIterationDetected = true;
           sceneIterationIndex = idx;
+          // Short directive — the tool filter below also removes
+          // create_media/project_generate so there's no alternative
+          // for Gemini to pick. Keep the prompt minimal.
           sceneDirective =
-            `\n\nCRITICAL DIRECTIVE (must follow exactly):\n` +
-            `The user is referring to scene ${sceneNum} (index ${idx}) of the active project "${activeProj.id}".\n` +
-            `You MUST call EXACTLY ONE tool: project_iterate\n` +
-            `Arguments: { project_id: "${activeProj.id}", scene_indices: [${idx}], feedback: "<the user's full request verbatim>" }\n` +
-            `Do NOT call create_media. Do NOT decompose into multiple steps. Do NOT regenerate any other scene.\n` +
-            `project_iterate will mark only scene ${idx} as regenerating and re-run that single scene with the feedback.`;
-          console.log(`[Gemini] Scene iteration detected: scene ${sceneNum} (idx ${idx}) of project ${activeProj.id} — removing create_media from tool set`);
+            `\n\nCall project_iterate with project_id="${activeProj.id}" and scene_indices=[${idx}]. Pass the user's request as the feedback field.`;
+          console.log(`[Gemini] Scene iteration detected: scene ${sceneNum} (idx ${idx}) of project ${activeProj.id}`);
         }
       }
       const finalSystem = system + sceneDirective;
@@ -275,28 +273,33 @@ export const geminiPlugin: AgentPlugin = {
       // project_generate ONCE ...', Gemini should call project_generate,
       // NOT create_media. Force that by removing create_media from the
       // tool set when the text looks like a preprocessor handoff.
+      //
+      // AGGRESSIVE trim: when we KNOW the only valid move is
+      // project_generate followed by canvas_organize, strip every
+      // other tool. Saves ~700 tokens of schema overhead per call.
       const isPreprocHandoff = /\bProject\s+"proj_[^"]+"\s+created\b/i.test(text)
         && /\bproject_generate\b/i.test(text);
       if (isPreprocHandoff) {
-        allowedTools.delete("create_media");
-        allowedTools.delete("project_create");
-        allowedTools.delete("project_iterate");
+        // Completely rebuild the allowed set — only these 3 tools are
+        // needed for the handoff path.
+        allowedTools.clear();
         allowedTools.add("project_generate");
         allowedTools.add("canvas_organize");
-        console.log(`[Gemini] Preprocessor handoff detected — forcing project_generate path (removed create_media, project_create, project_iterate)`);
+        allowedTools.add("canvas_get");
+        console.log(`[Gemini] Preprocessor handoff detected — forcing minimal tool set: project_generate + canvas_organize + canvas_get`);
       }
 
-      // Scene iteration override: when we detected "scene N" in the
-      // user text, FORCE project_iterate by removing create_media and
-      // project_generate from the tool set. Gemini is biased toward
-      // create_media and ignores the directive ~30% of the time, so
-      // removing the alternative forces the correct path.
+      // Scene iteration override: same aggressive minimal-tool-set
+      // treatment as the preprocessor handoff path. When we know the
+      // user wants scene N regenerated, project_iterate is the ONLY
+      // scene-affecting tool that should reach Gemini — removing
+      // everything else cuts ~1,500 tokens of schema overhead.
       if (sceneIterationDetected) {
-        allowedTools.delete("create_media");
-        allowedTools.delete("project_generate");
-        // project_iterate must still be allowed
+        allowedTools.clear();
         allowedTools.add("project_iterate");
-        console.log(`[Gemini] Scene iteration override: removed create_media + project_generate, forcing project_iterate`);
+        allowedTools.add("project_status");
+        allowedTools.add("canvas_get");
+        console.log(`[Gemini] Scene iteration override: forcing minimal tool set: project_iterate + project_status + canvas_get`);
       }
 
       let registeredCount = 0;
