@@ -24,6 +24,77 @@ export function setCurrentUserText(text: string): void {
   currentUserText = text;
 }
 
+/**
+ * Fallback chains for capability-level retry. When a capability fails
+ * with a recoverable error (empty response, upstream policy rejection,
+ * 5xx from upstream), we try the next capability in its chain BEFORE
+ * reporting failure to the user. Only same-type fallbacks (image→image,
+ * video→video) so the card type never flips mid-step.
+ *
+ * Rationale: Google Veo has aggressive safety filters and rejects
+ * benign content like "young girl + sky lantern". LTX-i2v, trained on
+ * different data with less content filtering, usually accepts the
+ * same prompt. Rather than forcing the user to re-prompt, cycle
+ * transparently and only surface failure if every option in the
+ * chain has exhausted.
+ */
+export const FALLBACK_CHAINS: Record<string, string[]> = {
+  // Image generation
+  "flux-dev": ["flux-schnell", "recraft-v4", "gemini-image", "nano-banana"],
+  "flux-schnell": ["flux-dev", "recraft-v4"],
+  "recraft-v4": ["flux-dev", "flux-schnell"],
+  "gemini-image": ["flux-dev", "nano-banana"],
+  "nano-banana": ["flux-dev", "gemini-image"],
+
+  // Image edit
+  "kontext-edit": ["flux-fill", "gemini-image"],
+  "flux-fill": ["kontext-edit"],
+
+  // Video image-to-video
+  "veo-i2v": ["ltx-i2v"],
+  "ltx-i2v": ["veo-i2v"],
+
+  // Video text-to-video
+  "veo-t2v": ["ltx-t2v"],
+  "ltx-t2v": ["veo-t2v"],
+  // bg-remove, topaz-upscale, chatterbox-tts, lipsync, music, sfx,
+  // face-swap, sam3, talking-head, veo-transition → single model,
+  // no fallback chain.
+};
+
+/**
+ * Given a capability name and the live capability list, return the
+ * ordered attempt list: [initial, ...chained-fallbacks-that-exist].
+ * Fallbacks that aren't in the live registry are silently dropped.
+ */
+export function buildAttemptChain(initialCap: string, liveCapNames: Set<string>): string[] {
+  const chain = FALLBACK_CHAINS[initialCap] ?? [];
+  const attempts = [initialCap, ...chain.filter((c) => liveCapNames.has(c))];
+  // De-duplicate while preserving order
+  return Array.from(new Set(attempts));
+}
+
+/**
+ * True when an error string indicates the model couldn't produce
+ * output for this specific prompt — fallback to a sibling model may
+ * succeed. False for connectivity / auth errors, where retrying with
+ * a different capability against the same SDK will also fail.
+ */
+export function isRecoverableFailure(errorMsg: string | undefined): boolean {
+  if (!errorMsg) return true; // empty-result case
+  const lower = errorMsg.toLowerCase();
+  // Non-recoverable: same SDK, same outcome
+  if (lower.includes("failed to fetch")) return false;
+  if (lower.includes("err_connection")) return false;
+  if (lower.includes("networkerror")) return false;
+  if (lower.includes("cors")) return false;
+  if (lower.includes("401") || lower.includes("payment failed") || lower.includes("signer")) return false;
+  if (lower.includes("authentication failed")) return false;
+  if (lower.includes("api key")) return false;
+  // Everything else — upstream policy, empty output, 5xx, timeout, rate limit — worth trying a sibling.
+  return true;
+}
+
 /** Convert raw technical errors into short, user-friendly messages */
 function humanizeError(raw: string): string {
   const lower = raw.toLowerCase();
@@ -419,84 +490,138 @@ export const createMediaTool: ToolDefinition = {
         params.image_url = step.source_url;
       }
 
-      // Run inference with the validated capability and styled prompt
-      const t0 = performance.now();
-      try {
-        const result = await runInference({
-          capability,
-          prompt: effectivePrompt,
-          params,
-        });
-        const elapsed = performance.now() - t0;
+      // Build the fallback chain for this step. The first attempt is
+      // the resolved capability; if it fails with a recoverable error
+      // (empty output, upstream policy reject, 5xx, timeout), we try
+      // the next sibling model in FALLBACK_CHAINS before reporting.
+      // Only capabilities in the LIVE registry survive filtering.
+      const liveCapNames = new Set(
+        (getCachedCapabilities() || []).map((c: { name: string }) => c.name)
+      );
+      const attemptChain = buildAttemptChain(capability, liveCapNames);
 
-        const r = result as Record<string, unknown>;
-        const data = (r.data ?? r) as Record<string, unknown>;
-        const images = data.images as Array<{ url: string }> | undefined;
-        const image = data.image as { url: string } | undefined;
-        const video = data.video as { url: string } | undefined;
-        const audio = data.audio as { url: string } | undefined;
-        const audioFile = data.audio_file as { url: string } | undefined;
-        const output = data.output as { url: string } | undefined;
+      let stepDone = false;
+      let lastAttempt:
+        | { error: string; capability: string; elapsed: number }
+        | undefined;
 
-        const url =
-          (r.image_url as string) ??
-          images?.[0]?.url ??
-          image?.url ??
-          (r.video_url as string) ??
-          video?.url ??
-          (r.audio_url as string) ??
-          audio?.url ??
-          audioFile?.url ??
-          output?.url ??
-          (data.url as string) ??
-          undefined;
+      for (let attemptIdx = 0; attemptIdx < attemptChain.length; attemptIdx++) {
+        const currentCap = attemptChain[attemptIdx];
 
-        // Check both top-level and nested errors
-        const topError = r.error as string | undefined;
-        const dataError = data.error as string | undefined;
-        const effectiveError = topError || dataError;
-
-        // Store generation metadata on the card for the info banner
-        const genMeta = { capability, prompt: effectivePrompt, elapsed };
-
-        if (effectiveError) {
-          const friendly = humanizeError(effectiveError);
-          canvas.updateCard(card.id, { error: friendly, ...genMeta });
-          results.push({ refId, cardId: card.id, error: friendly, capability, elapsed });
-        } else if (url) {
-          canvas.updateCard(card.id, { url, ...genMeta });
-          results.push({ refId, cardId: card.id, url, capability, elapsed });
-        } else {
-          // Log the full response for debugging
-          console.warn(`[create_media] No URL extracted for ${capability}:`, JSON.stringify(r).slice(0, 300));
-          // Try one more extraction: some models return url at data level as string
-          const fallbackUrl = typeof data === "object"
-            ? (Object.values(data).find((v) => typeof v === "string" && (v as string).startsWith("http")) as string | undefined)
-            : undefined;
-          if (fallbackUrl) {
-            canvas.updateCard(card.id, { url: fallbackUrl, ...genMeta });
-            results.push({ refId, cardId: card.id, url: fallbackUrl, capability, elapsed });
-          } else {
-            const noMediaMsg = `No output from ${capability} — try a different prompt`;
-            canvas.updateCard(card.id, { error: noMediaMsg, ...genMeta });
-            results.push({ refId, cardId: card.id, error: noMediaMsg, capability, elapsed });
-          }
+        // User-facing notice when we fall back. Keep it short and
+        // actionable — the user sees "veo-i2v failed — trying ltx-i2v…".
+        if (attemptIdx > 0) {
+          const prev = attemptChain[attemptIdx - 1];
+          useChatStore
+            .getState()
+            .addMessage(`${prev} failed — trying ${currentCap}…`, "system");
+          console.log(`[create_media] Fallback: ${prev} → ${currentCap} (step ${i})`);
         }
 
-        if (step.depends_on !== undefined && results[step.depends_on]) {
-          canvas.addEdge(results[step.depends_on].refId, refId, {
-            capability,
-            prompt: step.prompt,
-            action: step.action,
-            elapsed,
+        const t0 = performance.now();
+        try {
+          const result = await runInference({
+            capability: currentCap,
+            prompt: effectivePrompt,
+            params,
           });
+          const elapsed = performance.now() - t0;
+
+          const r = result as Record<string, unknown>;
+          const data = (r.data ?? r) as Record<string, unknown>;
+          const images = data.images as Array<{ url: string }> | undefined;
+          const image = data.image as { url: string } | undefined;
+          const video = data.video as { url: string } | undefined;
+          const audio = data.audio as { url: string } | undefined;
+          const audioFile = data.audio_file as { url: string } | undefined;
+          const output = data.output as { url: string } | undefined;
+
+          let url: string | undefined =
+            (r.image_url as string) ??
+            images?.[0]?.url ??
+            image?.url ??
+            (r.video_url as string) ??
+            video?.url ??
+            (r.audio_url as string) ??
+            audio?.url ??
+            audioFile?.url ??
+            output?.url ??
+            (data.url as string) ??
+            undefined;
+
+          // Last-ditch extraction: some models bury the URL in an
+          // unlabeled field (e.g. top-level stringified). Find any
+          // "http..." string in the response as a fallback.
+          if (!url && typeof data === "object") {
+            url = Object.values(data).find(
+              (v) => typeof v === "string" && (v as string).startsWith("http")
+            ) as string | undefined;
+          }
+
+          const topError = r.error as string | undefined;
+          const dataError = data.error as string | undefined;
+          const effectiveError = topError || dataError;
+
+          if (url && !effectiveError) {
+            // Success — commit and break out of the attempt loop
+            const genMeta = { capability: currentCap, prompt: effectivePrompt, elapsed };
+            canvas.updateCard(card.id, { url, error: undefined, ...genMeta });
+            results.push({ refId, cardId: card.id, url, capability: currentCap, elapsed });
+            if (step.depends_on !== undefined && results[step.depends_on]) {
+              canvas.addEdge(results[step.depends_on].refId, refId, {
+                capability: currentCap,
+                prompt: step.prompt,
+                action: step.action,
+                elapsed,
+              });
+            }
+            stepDone = true;
+            break;
+          }
+
+          // No URL OR upstream error — record and decide whether to fallback
+          const failMsg = effectiveError
+            ? humanizeError(effectiveError)
+            : `No output from ${currentCap}`;
+          console.warn(`[create_media] ${currentCap} attempt failed: ${failMsg}`);
+          lastAttempt = { error: failMsg, capability: currentCap, elapsed };
+
+          if (!isRecoverableFailure(failMsg)) {
+            // Auth / connectivity failure — cycling won't help. Stop here.
+            break;
+          }
+          // else: continue to next attempt in chain
+        } catch (e) {
+          const elapsed = performance.now() - t0;
+          const raw = e instanceof Error ? e.message : "Unknown error";
+          const friendly = humanizeError(raw);
+          console.warn(`[create_media] ${currentCap} threw: ${raw}`);
+          lastAttempt = { error: friendly, capability: currentCap, elapsed };
+          if (!isRecoverableFailure(friendly)) break;
         }
-      } catch (e) {
-        const elapsed = performance.now() - t0;
-        const raw = e instanceof Error ? e.message : "Unknown error";
-        const friendly = humanizeError(raw);
-        canvas.updateCard(card.id, { error: friendly });
-        results.push({ refId, cardId: card.id, error: friendly, capability, elapsed });
+      }
+
+      if (!stepDone) {
+        // Every attempt in the chain failed. Commit the final error
+        // onto the card using the LAST attempt's capability (so the
+        // card badge shows what actually ran last, not what was
+        // originally requested).
+        const finalErr = lastAttempt?.error || `No output from any of: ${attemptChain.join(", ")}`;
+        const finalCap = lastAttempt?.capability || capability;
+        const finalElapsed = lastAttempt?.elapsed || 0;
+        canvas.updateCard(card.id, {
+          error: finalErr,
+          capability: finalCap,
+          prompt: effectivePrompt,
+          elapsed: finalElapsed,
+        });
+        results.push({
+          refId,
+          cardId: card.id,
+          error: finalErr,
+          capability: finalCap,
+          elapsed: finalElapsed,
+        });
       }
     }
 
