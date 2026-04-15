@@ -22,6 +22,91 @@ const MAX_TOOL_ROUNDS = 20;
 
 let stopped = false;
 
+/**
+ * Pick a subset of storyboard tool names that's relevant for the
+ * current intent. Reduces input token overhead by ~80% on the common
+ * case — the full storyboard registry has 45 tools, but most intents
+ * only need 6-12 of them.
+ *
+ * Core tools are ALWAYS included so the agent has escape hatches:
+ *   create_media, canvas_get, canvas_create, canvas_organize,
+ *   project_create, project_generate, project_iterate, project_status
+ *
+ * Extras are added based on intent:
+ *   - new_project / continue / add_scenes → memory_* (for recall/style)
+ *   - status                              → canvas_get only (minimal)
+ *   - stream-ish user text                → scope_* family
+ *   - episode-ish user text               → episode_* family
+ *   - none (default creative)             → memory_* for style continuity
+ */
+function pickToolsForIntent(intentType: string, userText: string): Set<string> {
+  const core = new Set<string>([
+    "create_media",
+    "canvas_get",
+    "canvas_create",
+    "canvas_update",
+    "canvas_remove",
+    "canvas_organize",
+    "project_create",
+    "project_generate",
+    "project_iterate",
+    "project_status",
+  ]);
+
+  const lower = userText.toLowerCase();
+  const wantsStream = /\b(stream|webcam|live|camera|preset|lv2v|scope)\b/.test(lower);
+  const wantsEpisode = /\bepisode\b/.test(lower);
+  const wantsSdk = /\b(capab|sdk|inference|orch|capabilit)/.test(lower);
+  const wantsSkill = /\b(skill|load\s+skill)\b/.test(lower);
+
+  const allowed = new Set(core);
+
+  // Memory tools — always useful for style/preference continuity on
+  // creative intents.
+  if (intentType !== "status" && intentType !== "none" ) {
+    allowed.add("memory_style");
+    allowed.add("memory_rate");
+    allowed.add("memory_preference");
+  } else if (intentType === "none") {
+    allowed.add("memory_style");
+    allowed.add("memory_preference");
+  }
+
+  if (wantsStream) {
+    allowed.add("scope_start");
+    allowed.add("scope_control");
+    allowed.add("scope_stop");
+    allowed.add("scope_preset");
+    allowed.add("scope_graph");
+    allowed.add("scope_status");
+  }
+
+  if (wantsEpisode) {
+    allowed.add("episode_create");
+    allowed.add("episode_update");
+    allowed.add("episode_activate");
+    allowed.add("episode_list");
+    allowed.add("episode_get");
+    allowed.add("episode_remove");
+  }
+
+  if (wantsSdk) {
+    allowed.add("inference");
+    allowed.add("list_capabilities");
+  }
+
+  if (wantsSkill) {
+    allowed.add("load_skill");
+  }
+
+  // Status intent: minimal surface
+  if (intentType === "status") {
+    return new Set(["canvas_get", "project_status"]);
+  }
+
+  return allowed;
+}
+
 /** Produce a brief human-readable result summary for a tool */
 function briefToolResult(name: string, data: unknown): string {
   if (!data || typeof data !== "object") return "";
@@ -158,9 +243,20 @@ export const geminiPlugin: AgentPlugin = {
       // Build runner with StoryboardGeminiProvider (routes through /api/agent/gemini proxy)
       const provider = new StoryboardGeminiProvider();
       const tools = new ToolRegistry();
+
+      // Intent-based tool filtering — cuts tool schema overhead from
+      // ~11k input tokens (all 45 storyboard tools) to ~2k (the 8-12
+      // tools relevant to this intent). Only tools in the allowed set
+      // get registered with the core runner for this single run.
+      const allowedTools = pickToolsForIntent(intent.type, text);
+      let registeredCount = 0;
       for (const sbTool of listStoryboardTools()) {
-        tools.register(wrapStoryboardTool(sbTool));
+        if (allowedTools.has(sbTool.name)) {
+          tools.register(wrapStoryboardTool(sbTool));
+          registeredCount++;
+        }
       }
+      console.log(`[Gemini] Tool filtering: intent=${intent.type}, registered ${registeredCount}/${listStoryboardTools().length} tools`);
 
       // Inject the system prompt via WorkingMemory criticalConstraints.
       // AgentRunner.runStream() marshals working.marshal().text into a system message
