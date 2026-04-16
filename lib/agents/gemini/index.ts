@@ -19,6 +19,8 @@ import { classifyIntent } from "../intent";
 import { StoryboardGeminiProvider } from "../storyboard-providers";
 import { wrapStoryboardTool } from "../runner-adapter";
 import { setCurrentUserText } from "@/lib/tools/compound-tools";
+import { getConnectedServers } from "@/lib/mcp/store";
+import { discoverTools, executeToolCall, parseMcpToolName } from "@/lib/mcp/client";
 
 const MAX_TOOL_ROUNDS = 20;
 
@@ -492,7 +494,36 @@ export const geminiPlugin: AgentPlugin = {
           registeredCount++;
         }
       }
-      console.log(`[Gemini] Tool filtering: intent=${intent.type}, sceneIter=${sceneIterationDetected}, registered ${registeredCount}/${listStoryboardTools().length} tools`);
+      // Register MCP tools from connected servers alongside storyboard tools.
+      // Each MCP tool is wrapped so execution routes to executeToolCall().
+      try {
+        const mcpServers = getConnectedServers();
+        for (const server of mcpServers) {
+          try {
+            const mcpTools = await discoverTools(server);
+            for (const mt of mcpTools) {
+              tools.register({
+                name: mt.name,
+                description: mt.description || "",
+                parameters: mt.inputSchema || {},
+                mcp_exposed: false,
+                async execute(args) {
+                  const parsed = parseMcpToolName(mt.name);
+                  if (!parsed) return JSON.stringify({ error: "Invalid MCP tool name" });
+                  const result = await executeToolCall(server.url, server.token || "", parsed.originalName, args);
+                  return JSON.stringify(result.content || []);
+                },
+              });
+              registeredCount++;
+            }
+            console.log(`[Gemini] MCP: registered ${mcpTools.length} tools from ${server.name}`);
+          } catch (e) {
+            console.warn(`[Gemini] MCP discovery failed for ${server.name}:`, e);
+          }
+        }
+      } catch { /* MCP store not available */ }
+
+      console.log(`[Gemini] Tool filtering: intent=${intent.type}, sceneIter=${sceneIterationDetected}, registered ${registeredCount}/${listStoryboardTools().length} storyboard + MCP tools`);
 
       // Inject the system prompt via WorkingMemory criticalConstraints.
       // AgentRunner.runStream() marshals working.marshal().text into a system message
