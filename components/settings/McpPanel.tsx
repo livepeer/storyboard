@@ -59,12 +59,63 @@ export function McpPanel() {
   }, [customName, customUrl, customToken, refresh]);
 
   const handleConnect = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      const server = servers.find((s) => s.id === id);
+      if (!server) return;
+
+      // OAuth servers (Anthropic remote MCP) — launch popup flow
+      if (server.authType === "oauth") {
+        try {
+          // 1. Start OAuth flow via server-side route
+          const resp = await fetch("/api/mcp/auth", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "start",
+              serverBaseUrl: server.url,
+            }),
+          });
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ error: "unknown" }));
+            window.alert(`OAuth setup failed: ${(err as Record<string, string>).error}`);
+            return;
+          }
+          const { authUrl } = (await resp.json()) as { authUrl: string };
+
+          // 2. Open popup for user authorization
+          const popup = window.open(authUrl, "mcp-oauth", "width=600,height=700");
+          if (!popup) {
+            window.alert("Popup blocked — allow popups for this site and try again.");
+            return;
+          }
+
+          // 3. Listen for token from callback page via postMessage
+          const handler = (e: MessageEvent) => {
+            if (e.data?.type === "mcp-oauth-success" && e.data.token) {
+              connectServer(id, e.data.token);
+              refresh();
+              window.removeEventListener("message", handler);
+            } else if (e.data?.type === "mcp-oauth-error") {
+              window.alert(`OAuth failed: ${e.data.error}`);
+              window.removeEventListener("message", handler);
+            }
+          };
+          window.addEventListener("message", handler);
+
+          // Auto-cleanup after 5 minutes if popup never posts back
+          setTimeout(() => window.removeEventListener("message", handler), 5 * 60 * 1000);
+        } catch (e) {
+          window.alert(`OAuth error: ${e instanceof Error ? e.message : "unknown"}`);
+        }
+        return;
+      }
+
+      // Bearer / none auth — simple token prompt
       const token = window.prompt("Enter token (or leave blank):");
       connectServer(id, token || undefined);
       refresh();
     },
-    [refresh]
+    [servers, refresh]
   );
 
   const handleDisconnect = useCallback(
