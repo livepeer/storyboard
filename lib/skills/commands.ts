@@ -7,6 +7,7 @@ import {
   type CreativeContext,
 } from "@/lib/agents/session-context";
 import { handleOrganize, handleLayoutCommand } from "@/lib/layout/commands";
+import { handleStoryCommand } from "@/lib/story/commands";
 
 interface ParsedCommand {
   command: string;
@@ -59,8 +60,10 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       // `/context gen <description>` (parser splits on first whitespace
       // so this only fires if the user uses a slash separator).
       return contextGen(cmd.args);
+    case "story":
+      return handleStoryCommand(cmd.args);
     default:
-      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /capabilities, /organize, /layout, /save, /export`;
+      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /story, /capabilities, /organize, /layout, /save, /export`;
   }
 }
 

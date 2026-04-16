@@ -3,6 +3,8 @@
 import { useState, useCallback } from "react";
 import type { ChatMessage } from "@/lib/chat/store";
 import { RatingWidget } from "./RatingWidget";
+import { StoryCard } from "./StoryCard";
+import { isStoryEnvelope, parseStoryEnvelope } from "@/lib/story/commands";
 
 const roleStyles: Record<string, string> = {
   user: "self-end bg-white/[0.08] text-[var(--text)]",
@@ -76,6 +78,14 @@ function RichText({ text, onClick }: { text: string; onClick?: (cmd: string) => 
 }
 
 export function MessageBubble({ message }: { message: ChatMessage }) {
+  // Story card — render a rich card instead of a text bubble when the
+  // message is a /story envelope. Story envelopes come through as
+  // system messages emitted by handleStoryCommand.
+  if (isStoryEnvelope(message.text)) {
+    const story = parseStoryEnvelope(message.text);
+    if (story) return <StoryCard story={story} />;
+  }
+
   const ratingMatch = message.role === "agent" ? RATING_RE.exec(message.text) : null;
   const [copied, setCopied] = useState(false);
 
