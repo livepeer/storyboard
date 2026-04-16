@@ -259,6 +259,82 @@ export const geminiPlugin: AgentPlugin = {
         selectedCard: context.selectedCard,
       });
 
+      // Daily briefing detection — intercept "daily briefing", "what's
+      // in my inbox", "morning briefing", etc. and either route to
+      // Gmail MCP tools or show a friendly "connect Gmail" message.
+      // Without this, the agent treats briefing requests as generic
+      // creative prompts and generates random images.
+      const lowerForBriefing = text.toLowerCase();
+      const isBriefingRequest =
+        /\b(daily\s*briefing|morning\s*briefing|email\s*briefing|inbox\s*(today|summary|briefing)|what'?s\s+in\s+my\s+(inbox|email))\b/i.test(lowerForBriefing);
+
+      if (isBriefingRequest) {
+        const mcpServers = getConnectedServers();
+        const hasGmail = mcpServers.some((s) =>
+          s.name.toLowerCase().includes("gmail") || s.id === "gmail"
+        );
+
+        if (!hasGmail) {
+          // No Gmail connected — show friendly message, don't generate random images
+          console.log("[Gemini] Briefing requested but no Gmail MCP connected");
+          yield {
+            type: "text",
+            content:
+              "I'd love to create your daily briefing, but I need access to your Gmail first.\n\n" +
+              "**To connect:**\n" +
+              "1. Open **Settings** (gear icon)\n" +
+              "2. Find the **MCP / Connected Tools** section\n" +
+              "3. Click **Gmail** → Connect\n" +
+              "4. Authorize access via Google OAuth\n\n" +
+              "Once connected, try again and I'll fetch your emails, summarize them, and create a visual briefing on the canvas.",
+          };
+          say(
+            "Daily briefing requires Gmail MCP. Connect in Settings → Connected Tools → Gmail.",
+            "system",
+          );
+          yield { type: "done" };
+          return;
+        }
+
+        // Gmail IS connected — inject the daily-briefing skill into
+        // the system prompt so the agent knows the fetch→analyze→script
+        // →visuals→narrate workflow. Also ensure Gmail MCP tools are
+        // in the allowed set.
+        console.log("[Gemini] Briefing request detected, Gmail MCP connected — injecting skill");
+        const briefingSkill = `
+## Daily Briefing Mode (ACTIVE)
+You have access to Gmail tools via MCP. Follow this workflow:
+1. Use Gmail tools to search inbox for last 24 hours
+2. Analyze and prioritize: urgent, important, FYI
+3. Create 3-5 visual cards summarizing the key emails using create_media
+   - Urgent items: bold warm colors
+   - Calm items: cool blues/greens
+   - Use abstract artistic styles, NOT literal email screenshots
+4. Each card title should reference the email subject/sender
+5. Open with "Good morning, here's your briefing for today"
+
+If Gmail returns no emails, say "Your inbox is clear — nothing urgent today."
+Do NOT generate generic placeholder images. Only create cards for REAL email content.`;
+
+      }
+      // Briefing directive — appended to finalSystem alongside scene/stream directives
+      const briefingDirective = isBriefingRequest && getConnectedServers().some((s) =>
+        s.name.toLowerCase().includes("gmail") || s.id === "gmail"
+      ) ? `
+## Daily Briefing Mode (ACTIVE)
+You have access to Gmail tools via MCP. Follow this workflow:
+1. Use Gmail tools to search inbox for last 24 hours
+2. Analyze and prioritize: urgent, important, FYI
+3. Create 3-5 visual cards summarizing the key emails using create_media
+   - Urgent items: bold warm colors (red/orange)
+   - Calm items: cool blues/greens
+   - Use abstract artistic styles, NOT literal email screenshots
+4. Each card title should reference the email subject/sender
+5. Open with "Good morning, here's your briefing for today"
+
+If Gmail returns no emails, say "Your inbox is clear — nothing urgent today."
+Do NOT generate generic placeholder images. Only create cards for REAL email content from the user's inbox.` : "";
+
       // Scene-iteration hard hint: if the user's message references
       // a specific "scene N" and there's an active project with that
       // scene, inject an explicit directive into the system prompt
@@ -426,7 +502,7 @@ export const geminiPlugin: AgentPlugin = {
           }
         }
       }
-      const finalSystem = system + sceneDirective + streamOverrideDirective;
+      const finalSystem = system + sceneDirective + streamOverrideDirective + briefingDirective;
 
       console.log(`[Gemini] runStream: system=${finalSystem.length} chars, text="${text.slice(0, 80)}"`);
 
