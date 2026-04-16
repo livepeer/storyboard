@@ -16,7 +16,11 @@ interface ParsedCommand {
 export function parseCommand(input: string): ParsedCommand | null {
   const t = input.trim();
   if (!t.startsWith("/")) return null;
-  const match = t.match(/^\/(\S+)(?:\s+(.*))?$/);
+  // [\s\S]* matches any character including newlines, so multi-line
+  // pastes (e.g. `/context gen <long description...\nmultiple lines>`)
+  // parse correctly. JS regex `.` doesn't match \n by default which
+  // would otherwise truncate args at the first newline.
+  const match = t.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
   if (!match) return null;
   return { command: match[1], args: (match[2] || "").trim() };
 }

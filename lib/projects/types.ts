@@ -63,4 +63,16 @@ export interface Project {
   isVideo?: boolean;
   /** Cross-video consistency layers — only set when isVideo is true */
   videoConsistency?: VideoConsistency;
+  /**
+   * Cumulative token usage across every agent turn that referenced this
+   * project. Incremented by the plugins whenever they record usage
+   * during a run that called project_create/project_generate/etc. for
+   * this project id. Displayed in the chat completion summary.
+   */
+  tokensUsed?: {
+    input: number;
+    output: number;
+    cached: number;
+    turns: number;
+  };
 }

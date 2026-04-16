@@ -2,9 +2,11 @@
   "name": "storyboard-a3",
   "version": "0.1.0",
   "private": true,
+  "workspaces": ["packages/*"],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:workspaces": "npm run build:lib --workspace=@livepeer/agent && npm run build --workspace=@livepeer/agent-pack-projects && npm run build --workspace=@livepeer/agent-pack-canvas",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
@@ -12,6 +14,9 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@livepeer/agent": "workspace:*",
+    "@livepeer/agent-pack-projects": "workspace:*",
+    "@livepeer/agent-pack-canvas": "workspace:*",
     "next": "16.2.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",

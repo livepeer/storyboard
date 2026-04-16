@@ -15,12 +15,31 @@ export interface PerSceneNotes {
   score?: string;
 }
 
+// Video-intent detection. A brief is a "video project" only when the
+// user EXPLICITLY asks for motion — not just because it contains
+// standard cinematography framing terms like "wide shot" or "close-up",
+// which are equally valid for still storyboards.
+//
+// Requires one of:
+//   - An explicit video noun ("animation", "short film", "movie clip", ...)
+//   - An explicit duration ("8-second", "duration: 5s")
+//   - A motion verb (tracking, pan, zoom, cut to, fade to, dissolve, ...)
+//
+// Framing-only terms (wide shot, close-up, medium shot, three-quarter
+// shot, low angle, etc.) do NOT trigger video intent — they describe
+// composition, which stills have too.
 const VIDEO_KEYWORDS: RegExp[] = [
-  /\b(animated|animation|short film|short video|video clip|movie|cinematic short)\b/i,
+  // Explicit video nouns (must be standalone — "cinematic short film"
+  // in a style-context paragraph won't match because "cinematic short"
+  // is style language, not a command)
+  /\b(animated|animation|short film to be animated|video clip|movie|music video|film clip)\b/i,
+  // Explicit duration
   /\bduration:\s*\d+\s*(s|sec|second|minute)/i,
-  /\b\d+[-\s]second\b/i,
-  /\b(scene\s*\d+.*camera|tracking shot|close[-\s]?up|wide shot|cut to|fade to|zoom in|zoom out)\b/i,
-  /\bstoryboard.*video|video.*storyboard|film.*scene|scene.*film\b/i,
+  /\b\d+[-\s]second\s+(video|clip|animation|film)\b/i,
+  // Explicit motion / transition verbs (NOT framing)
+  /\b(tracking shot|pan(ning)? (across|from|to)|zoom(ing)? in|zoom(ing)? out|cut to|fade to|dissolve to|tilt up|tilt down|dolly (in|out|shot)|crane shot|slow motion)\b/i,
+  // Only flag if the brief explicitly says "video storyboard" or similar
+  /\b(animate this|animate the|make it a video|turn (it|this) into (a )?(video|animation|film))\b/i,
 ];
 
 export function detectVideoIntent(brief: string): boolean {

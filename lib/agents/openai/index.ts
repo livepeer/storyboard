@@ -4,40 +4,21 @@ import type {
   CanvasContext,
   ConfigField,
 } from "../types";
-import { listTools, executeTool } from "@/lib/tools/registry";
+import {
+  AgentRunner,
+  ToolRegistry,
+  WorkingMemoryStore,
+  SessionMemoryStore,
+} from "@livepeer/agent";
+import { listTools as listStoryboardTools } from "@/lib/tools/registry";
 import { useChatStore } from "@/lib/chat/store";
 import { loadSystemPrompt } from "../claude/system-prompt";
-import { compactHistory } from "../claude/compaction";
-
-interface OaiMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
-  tool_calls?: OaiToolCall[];
-  tool_call_id?: string;
-}
-
-interface OaiToolCall {
-  id: string;
-  type: "function";
-  function: { name: string; arguments: string };
-}
-
-interface OaiResponse {
-  choices: Array<{
-    message: {
-      role: "assistant";
-      content: string | null;
-      tool_calls?: OaiToolCall[];
-    };
-    finish_reason: string;
-  }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
-}
+import { StoryboardOpenAIProvider } from "../storyboard-providers";
+import { wrapStoryboardTool } from "../runner-adapter";
 
 const MAX_TOOL_ROUNDS = 20;
 
 let stopped = false;
-let messages: OaiMessage[] = [];
 
 function say(text: string, role: "agent" | "system" = "agent") {
   useChatStore.getState().addMessage(text, role);
@@ -45,49 +26,6 @@ function say(text: string, role: "agent" | "system" = "agent") {
 
 function setProcessing(v: boolean) {
   useChatStore.getState().setProcessing(v);
-}
-
-/**
- * Convert our tool registry to OpenAI's function calling format.
- */
-function buildToolSchemas() {
-  return listTools().map((t) => ({
-    type: "function" as const,
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters,
-    },
-  }));
-}
-
-/**
- * Call the /api/agent/openai proxy route.
- */
-async function callApi(
-  msgs: OaiMessage[],
-  tools: ReturnType<typeof buildToolSchemas>
-): Promise<OaiResponse> {
-  const resp = await fetch("/api/agent/openai", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages: msgs, tools }),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    if (resp.status === 429) {
-      throw new Error("Rate limited — please wait a moment and try again.");
-    }
-    if (resp.status === 500 && text.includes("OPENAI_API_KEY")) {
-      throw new Error(
-        "OPENAI_API_KEY not configured. Add it via Vercel env vars or .env.local."
-      );
-    }
-    throw new Error(`API error ${resp.status}: ${text.slice(0, 200)}`);
-  }
-
-  return resp.json();
 }
 
 export const openaiPlugin: AgentPlugin = {
@@ -120,97 +58,102 @@ export const openaiPlugin: AgentPlugin = {
     setProcessing(true);
 
     try {
-      // Load system prompt + tool schemas
+      // Load system prompt
       const system = await loadSystemPrompt(context);
-      const tools = buildToolSchemas();
 
-      // Ensure system message is first
-      if (messages.length === 0 || messages[0].role !== "system") {
-        messages.unshift({ role: "system", content: system });
-      } else {
-        messages[0].content = system;
+      console.log(`[OpenAI] runStream: system=${system.length} chars, text="${text.slice(0, 80)}"`);
+
+      // Build runner with StoryboardOpenAIProvider (routes through /api/agent/openai proxy)
+      const provider = new StoryboardOpenAIProvider();
+      const tools = new ToolRegistry();
+      for (const sbTool of listStoryboardTools()) {
+        tools.register(wrapStoryboardTool(sbTool));
       }
 
-      // Append user message
-      messages.push({ role: "user", content: text });
+      // Inject the system prompt via WorkingMemory criticalConstraints.
+      // AgentRunner.runStream() marshals working.marshal().text into a system message
+      // at the start of each run, so the LLM always sees the full context.
+      const working = new WorkingMemoryStore();
+      working.setCriticalConstraints(system ? [system] : []);
+      const session = new SessionMemoryStore();
+      const runner = new AgentRunner(provider, tools, working, session);
 
-      // Tool-use loop
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const promptTokens = { input: 0, output: 0, cached: 0 };
+      const touchedProjectIds = new Set<string>();
+      const startTime = Date.now();
+      let sawAnyToolCall = false;
+
+      for await (const event of runner.runStream({ user: text, maxIterations: MAX_TOOL_ROUNDS })) {
         if (stopped) {
           yield { type: "text", content: "Stopped." };
           break;
         }
+        switch (event.kind) {
+          case "text":
+            if (event.text) {
+              yield { type: "text", content: event.text };
+              say(event.text, "agent");
+            }
+            break;
 
-        // Compact old messages (skip system message at index 0)
-        const [sysMsg, ...rest] = messages;
-        const compacted = compactHistory(
-          rest as Array<{ role: string; content: unknown }>,
-          6
-        );
-        const apiMessages = [sysMsg, ...compacted] as OaiMessage[];
+          case "tool_call":
+            sawAnyToolCall = true;
+            yield { type: "tool_call", name: event.name, input: event.args };
+            break;
 
-        const response = await callApi(apiMessages, tools);
-
-        const choice = response.choices?.[0];
-        if (!choice) {
-          yield { type: "error", content: "No response from OpenAI" };
-          break;
-        }
-
-        const { message } = choice;
-        const toolCalls = message.tool_calls || [];
-
-        // Emit text content
-        if (message.content) {
-          yield { type: "text", content: message.content };
-          say(message.content, "agent");
-        }
-
-        // Emit tool call events
-        for (const tc of toolCalls) {
-          yield {
-            type: "tool_call",
-            name: tc.function.name,
-            input: JSON.parse(tc.function.arguments || "{}"),
-          };
-        }
-
-        // Append assistant message to history
-        messages.push({
-          role: "assistant",
-          content: message.content,
-          tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-        });
-
-        // If no tool calls, we're done
-        if (choice.finish_reason === "stop" || toolCalls.length === 0) {
-          break;
-        }
-
-        // Execute tools and append results
-        for (const tc of toolCalls) {
-          let parsedInput: Record<string, unknown>;
-          try {
-            parsedInput = JSON.parse(tc.function.arguments || "{}");
-          } catch {
-            parsedInput = {};
+          case "tool_result": {
+            let parsed: unknown;
+            try { parsed = JSON.parse(event.content); } catch { parsed = { raw: event.content }; }
+            yield { type: "tool_result", name: event.name, result: parsed };
+            if (parsed && typeof parsed === "object") {
+              const pid = (parsed as Record<string, unknown>).project_id;
+              if (typeof pid === "string" && pid.length > 0) {
+                touchedProjectIds.add(pid);
+              }
+            }
+            break;
           }
 
-          const result = await executeTool(tc.function.name, parsedInput);
+          case "usage":
+            promptTokens.input += event.usage.input;
+            promptTokens.output += event.usage.output;
+            promptTokens.cached += event.usage.cached ?? 0;
+            break;
 
-          yield {
-            type: "tool_result",
-            name: tc.function.name,
-            result: result.data ?? result.error,
-          };
+          case "error":
+            yield { type: "error", content: event.error };
+            say(`OpenAI error: ${event.error}`, "system");
+            break;
 
-          messages.push({
-            role: "tool",
-            content: JSON.stringify(
-              result.success ? result.data : { error: result.error }
-            ),
-            tool_call_id: tc.id,
-          });
+          case "turn_done":
+          case "done":
+            break;
+        }
+      }
+
+      const tokenTotal = promptTokens.input + promptTokens.output;
+      if (tokenTotal > 0) {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        const tag = `${tokenTotal.toLocaleString()} tokens (${promptTokens.input.toLocaleString()} in / ${promptTokens.output.toLocaleString()} out${promptTokens.cached > 0 ? `, ${promptTokens.cached.toLocaleString()} cached` : ""})`;
+        const line = sawAnyToolCall ? `Done in ${elapsed}s — ${tag}` : tag;
+        say(line, "system");
+
+        if (touchedProjectIds.size > 0) {
+          const { useProjectStore } = await import("@/lib/projects/store");
+          const store = useProjectStore.getState();
+          for (const pid of touchedProjectIds) store.addProjectTokens(pid, promptTokens);
+          const refreshed = useProjectStore.getState();
+          for (const pid of touchedProjectIds) {
+            const proj = refreshed.getProject(pid);
+            if (!proj?.tokensUsed) continue;
+            const t = proj.tokensUsed;
+            const total = t.input + t.output;
+            const label = proj.brief.slice(0, 40) + (proj.brief.length > 40 ? "…" : "");
+            say(
+              `Project "${label}" — ${total.toLocaleString()} tokens across ${t.turns} turn${t.turns === 1 ? "" : "s"}`,
+              "system",
+            );
+          }
         }
       }
 
@@ -226,5 +169,6 @@ export const openaiPlugin: AgentPlugin = {
 };
 
 export function resetOpenAIConversation() {
-  messages = [];
+  // No-op: conversation state is now managed per-run by AgentRunner.
+  // Called by UI reset buttons — safe to keep as a no-op.
 }

@@ -57,6 +57,93 @@ function EpisodeLabelBox({
   const [editName, setEditName] = useState(name);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // --- Group drag: move every card in this episode together ---
+  //
+  // The episode header acts as a handle. Clicking and dragging it
+  // moves ALL cards in this episode by the same screen-space delta,
+  // without touching cards in other episodes or ungrouped cards. Works
+  // the same as multi-select + drag in Card.tsx but scoped to exactly
+  // this episode — no need for the user to first select-then-drag.
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    dragged: boolean;
+    origins: Array<{ id: string; x: number; y: number; pinned: boolean; pinX?: number; pinY?: number }>;
+  } | null>(null);
+  // React's synthetic click fires AFTER pointerup, so we can't suppress
+  // it just by nulling dragRef. Stash a short-lived "just dragged" flag
+  // and check it from onClick.
+  const justDraggedRef = useRef(false);
+
+  const onEpisodeDragStart = useCallback(
+    (e: React.PointerEvent) => {
+      // Don't start a drag from buttons or the input — they have
+      // their own onClick handlers and shouldn't move the group.
+      const target = e.target as HTMLElement;
+      if (target.closest("button") || target.closest("input")) return;
+      e.stopPropagation();
+      dragRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        dragged: false,
+        origins: cards.map((c) => ({
+          id: c.id,
+          x: c.x,
+          y: c.y,
+          pinned: !!c.pinned,
+          pinX: c.pinX,
+          pinY: c.pinY,
+        })),
+      };
+      target.setPointerCapture(e.pointerId);
+    },
+    [cards]
+  );
+
+  const onEpisodeDragMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    const { startX, startY, origins } = dragRef.current;
+    const rawDx = e.clientX - startX;
+    const rawDy = e.clientY - startY;
+    // Mark "actually dragged" after a small threshold so a normal
+    // click (for rename/select) still registers its onClick.
+    if (!dragRef.current.dragged && Math.hypot(rawDx, rawDy) < 3) return;
+    dragRef.current.dragged = true;
+
+    const scale = useCanvasStore.getState().viewport.scale;
+    const canvasDx = rawDx / scale;
+    const canvasDy = rawDy / scale;
+
+    const update = useCanvasStore.getState().updateCard;
+    for (const o of origins) {
+      if (o.pinned && o.pinX !== undefined && o.pinY !== undefined) {
+        // Pinned cards live in screen space — no scale divide,
+        // and writes go to pinX/pinY.
+        update(o.id, { pinX: o.pinX + rawDx, pinY: o.pinY + rawDy });
+      } else {
+        update(o.id, { x: o.x + canvasDx, y: o.y + canvasDy });
+      }
+    }
+  }, []);
+
+  const onEpisodeDragEnd = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    const moved = dragRef.current.dragged;
+    dragRef.current = null;
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch { /* not captured */ }
+    if (moved) {
+      // React's synthetic click fires AFTER pointerup on the same
+      // target. Raise a tiny flag so onClick knows to bail. Cleared on
+      // the next microtask so the very next click still works normally.
+      justDraggedRef.current = true;
+      setTimeout(() => { justDraggedRef.current = false; }, 0);
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, []);
+
   // Compute bounding box around all episode cards
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const c of cards) {
@@ -116,18 +203,27 @@ function EpisodeLabelBox({
         style={{ width: 5, background: `rgba(${r},${g},${b},${isActive ? 0.7 : 0.35})` }}
       />
 
-      {/* Label header — click to select all cards in episode */}
+      {/* Label header — drag to move the whole episode, click to select it */}
       <div
-        className="flex items-center gap-2 px-4 py-1.5 cursor-pointer rounded-t-2xl transition-colors"
+        className="flex items-center gap-2 px-4 py-1.5 cursor-grab active:cursor-grabbing rounded-t-2xl transition-colors select-none"
         style={{
           pointerEvents: "auto",
           background: `rgba(${r},${g},${b},0.08)`,
+          touchAction: "none",
         }}
-        onClick={() => {
-          // Select all cards in this episode for group move
+        onPointerDown={onEpisodeDragStart}
+        onPointerMove={onEpisodeDragMove}
+        onPointerUp={onEpisodeDragEnd}
+        onPointerCancel={onEpisodeDragEnd}
+        onClick={(e) => {
+          // If the user just finished a drag, the drag flag is set.
+          // Don't re-select (which would clear nothing but feels wrong).
+          if (justDraggedRef.current) return;
+          // Don't propagate to canvas — we're handling it here.
+          e.stopPropagation();
           useCanvasStore.getState().selectCards(cards.map((c) => c.id));
         }}
-        title="Click to select all cards in this episode"
+        title="Drag to move the whole episode · Click to select all cards"
       >
         {/* Activate dot */}
         <button

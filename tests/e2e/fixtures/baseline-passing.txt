@@ -1,0 +1,119 @@
+Agent Memory & Context Continuity › context builder produces intent-aware system prompts
+Agent Memory & Context Continuity › intent classifier correctly routes continue and add_scenes commands
+Agent Memory & Context Continuity › multi-scene brief creates project without error
+Agent Memory & Context Continuity › simple prompt does not produce 'No response' error
+Agent Memory & Context Continuity › working memory store initializes, records actions, and resets
+Capability Validation › create_media resolves invalid model names to valid ones
+Capability Validation › resolveCapability maps hallucinated names correctly
+Context Menu & Card Transformations › canvas_get returns URLs for combining
+Context Menu & Card Transformations › right-click on card shows context menu
+Debug first prompt silent failure
+Debug: Chat + Context Menu › Context menu appears on right-click
+Episodes (Super Cards) › effective context merges episode overrides with storyboard context
+Episodes (Super Cards) › episode store creates and manages episodes
+Episodes (Super Cards) › episode switcher appears when episodes exist
+Episodes (Super Cards) › episode tools definitions are correct
+Episodes (Super Cards) › intent classifier detects episode intents
+Episodes (Super Cards) › multi-select works with canvas store
+Layout Agent › /layout add creates a user skill
+Layout Agent › /layout delete removes a user skill
+Layout Agent › /layout list shows all 8 skills in chat
+Layout Agent › /organize command on empty canvas returns helpful message
+Layout Agent › 8 built-in layout skills exist
+Layout Agent › batch grouping keeps same-batch cards contiguous
+Layout Agent › center-out layout places first card at center
+Layout Agent › freeform skill preserves current card positions
+Layout Agent › layout engine positions cards without overlap
+Layout Agent › layout engine produces non-overlapping positions for 20 cards
+Layout Agent › layout skill presets have correct properties
+Layout Agent › layout store tracks active skill and user skills
+Layout Agent › prePlan positions new cards after existing ones
+Layout Agent › strategy picker auto-selects based on context
+Layout Agent › zigzag flow alternates direction each row
+Live Diagnosis › check what the browser actually sends to the SDK
+Phase 1: Scope Domain Agent › all existing skills still load
+Phase 1: Scope Domain Agent › graph template files exist and are valid TypeScript
+Phase 1: Scope Domain Agent › regression: /capabilities command works
+Phase 1: Scope Domain Agent › regression: camera widget visible
+Phase 1: Scope Domain Agent › regression: chat input accepts text
+Phase 1: Scope Domain Agent › regression: health API returns ok
+Phase 1: Scope Domain Agent › regression: main page loads with all UI elements
+Phase 1: Scope Domain Agent › regression: settings panel opens
+Phase 1: Scope Domain Agent › scope tools appear in chat /skills listing
+Phase 1: Scope Domain Agent › scope tools are registered after app init
+Phase 1: Scope Domain Agent › scope-agent skill content is loadable
+Phase 1: Scope Domain Agent › scope-agent skill is in the registry
+Phase 2: SDK Enhanced Params Integration › regression: camera widget visible
+Phase 2: SDK Enhanced Params Integration › regression: chat input works
+Phase 2: SDK Enhanced Params Integration › regression: health API
+Phase 2: SDK Enhanced Params Integration › regression: main page loads
+Phase 2: SDK Enhanced Params Integration › regression: scope-agent skill still loadable
+Phase 2: SDK Enhanced Params Integration › scope_start tool builds correct SDK payload
+Phase 2: SDK Enhanced Params Integration › session.ts startStream accepts scopeParams
+Phase 2: SDK Enhanced Params Integration › stream control sends full params via /stream/{id}/control
+Phase 3: Multi-Source Input › frame extractor module compiles and loads
+Phase 3: Multi-Source Input › regression: all UI elements present
+Phase 3: Multi-Source Input › regression: health API
+Phase 3: Multi-Source Input › regression: skills registry intact
+Phase 3: Multi-Source Input › scope_start supports text-only mode (no input)
+Phase 3: Multi-Source Input › scope_start tool accepts source parameter in lv2v-start event
+Phase 4: Stream Card Overhaul › app compiles with stream card enhancements
+Phase 4: Stream Card Overhaul › regression: chat input works
+Phase 4: Stream Card Overhaul › regression: health API
+Phase 4: Stream Card Overhaul › regression: main page fully functional
+Phase 4: Stream Card Overhaul › regression: scope-agent skill
+Phase 4: Stream Card Overhaul › regression: settings panel
+Phase 4: Stream Card Overhaul › regression: skills registry
+Phase 4: Stream Card Overhaul › stream card type has correct color scheme
+Phase 4: Stream Card Overhaul › video card shows fullscreen button when selected
+Phase 5: Camera Widget Improvements › camera widget has Start button
+Phase 5: Camera Widget Improvements › camera widget header is draggable
+Phase 5: Camera Widget Improvements › camera widget renders with preset buttons
+Phase 5: Camera Widget Improvements › regression: chat input
+Phase 5: Camera Widget Improvements › regression: full app loads
+Phase 5: Camera Widget Improvements › regression: health API
+Phase 5: Camera Widget Improvements › regression: scope skills
+Phase 5: Camera Widget Improvements › regression: settings panel
+Phase 6: Director + Scope Integration › all scope tools are available alongside project tools
+Phase 6: Director + Scope Integration › director skill includes Scope integration
+Phase 6: Director + Scope Integration › regression: /capabilities command
+Phase 6: Director + Scope Integration › regression: all skill files are accessible
+Phase 6: Director + Scope Integration › regression: chat input and /skills command
+Phase 6: Director + Scope Integration › regression: health API
+Phase 6: Director + Scope Integration › regression: main page loads with all elements
+Phase 6: Director + Scope Integration › regression: settings panel
+Phase 6: Director + Scope Integration › scope-agent skill coexists with director skill
+Preprocessor Stress Test: 20-Scene Brief › full preprocessor pipeline creates project with personality
+Preprocessor Stress Test: 20-Scene Brief › intent classifier: continue, add_scenes, adjust, status, none
+Preprocessor Stress Test: 20-Scene Brief › preprocessor detects 20-scene prompt as multi-scene
+Preprocessor Stress Test: 20-Scene Brief › preprocessor extracts all 20 scenes correctly
+Preprocessor Stress Test: 20-Scene Brief › preprocessor extracts style guide
+Preprocessor Stress Test: 20-Scene Brief › regression: app loads normally
+Preprocessor Stress Test: 20-Scene Brief › regression: health API
+Preprocessor Stress Test: 20-Scene Brief › short prompts bypass preprocessor
+Session Context › /context clear removes context
+Session Context › /context command shows extracted fields after brief
+Session Context › Gemini API extracts creative context from brief
+Session Context › Gemini API route works without tools (no toolConfig sent)
+Session Context › context is saved after multi-scene prompt
+Session Context › regression: app loads
+Session Context › regression: health API
+Storyboard App › camera widget has start button
+Storyboard App › chat input accepts text
+Storyboard App › chat panel is visible with system message
+Storyboard App › health API returns ok
+Storyboard App › loads the main page with top bar
+Storyboard App › settings panel opens and closes
+Stream Cockpit › HUD overlay formats noise/cache values
+Stream Cockpit › cockpit store tracks pinned skills
+Stream Cockpit › history tracking caps at 100 entries
+Stream Cockpit › intent translator priority order
+Stream Cockpit › preset list contains 7 built-in presets
+Stream Cockpit › slash command parser handles /preset, /noise, /reset
+Video Intent › buildLockedPrefix combines style fields
+Video Intent › detectVideoIntent recognizes the Tank & Kuro brief
+Video Intent › extractCharacterLock pulls TANK and KURO from brief
+Video Intent › extractColorArc parses all 6 colors
+Video Intent › extractDurations parses all 6 scenes
+Video Intent › planVideoStrategy: overview = 6, full = 36
+Video Intent › video_keyframe action is in valid actions

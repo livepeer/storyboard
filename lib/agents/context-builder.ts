@@ -2,6 +2,7 @@
 
 import type { Intent } from "./intent";
 import type { ProjectSnapshot, ActionRecord } from "./working-memory";
+import { useActiveRequest, formatActiveRequest } from "./active-request";
 
 interface CardInfo {
   refId: string;
@@ -200,6 +201,18 @@ User wants to group cards into an episode. Use episode_create with card refIds a
   if (memory.recentActions.length > 0) {
     const recent = memory.recentActions.slice(-3).map((a) => `${a.tool}: ${a.outcome}`).join("; ");
     parts.push(`\nRecent: ${recent}`);
+  }
+
+  // Active request — compact memory of what the user is currently
+  // iterating on. Rebuilt deterministically from each turn's text by
+  // useActiveRequest.applyTurn(). This is the primary fix for cross-turn
+  // subject loss (see lib/agents/active-request.ts header).
+  {
+    const snapshot = useActiveRequest.getState().snapshot();
+    const line = formatActiveRequest(snapshot);
+    if (line && !useActiveRequest.getState().isStale()) {
+      parts.push(`\nActive request: ${line}. Preserve subject across turns — clarification answers are modifiers, not replacements.`);
+    }
   }
 
   // Conversation digest

@@ -161,7 +161,7 @@ export const projectCreateTool: ToolDefinition = {
 export const projectGenerateTool: ToolDefinition = {
   name: "project_generate",
   description:
-    "Generate the next batch of pending scenes in a project. Auto-batches up to 5 at a time. Call repeatedly until all scenes are done.",
+    "Generate ALL pending scenes in a project in a single call. Internally batches up to 5 at a time and loops until every pending scene is done. Call this ONCE per project — do NOT call it multiple times.",
   parameters: {
     type: "object",
     properties: {
@@ -175,19 +175,86 @@ export const projectGenerateTool: ToolDefinition = {
     const project = store.getProject(projectId);
     if (!project) return { success: false, error: `Project ${projectId} not found` };
 
-    const batch = store.getNextBatch(projectId);
-    if (batch.length === 0) {
-      const allDone = store.isProjectComplete(projectId);
-      return {
-        success: true,
-        data: {
-          message: allDone ? "All scenes complete!" : "No pending scenes. Use project_iterate to redo rejected ones.",
-          completed: project.scenes.filter((s) => s.status === "done").length,
-          total: project.scenes.length,
-        },
-      };
+    // Internal batch loop — processes every pending scene in a single
+    // tool invocation so the calling LLM only pays one round of
+    // context+tool-schema tokens. Caps at 10 batches (50 scenes
+    // default) to prevent runaway if something goes wrong.
+    const MAX_BATCHES = 10;
+    let batchesRun = 0;
+    let lastResult: { success: boolean; batchSize: number } = { success: true, batchSize: 0 };
+    let totalCardsCreated = 0;
+    const aggregatedErrors: string[] = [];
+
+    while (batchesRun < MAX_BATCHES) {
+      const batchStarted = await runOneBatch(projectId);
+      if (!batchStarted) break;
+      batchesRun++;
+      lastResult = { success: batchStarted.success, batchSize: batchStarted.batchSize };
+      totalCardsCreated += batchStarted.cardsCreated;
+      if (batchStarted.errors.length > 0) aggregatedErrors.push(...batchStarted.errors);
+      // If this batch was the last one with anything to do, stop
+      const storeNow = useProjectStore.getState();
+      const next = storeNow.getNextBatch(projectId);
+      if (next.length === 0) break;
     }
 
+    // Post-loop: final summary
+    const finalProject = useProjectStore.getState().getProject(projectId);
+    if (!finalProject) return { success: false, error: "Project disappeared during generation" };
+    const completed = finalProject.scenes.filter((s) => s.status === "done").length;
+    const remaining = useProjectStore.getState().getNextBatch(projectId).length;
+
+    if (remaining === 0 && useProjectStore.getState().isProjectComplete(projectId)) {
+      useProjectStore.getState().updateProjectStatus(projectId, "reviewing");
+    }
+
+    // Sync working memory once at the end
+    try {
+      const { useWorkingMemory } = await import("@/lib/agents/working-memory");
+      const mem = useWorkingMemory.getState();
+      mem.recordAction({
+        tool: "project_generate",
+        summary: `${batchesRun} batch${batchesRun === 1 ? "" : "es"}, ${totalCardsCreated} cards`,
+        outcome: `${completed}/${finalProject.scenes.length} scenes done, ${remaining} remaining`,
+        success: aggregatedErrors.length === 0,
+      });
+      mem.syncFromProjectStore();
+    } catch { /* non-critical */ }
+
+    return {
+      success: aggregatedErrors.length === 0,
+      data: {
+        batches_run: batchesRun,
+        completed,
+        total: finalProject.scenes.length,
+        remaining,
+        cards_created: totalCardsCreated,
+        errors: aggregatedErrors.slice(0, 5),
+        message: remaining === 0
+          ? `All ${finalProject.scenes.length} scenes generated!`
+          : `${completed}/${finalProject.scenes.length} scenes done, ${remaining} remaining${aggregatedErrors.length > 0 ? ` (${aggregatedErrors.length} errors)` : ""}`,
+      },
+    };
+  },
+};
+
+/**
+ * Run one project_generate batch. Extracted so the top-level tool can
+ * loop internally without multiplying LLM token costs. Returns null if
+ * there was nothing to do.
+ */
+async function runOneBatch(projectId: string): Promise<{ success: boolean; batchSize: number; cardsCreated: number; errors: string[] } | null> {
+  const store = useProjectStore.getState();
+  const project = store.getProject(projectId);
+  if (!project) return null;
+
+  const batch = store.getNextBatch(projectId);
+  if (batch.length === 0) {
+    return null;
+  }
+
+  // Process this one batch — create_media for every pending scene.
+  {
     store.updateProjectStatus(projectId, "generating");
 
     // Apply session context + project style guide to prompts.
@@ -359,41 +426,23 @@ export const projectGenerateTool: ToolDefinition = {
       }
     }
 
-    // Check if more batches needed
-    const remaining = store.getNextBatch(projectId);
-    const completed = updatedProject.scenes.filter((s) => s.status === "done").length;
-
-    if (remaining.length === 0 && store.isProjectComplete(projectId)) {
-      store.updateProjectStatus(projectId, "reviewing");
+    // Return this batch's summary — the outer loop (project_generate
+    // tool body) handles aggregation, working-memory sync, and the
+    // final user-facing return message.
+    const batchErrors: string[] = [];
+    if (results) {
+      for (const r of results) {
+        if (r.error) batchErrors.push(r.error);
+      }
     }
-
-    // Sync working memory
-    try {
-      const { useWorkingMemory } = await import("@/lib/agents/working-memory");
-      const mem = useWorkingMemory.getState();
-      mem.recordAction({
-        tool: "project_generate",
-        summary: `batch of ${batch.length} scenes`,
-        outcome: `${completed}/${project.scenes.length} total done, ${remaining.length} remaining`,
-        success: result.success,
-      });
-      mem.syncFromProjectStore();
-    } catch { /* non-critical */ }
-
     return {
       success: result.success,
-      data: {
-        batch_size: batch.length,
-        completed,
-        total: project.scenes.length,
-        remaining: remaining.length,
-        message: remaining.length > 0
-          ? `Batch done (${completed}/${project.scenes.length}). Call project_generate again for next batch.`
-          : `All ${project.scenes.length} scenes generated! Ask the user for feedback.`,
-      },
+      batchSize: batch.length,
+      cardsCreated: cardsCreated?.length ?? 0,
+      errors: batchErrors,
     };
-  },
-};
+  }
+}
 
 /**
  * project_iterate — Regenerate specific scenes based on feedback.

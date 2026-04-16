@@ -4,47 +4,147 @@ import type {
   CanvasContext,
   ConfigField,
 } from "../types";
-import { listTools, executeTool } from "@/lib/tools/registry";
+import {
+  AgentRunner,
+  ToolRegistry,
+  WorkingMemoryStore,
+  SessionMemoryStore,
+} from "@livepeer/agent";
+import { listTools as listStoryboardTools } from "@/lib/tools/registry";
 import { useChatStore } from "@/lib/chat/store";
 import { buildAgentContext } from "../context-builder";
 import { useWorkingMemory } from "../working-memory";
+import { useActiveRequest } from "../active-request";
 import { classifyIntent } from "../intent";
-
-/**
- * Gemini message format.
- * roles: "user" | "model"
- * parts: text, functionCall, or functionResponse
- */
-interface GeminiPart {
-  text?: string;
-  functionCall?: { name: string; id?: string; args: Record<string, unknown> };
-  functionResponse?: { name: string; id?: string; response: Record<string, unknown> };
-}
-
-interface GeminiMessage {
-  role: "user" | "model";
-  parts: GeminiPart[];
-}
-
-interface GeminiResponse {
-  candidates?: Array<{
-    content: {
-      role: string;
-      parts: GeminiPart[];
-    };
-    finishReason?: string;
-  }>;
-  error?: { message: string };
-  usageMetadata?: {
-    promptTokenCount?: number;
-    candidatesTokenCount?: number;
-  };
-}
+import { StoryboardGeminiProvider } from "../storyboard-providers";
+import { wrapStoryboardTool } from "../runner-adapter";
+import { setCurrentUserText } from "@/lib/tools/compound-tools";
 
 const MAX_TOOL_ROUNDS = 20;
 
+/**
+ * Extract per-scene descriptions from a multi-scene brief, verbatim.
+ * Used by the stream-brief fast path so we pass the user's actual
+ * scene text to scope_start / create_media instead of asking Gemini
+ * to summarize it (which produces generic blobs like "a village
+ * scene" and loses every specific detail).
+ *
+ * Split before each "scene N" marker (case-insensitive, supports
+ * "scene 1", "Scene #1", etc.). For each block, strip the leading
+ * marker + optional "(stream N)" parenthetical + colon/comma/dash
+ * separator, then normalize whitespace. Keep the remaining user text
+ * up to 400 chars.
+ *
+ * Exported for unit tests.
+ */
+export function extractSceneBlocks(
+  text: string,
+  enabled: boolean
+): Array<{ index: number; text: string }> {
+  if (!enabled) return [];
+  const out: Array<{ index: number; text: string }> = [];
+  const parts = text.split(/(?=\bscene\s*#?\s*\d+\b)/i);
+  for (const block of parts) {
+    const m = block.match(/^\s*scene\s*#?\s*(\d+)\b/i);
+    if (!m) continue;
+    const idx = parseInt(m[1], 10);
+    let body = block.slice(m[0].length);
+    body = body.replace(/^\s*\([^)]*\)/, "");
+    body = body.replace(/^\s*[:,\-\u2014]+\s*/, "");
+    body = body.replace(/\s+/g, " ").trim();
+    if (body.length > 3) {
+      out.push({ index: idx, text: body.slice(0, 400) });
+    }
+  }
+  return out;
+}
+
 let stopped = false;
-let messages: GeminiMessage[] = [];
+
+/**
+ * Pick a subset of storyboard tool names that's relevant for the
+ * current intent. Reduces input token overhead by ~80% on the common
+ * case — the full storyboard registry has 45 tools, but most intents
+ * only need 6-12 of them.
+ *
+ * Core tools are ALWAYS included so the agent has escape hatches:
+ *   create_media, canvas_get, canvas_create, canvas_organize,
+ *   project_create, project_generate, project_iterate, project_status
+ *
+ * Extras are added based on intent:
+ *   - new_project / continue / add_scenes → memory_* (for recall/style)
+ *   - status                              → canvas_get only (minimal)
+ *   - stream-ish user text                → scope_* family
+ *   - episode-ish user text               → episode_* family
+ *   - none (default creative)             → memory_* for style continuity
+ */
+function pickToolsForIntent(intentType: string, userText: string): Set<string> {
+  const core = new Set<string>([
+    "create_media",
+    "canvas_get",
+    "canvas_create",
+    "canvas_update",
+    "canvas_remove",
+    "canvas_organize",
+    "project_create",
+    "project_generate",
+    "project_iterate",
+    "project_status",
+  ]);
+
+  const lower = userText.toLowerCase();
+  const wantsStream = /\b(stream|webcam|live|camera|preset|lv2v|scope)\b/.test(lower);
+  const wantsEpisode = /\bepisode\b/.test(lower);
+  const wantsSdk = /\b(capab|sdk|inference|orch|capabilit)/.test(lower);
+  const wantsSkill = /\b(skill|load\s+skill)\b/.test(lower);
+
+  const allowed = new Set(core);
+
+  // Memory tools — always useful for style/preference continuity on
+  // creative intents.
+  if (intentType !== "status" && intentType !== "none" ) {
+    allowed.add("memory_style");
+    allowed.add("memory_rate");
+    allowed.add("memory_preference");
+  } else if (intentType === "none") {
+    allowed.add("memory_style");
+    allowed.add("memory_preference");
+  }
+
+  if (wantsStream) {
+    allowed.add("scope_start");
+    allowed.add("scope_control");
+    allowed.add("scope_stop");
+    allowed.add("scope_preset");
+    allowed.add("scope_graph");
+    allowed.add("scope_status");
+  }
+
+  if (wantsEpisode) {
+    allowed.add("episode_create");
+    allowed.add("episode_update");
+    allowed.add("episode_activate");
+    allowed.add("episode_list");
+    allowed.add("episode_get");
+    allowed.add("episode_remove");
+  }
+
+  if (wantsSdk) {
+    allowed.add("inference");
+    allowed.add("list_capabilities");
+  }
+
+  if (wantsSkill) {
+    allowed.add("load_skill");
+  }
+
+  // Status intent: minimal surface
+  if (intentType === "status") {
+    return new Set(["canvas_get", "project_status"]);
+  }
+
+  return allowed;
+}
 
 /** Produce a brief human-readable result summary for a tool */
 function briefToolResult(name: string, data: unknown): string {
@@ -79,59 +179,6 @@ function setProcessing(v: boolean) {
   useChatStore.getState().setProcessing(v);
 }
 
-/**
- * Convert our tool registry to Gemini's functionDeclarations format.
- */
-function buildToolSchemas() {
-  return [
-    {
-      functionDeclarations: listTools().map((t) => ({
-        name: t.name,
-        description: t.description,
-        parameters: t.parameters,
-      })),
-    },
-  ];
-}
-
-/**
- * Call the /api/agent/gemini proxy route.
- */
-async function callApi(
-  contents: GeminiMessage[],
-  tools: ReturnType<typeof buildToolSchemas>,
-  systemInstruction?: string
-): Promise<GeminiResponse> {
-  // Gemini uses system_instruction at the top level, not as a message
-  const body: Record<string, unknown> = { contents, tools };
-  if (systemInstruction) {
-    body.system_instruction = {
-      parts: [{ text: systemInstruction }],
-    };
-  }
-
-  const resp = await fetch("/api/agent/gemini", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    if (resp.status === 429) {
-      throw new Error("Rate limited — please wait a moment and try again.");
-    }
-    if (resp.status === 500 && text.includes("GEMINI_API_KEY")) {
-      throw new Error(
-        "GEMINI_API_KEY not configured. Add it via Vercel env vars or .env.local."
-      );
-    }
-    throw new Error(`API error ${resp.status}: ${text.slice(0, 200)}`);
-  }
-
-  return resp.json();
-}
-
 export const geminiPlugin: AgentPlugin = {
   id: "gemini",
   name: "Gemini Agent",
@@ -164,7 +211,32 @@ export const geminiPlugin: AgentPlugin = {
     try {
       // Build intent-aware system prompt from working memory
       const projStore = (await import("@/lib/projects/store")).useProjectStore.getState();
-      const activeProj = projStore.getActiveProject();
+      // Make the user's raw text available to downstream tools (used
+      // by compound-tools' selectCapability to detect edit-intent).
+      setCurrentUserText(text);
+
+      // Update ActiveRequest BEFORE buildAgentContext so the injected
+      // "Active request:" line reflects this turn's patch. Pure
+      // deterministic extractor — no LLM cost. Handles new request,
+      // clarification answer, and correction. See
+      // lib/agents/active-request.ts for the classifier.
+      useActiveRequest.getState().applyTurn(text);
+
+      // L2: log the user turn to the rolling digest so prior turns
+      // survive as ~200 words of "Session: ..." context across runs.
+      useWorkingMemory.getState().appendDigest(`user: ${text.slice(0, 120)}`);
+
+      // Find the best candidate project for "scene N" references:
+      // prefer active, fall back to the most recently created project
+      // with >= N scenes. This handles the case where the user just
+      // created a project but the store hasn't marked it active yet.
+      let activeProj = projStore.getActiveProject();
+      if (!activeProj) {
+        const all = projStore.projects ?? [];
+        if (all.length > 0) {
+          activeProj = all[all.length - 1];
+        }
+      }
       const pendingCount = activeProj
         ? activeProj.scenes.filter((s: { status: string }) => s.status === "pending" || s.status === "regenerating").length
         : 0;
@@ -184,264 +256,589 @@ export const geminiPlugin: AgentPlugin = {
         })),
         selectedCard: context.selectedCard,
       });
-      const tools = buildToolSchemas();
 
-      // Limit conversation history to prevent token overflow
-      // Keep last 20 messages max — old ones get compacted anyway
-      if (messages.length > 20) {
-        messages = messages.slice(-20);
+      // Scene-iteration hard hint: if the user's message references
+      // a specific "scene N" and there's an active project with that
+      // scene, inject an explicit directive into the system prompt
+      // telling the LLM to call project_iterate with the right indices
+      // and NEVER create_media. Gemini otherwise defaults to
+      // create_media and decomposes the request into N parallel
+      // steps, which regenerates half the project.
+      let sceneDirective = "";
+      let sceneIterationDetected = false;
+      let sceneAnimateDetected = false;
+      let sceneIterationIndex = -1;
+      let resolvedSceneCardUrl: string | undefined;
+      // Skip scene-iteration detection if the user is clearly starting
+      // a new project. Otherwise a brief that says "Scene 1 ... Scene 2
+      // ... Scene 3" would trigger project_iterate on the stale active
+      // project's scene 1, hard-filter out scope_start + create_media,
+      // and silently do nothing. Two signals:
+      //   1. intent classifier already said "new_project"
+      //   2. the text contains multiple "Scene N" markers — a multi-
+      //      scene brief, not a single-scene adjustment
+      const multipleSceneMatches =
+        (text.match(/\bscene\s*#?\s*\d+\b/gi) || []).length;
+      const isNewBrief =
+        intent.type === "new_project" || multipleSceneMatches >= 2;
+
+      // Stream / video intent in a new multi-scene brief. The default
+      // new_project directive (see context-builder.ts) tells Gemini to
+      // call project_create → project_generate, which is the IMAGE
+      // path. When the user explicitly wants live streams or videos,
+      // we need to override that with guidance to use scope_start
+      // (LV2V) or veo-t2v (pre-rendered video) instead. Without this
+      // the agent silently returns 3 images for "3 live streams".
+      const lowerText = text.toLowerCase();
+      const wantsLiveStream = /\blive\s+streams?\b|\blv2v\b/.test(lowerText);
+      const wantsVideos =
+        /\b(video|videos|animated|animation|animations|clip|clips|film|films)\b/.test(
+          lowerText
+        ) && !wantsLiveStream;
+      const streamCountMatch = lowerText.match(
+        /\b(\d+)\s+(?:live\s+)?(?:streams?|videos?|clips?|animations?)\b/
+      );
+      const streamCount = streamCountMatch
+        ? parseInt(streamCountMatch[1], 10)
+        : multipleSceneMatches > 0
+          ? multipleSceneMatches
+          : 0;
+      // Extract scene descriptions VERBATIM from the user's text so we
+      // can pass them to scope_start / create_media directly instead of
+      // asking Gemini to summarize them (which produces generic blobs
+      // like "a village scene" and loses every specific detail). Split
+      // on "scene N" markers, keep whatever text the user wrote between
+      // markers as the prompt for that scene.
+      const extractedScenes = extractSceneBlocks(text, isNewBrief);
+
+      // Look for an explicit style hint so it lands in each per-scene
+      // prompt even if Gemini is tempted to drop it.
+      const styleMatch = text.match(
+        /\b(studio ghibli|ghibli|anime|watercolor|oil painting|pixar|photorealistic|noir|cyberpunk|cinematic)\b[^.,]*(style)?/i
+      );
+      const styleHint = styleMatch ? styleMatch[0].trim() : "";
+
+      let streamOverrideDirective = "";
+      if (isNewBrief && (wantsLiveStream || wantsVideos) && extractedScenes.length > 0) {
+        const n = extractedScenes.length;
+        // Build a bullet list of {index, exact text} the LLM can read.
+        const sceneList = extractedScenes
+          .map(
+            (s) =>
+              `  Scene ${s.index}: "${s.text}"${styleHint ? ` [${styleHint}]` : ""}`
+          )
+          .join("\n");
+
+        if (wantsLiveStream) {
+          streamOverrideDirective =
+            `\n\n## Override: Live Stream Brief (${n} streams)\n` +
+            `User wants ${n} LIVE streams (LV2V), NOT a static image storyboard.\n` +
+            `Do NOT call project_create or project_generate.\n\n` +
+            `Scene prompts extracted from the user's text — use each VERBATIM, do not summarize or rewrite:\n` +
+            sceneList +
+            `\n\nFor each scene, call scope_start with:\n` +
+            `  - graph: {"nodes":[{"id":"longlive","type":"pipeline","pipeline_id":"longlive"},{"id":"output","type":"sink"}],"edges":[{"from":"longlive","from_port":"video","to_node":"output","to_port":"video","kind":"stream"}]}\n` +
+            `  - prompts: the Scene N text above, character-for-character\n` +
+            `  - preset: pick one that matches the style (dreamy / cinematic / anime / painterly)\n` +
+            `Make ${n} scope_start calls total, one per scene. Start all streams.`;
+        } else {
+          streamOverrideDirective =
+            `\n\n## Override: Video Brief (${n} videos)\n` +
+            `User wants ${n} VIDEOS, NOT a static image storyboard.\n` +
+            `Do NOT call project_create or project_generate.\n\n` +
+            `Scene prompts extracted from the user's text — use each VERBATIM, do not summarize or rewrite:\n` +
+            sceneList +
+            `\n\nCall create_media ONCE with exactly ${n} steps. For each step:\n` +
+            `  - action: "generate"\n` +
+            `  - prompt: the Scene N text above, character-for-character${styleHint ? ` (style is already included)` : ""}\n` +
+            `The capability resolver will route to veo-t2v / ltx-t2v automatically.`;
+        }
+        console.log(
+          `[Gemini] Stream override: wantsLiveStream=${wantsLiveStream}, wantsVideos=${wantsVideos}, extractedScenes=${extractedScenes.length}, styleHint="${styleHint}"`
+        );
       }
+      if (activeProj && isNewBrief) {
+        console.log(
+          `[Gemini] Skipping scene-iteration: intent=${intent.type}, multipleSceneMatches=${multipleSceneMatches} — treating as new multi-scene brief`
+        );
+      }
+      if (activeProj && !isNewBrief) {
+        // Match "scene 4", "scene #4", "the 4th scene", "scene four", etc.
+        const numMatch = text.match(/\bscene\s*#?\s*(\d+)\b/i);
+        const ordinalMap: Record<string, number> = {
+          first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6,
+          seventh: 7, eighth: 8, ninth: 9, tenth: 10,
+        };
+        const ordinalMatch = text.toLowerCase().match(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+scene\b/);
+        const sceneNum = numMatch ? parseInt(numMatch[1], 10)
+                       : ordinalMatch ? ordinalMap[ordinalMatch[1]]
+                       : null;
+        if (sceneNum !== null && sceneNum >= 1 && sceneNum <= activeProj.scenes.length) {
+          const idx = sceneNum - 1;
+          sceneIterationDetected = true;
+          sceneIterationIndex = idx;
 
-      // Append user message
-      messages.push({ role: "user", parts: [{ text }] });
+          // Detect animate intent WITHIN the scene iteration. If the
+          // user wants to turn scene N into a video, project_iterate is
+          // wrong — it only regenerates the scene's existing media type
+          // (image). We need to route through create_media with
+          // action=animate + source_url=<scene's current image URL>.
+          //
+          // Triggers: explicit "animate" verb, explicit "video"/"clip"
+          // noun, or explicit duration paired with motion language.
+          const hasAnimateVerb = /\banimate\b/i.test(text);
+          const hasVideoNoun = /\b(video|clip|animation|motion|movie|film)\b/i.test(text);
+          const hasDurationHint = /\b\d+\s*s(?:ec|econds?)?\b/i.test(text);
+          const hasMotionLang = /\b(tilt|pan|zoom|drift|dolly|crane|tracking|fade|dissolve|upward|downward|sweep|glide|rotate|orbit|push|pull|slow motion)\b/i.test(text);
+          const isAnimateScene = hasAnimateVerb || hasVideoNoun || (hasMotionLang && hasDurationHint);
 
-      console.log(`[Gemini] Sending: ${messages.length} messages, ${tools.length} tools, system=${system.length} chars`);
+          // Try to resolve scene N's existing card URL so we can pass
+          // it as source_url without a round-trip to canvas_get.
+          try {
+            const refId = activeProj.scenes[idx]?.cardRefId;
+            if (refId) {
+              const { useCanvasStore } = await import("@/lib/canvas/store");
+              const card = useCanvasStore.getState().cards.find((c: { refId?: string; url?: string }) => c.refId === refId);
+              resolvedSceneCardUrl = card?.url;
+            }
+          } catch { /* non-fatal — Gemini will call canvas_get if needed */ }
 
-      // Tool-use loop — track results for completion summary
+          if (isAnimateScene && resolvedSceneCardUrl) {
+            // Animate-scene path: call create_media with action=animate
+            // and source_url pre-populated. compound-tools will route
+            // this to veo-i2v (or ltx-i2v fallback) via selectCapability.
+            sceneAnimateDetected = true;
+            const durMatch = text.match(/\b(\d+)\s*s(?:ec|econds?)?\b/i);
+            const duration = durMatch ? Math.min(30, parseInt(durMatch[1], 10)) : 8;
+            sceneDirective =
+              `\n\nAnimate scene ${sceneNum}. Call create_media with exactly ONE step: ` +
+              `{action:"animate", source_url:"${resolvedSceneCardUrl}", duration:${duration}, prompt:"<extract the motion and mood description from the user, under 25 words>"}. ` +
+              `Do not call project_iterate.`;
+            console.log(`[Gemini] Scene animate detected: scene ${sceneNum} (idx ${idx}) → veo-i2v with source_url, duration=${duration}s`);
+          } else {
+            // Image-iterate path (existing behavior): regenerate the
+            // scene's image with the user's feedback.
+            sceneDirective =
+              `\n\nCall project_iterate with project_id="${activeProj.id}" and scene_indices=[${idx}]. Pass the user's request as the feedback field.`;
+            console.log(`[Gemini] Scene iteration detected: scene ${sceneNum} (idx ${idx}) of project ${activeProj.id}`);
+          }
+        }
+      }
+      const finalSystem = system + sceneDirective + streamOverrideDirective;
+
+      console.log(`[Gemini] runStream: system=${finalSystem.length} chars, text="${text.slice(0, 80)}"`);
+
+      // Track results for completion summary
       let lastRoundHadToolCalls = false;
       let agentGaveText = false;
       const completedTools: Array<{ name: string; success: boolean; summary?: string }> = [];
       const startTime = Date.now();
 
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      // Track cumulative token usage for THIS prompt and for any
+      // project the agent touches. Populated from RunEvent "usage"
+      // events. Shown in the completion summary at the bottom.
+      const promptTokens = { input: 0, output: 0, cached: 0 };
+      const touchedProjectIds = new Set<string>();
+
+      // Build runner with StoryboardGeminiProvider (routes through /api/agent/gemini proxy)
+      const provider = new StoryboardGeminiProvider();
+      const tools = new ToolRegistry();
+
+      // Intent-based tool filtering — cuts tool schema overhead from
+      // ~11k input tokens (all 45 storyboard tools) to ~2k (the 8-12
+      // tools relevant to this intent). Only tools in the allowed set
+      // get registered with the core runner for this single run.
+      const allowedTools = pickToolsForIntent(intent.type, text);
+
+      // Preprocessor handoff detection: when ChatPanel.preprocessPrompt
+      // has already created projects and passed a rewritten instruction
+      // like 'Project "proj_..." created with 6 scenes. Call
+      // project_generate ONCE ...', Gemini should call project_generate,
+      // NOT create_media. Force that by removing create_media from the
+      // tool set when the text looks like a preprocessor handoff.
+      //
+      // AGGRESSIVE trim: when we KNOW the only valid move is
+      // project_generate followed by canvas_organize, strip every
+      // other tool. Saves ~700 tokens of schema overhead per call.
+      const isPreprocHandoff = /\bProject\s+"proj_[^"]+"\s+created\b/i.test(text)
+        && /\bproject_generate\b/i.test(text);
+      if (isPreprocHandoff) {
+        // Completely rebuild the allowed set — only these 3 tools are
+        // needed for the handoff path.
+        allowedTools.clear();
+        allowedTools.add("project_generate");
+        allowedTools.add("canvas_organize");
+        allowedTools.add("canvas_get");
+        console.log(`[Gemini] Preprocessor handoff detected — forcing minimal tool set: project_generate + canvas_organize + canvas_get`);
+      }
+
+      // Scene iteration override: same aggressive minimal-tool-set
+      // treatment as the preprocessor handoff path. When we know the
+      // user wants scene N regenerated, project_iterate is the ONLY
+      // scene-affecting tool that should reach Gemini — removing
+      // everything else cuts ~1,500 tokens of schema overhead.
+      if (sceneIterationDetected) {
+        allowedTools.clear();
+        allowedTools.add("project_iterate");
+        allowedTools.add("project_status");
+        allowedTools.add("canvas_get");
+        console.log(`[Gemini] Scene iteration override: forcing minimal tool set: project_iterate + project_status + canvas_get`);
+      }
+
+      let registeredCount = 0;
+      for (const sbTool of listStoryboardTools()) {
+        if (allowedTools.has(sbTool.name)) {
+          tools.register(wrapStoryboardTool(sbTool));
+          registeredCount++;
+        }
+      }
+      console.log(`[Gemini] Tool filtering: intent=${intent.type}, sceneIter=${sceneIterationDetected}, registered ${registeredCount}/${listStoryboardTools().length} tools`);
+
+      // Inject the system prompt via WorkingMemory criticalConstraints.
+      // AgentRunner.runStream() marshals working.marshal().text into a system message
+      // at the start of each run, so the LLM always sees the full context.
+      const working = new WorkingMemoryStore();
+      if (finalSystem) {
+        working.setCriticalConstraints([finalSystem]);
+      }
+      const session = new SessionMemoryStore();
+      const runner = new AgentRunner(provider, tools, working, session);
+
+      // Stream-brief fast path: we've extracted the scene descriptions
+      // deterministically (extractedScenes). Gemini has repeatedly
+      // proven unreliable at following "use this text verbatim" — it
+      // keeps calling scope_start with style-only prompts and dropping
+      // the scene content entirely. Bypass the LLM for this path and
+      // call scope_start directly, once per scene, with the extracted
+      // text. Same yield pattern as the scene-animate fast path.
+      if (
+        isNewBrief &&
+        wantsLiveStream &&
+        extractedScenes.length > 0
+      ) {
+        console.log(
+          `[Gemini] Stream fast path: calling scope_start ${extractedScenes.length} times with extracted scene text`
+        );
+        const { listTools: lt } = await import("@/lib/tools/registry");
+        const scopeStartTool = lt().find((t) => t.name === "scope_start");
+        if (!scopeStartTool) {
+          yield { type: "error", content: "scope_start tool not registered" };
+          completedTools.push({ name: "scope_start", success: false });
+        } else {
+          for (const scene of extractedScenes) {
+            const fullPrompt = styleHint
+              ? `${scene.text}, ${styleHint}`
+              : scene.text;
+            const args = {
+              prompt: fullPrompt,
+              graph_template: "text-only",
+              preset: "cinematic",
+            };
+            console.log(
+              `[Gemini] scope_start Scene ${scene.index}: "${fullPrompt.slice(0, 80)}..."`
+            );
+            yield { type: "tool_call", name: "scope_start", input: args };
+            lastRoundHadToolCalls = true;
+            say(`Starting stream for scene ${scene.index}...`, "system");
+            try {
+              const result = await scopeStartTool.execute(args);
+              const ok = !!result.success;
+              yield {
+                type: "tool_result",
+                name: "scope_start",
+                result: ok ? result.data : { error: result.error ?? "unknown" },
+              };
+              completedTools.push({
+                name: "scope_start",
+                success: ok,
+                summary: ok ? `scene ${scene.index} streaming` : undefined,
+              });
+            } catch (e) {
+              const raw = e instanceof Error ? e.message : "Unknown error";
+              console.warn(`[Gemini] scope_start scene ${scene.index} threw:`, raw);
+              yield { type: "error", content: `Scene ${scene.index}: ${raw}` };
+              completedTools.push({ name: "scope_start", success: false });
+            }
+          }
+        }
+      } else if (
+        isNewBrief &&
+        !wantsLiveStream &&
+        !wantsVideos &&
+        extractedScenes.length > 0
+      ) {
+        // Image storyboard fast path: user typed a multi-scene brief
+        // WITHOUT stream/video keywords. Bypass Gemini and call
+        // project_create + project_generate directly. Same reliability
+        // story as the stream / video fast paths — Gemini otherwise
+        // either asks "yes/no" confirmation or decomposes the call
+        // oddly, costing 3-5x the tokens for zero user benefit.
+        console.log(
+          `[Gemini] Image storyboard fast path: project_create with ${extractedScenes.length} scenes`
+        );
+        const { listTools: lt } = await import("@/lib/tools/registry");
+        const projectCreateTool = lt().find((t) => t.name === "project_create");
+        const projectGenerateTool = lt().find((t) => t.name === "project_generate");
+        if (!projectCreateTool || !projectGenerateTool) {
+          yield { type: "error", content: "project_create / project_generate not registered" };
+          completedTools.push({ name: "project_create", success: false });
+        } else {
+          const scenesPayload = extractedScenes.map((s) => ({
+            index: s.index - 1, // 0-based per tool schema
+            title: s.text.slice(0, 50),
+            prompt: styleHint ? `${s.text}, ${styleHint}` : s.text,
+            action: "generate",
+          }));
+          const createArgs = {
+            brief: text.slice(0, 500),
+            scenes: scenesPayload,
+            ...(styleHint ? { style_guide: { visual_style: styleHint, prompt_prefix: styleHint } } : {}),
+          };
+          yield { type: "tool_call", name: "project_create", input: createArgs };
+          lastRoundHadToolCalls = true;
+          say(`Creating project with ${scenesPayload.length} scenes…`, "system");
+          try {
+            const createResult = await projectCreateTool.execute(createArgs);
+            const createOk = !!createResult.success;
+            yield {
+              type: "tool_result",
+              name: "project_create",
+              result: createOk ? createResult.data : { error: createResult.error ?? "unknown" },
+            };
+            completedTools.push({
+              name: "project_create",
+              success: createOk,
+              summary: createOk ? `${scenesPayload.length} scenes planned` : undefined,
+            });
+            if (createOk && createResult.data && typeof createResult.data === "object") {
+              const projectId = (createResult.data as Record<string, unknown>).project_id as string | undefined;
+              if (projectId) {
+                touchedProjectIds.add(projectId);
+                yield { type: "tool_call", name: "project_generate", input: { project_id: projectId } };
+                say(`Generating ${scenesPayload.length} scenes…`, "system");
+                try {
+                  const genResult = await projectGenerateTool.execute({ project_id: projectId });
+                  const genOk = !!genResult.success;
+                  yield {
+                    type: "tool_result",
+                    name: "project_generate",
+                    result: genOk ? genResult.data : { error: genResult.error ?? "unknown" },
+                  };
+                  completedTools.push({
+                    name: "project_generate",
+                    success: genOk,
+                    summary: genOk ? `${scenesPayload.length} generated` : undefined,
+                  });
+                } catch (e) {
+                  const raw = e instanceof Error ? e.message : "Unknown error";
+                  yield { type: "error", content: `project_generate failed: ${raw}` };
+                  completedTools.push({ name: "project_generate", success: false });
+                }
+              }
+            }
+          } catch (e) {
+            const raw = e instanceof Error ? e.message : "Unknown error";
+            yield { type: "error", content: `project_create failed: ${raw}` };
+            completedTools.push({ name: "project_create", success: false });
+          }
+        }
+      } else if (
+        isNewBrief &&
+        wantsVideos &&
+        extractedScenes.length > 0
+      ) {
+        // Video brief fast path: call create_media ONCE with N steps,
+        // each using a pre-extracted scene text. Same deterministic
+        // logic as the live-stream path but going to veo-t2v/ltx-t2v
+        // instead of scope_start.
+        console.log(
+          `[Gemini] Video fast path: create_media with ${extractedScenes.length} steps`
+        );
+        const { listTools: lt } = await import("@/lib/tools/registry");
+        const createMediaTool = lt().find((t) => t.name === "create_media");
+        if (!createMediaTool) {
+          yield { type: "error", content: "create_media tool not registered" };
+          completedTools.push({ name: "create_media", success: false });
+        } else {
+          const steps = extractedScenes.map((s) => ({
+            action: "generate",
+            prompt: styleHint ? `${s.text}, ${styleHint}` : s.text,
+          }));
+          yield { type: "tool_call", name: "create_media", input: { steps } };
+          lastRoundHadToolCalls = true;
+          say(`Generating ${steps.length} videos...`, "system");
+          try {
+            const result = await createMediaTool.execute({ steps });
+            const ok = !!result.success;
+            yield {
+              type: "tool_result",
+              name: "create_media",
+              result: ok ? result.data : { error: result.error ?? "unknown" },
+            };
+            completedTools.push({
+              name: "create_media",
+              success: ok,
+              summary: ok ? `${steps.length} videos queued` : undefined,
+            });
+          } catch (e) {
+            const raw = e instanceof Error ? e.message : "Unknown error";
+            yield { type: "error", content: `Video generation failed: ${raw}` };
+            completedTools.push({ name: "create_media", success: false });
+          }
+        }
+      } else if (sceneAnimateDetected && sceneIterationIndex >= 0 && activeProj && resolvedSceneCardUrl) {
+        // Extract motion description from the user's text by stripping
+        // "animate scene N (...)", duration markers, and ambient audio
+        // clauses. What remains is the visual motion description.
+        const motionPrompt = (() => {
+          let rest = text
+            .replace(/^[^:]*?\bscene\s*#?\s*\d+\s*(?:\([^)]*\))?\s*:?\s*/i, "")
+            .trim();
+          rest = rest.replace(/\b\d+\s*s(?:ec|econds?)?\b/gi, "").trim();
+          rest = rest.replace(/,?\s*ambient\s*audio\s*[-—:].*$/i, "").trim();
+          rest = rest.replace(/,?\s*audio\s*:.*$/i, "").trim();
+          rest = rest.replace(/\s+/g, " ").replace(/^[,\s]+|[,\s]+$/g, "");
+          return rest.slice(0, 300) || "smooth cinematic camera motion";
+        })();
+        const durMatch = text.match(/\b(\d+)\s*s(?:ec|econds?)?\b/i);
+        const duration = durMatch ? Math.min(30, parseInt(durMatch[1], 10)) : 8;
+        const step = {
+          action: "animate",
+          source_url: resolvedSceneCardUrl,
+          duration,
+          prompt: motionPrompt,
+        };
+        console.log(`[Gemini] Scene animate fast path: step=`, step);
+
+        // Emit the same tool_call/tool_result events the runner would,
+        // so the UI card path is identical.
+        yield { type: "tool_call", name: "create_media", input: { steps: [step] } };
+        lastRoundHadToolCalls = true;
+        say(`Animating scene ${sceneIterationIndex + 1}...`, "system");
+
+        // Load the registered tool wrapper so our call goes through the
+        // exact same execute path as Gemini-originated calls.
+        const { listTools } = await import("@/lib/tools/registry");
+        const sbTool = listTools().find((t) => t.name === "create_media");
+        if (!sbTool) {
+          yield { type: "error", content: "create_media tool not registered" };
+          completedTools.push({ name: "create_media", success: false });
+        } else {
+          try {
+            const result = await sbTool.execute({ steps: [step] });
+            const ok = !!result.success;
+            yield {
+              type: "tool_result",
+              name: "create_media",
+              result: ok ? result.data : { error: result.error ?? "unknown" },
+            };
+            completedTools.push({
+              name: "create_media",
+              success: ok,
+              summary: ok
+                ? `1 animated (veo-i2v) for scene ${sceneIterationIndex + 1}`
+                : undefined,
+            });
+          } catch (e) {
+            const raw = e instanceof Error ? e.message : "Unknown error";
+            console.warn("[Gemini] Scene animate fast path threw:", raw);
+            yield { type: "error", content: `Animation failed: ${raw}` };
+            completedTools.push({ name: "create_media", success: false });
+          }
+        }
+        // Fall through to the completion summary block below.
+      } else {
+      for await (const event of runner.runStream({ user: text, maxIterations: MAX_TOOL_ROUNDS })) {
         if (stopped) {
           yield { type: "text", content: "Stopped." };
           break;
         }
 
-        // Sanitize messages: ensure strict user/model alternation.
-        // Gemini requires this — merge consecutive same-role messages.
-        const sanitized: GeminiMessage[] = [];
-        for (const m of messages) {
-          const last = sanitized[sanitized.length - 1];
-          if (last && last.role === m.role) {
-            // Merge into previous message of same role
-            last.parts.push(...m.parts);
-          } else {
-            sanitized.push({ role: m.role, parts: [...m.parts] });
-          }
-        }
-
-        // Use sanitized messages directly (compaction only when > 12 messages)
-        let apiMessages: GeminiMessage[];
-        if (sanitized.length > 12) {
-          // Keep last 8 messages, summarize the rest
-          const kept = sanitized.slice(-8);
-          const dropped = sanitized.slice(0, -8);
-          const summary = dropped
-            .map((m) => m.parts.map((p) => p.text || "").filter(Boolean).join(" "))
-            .filter(Boolean)
-            .join("; ");
-          apiMessages = summary
-            ? [{ role: "user", parts: [{ text: `[Prior context: ${summary.slice(0, 500)}]` }] }, ...kept]
-            : kept;
-          // Ensure first message is user role (Gemini requirement)
-          if (apiMessages[0]?.role !== "user") {
-            apiMessages.unshift({ role: "user", parts: [{ text: "Continue." }] });
-          }
-        } else {
-          apiMessages = sanitized;
-        }
-
-        // Ensure conversation starts with user message
-        if (apiMessages.length > 0 && apiMessages[0].role !== "user") {
-          apiMessages.unshift({ role: "user", parts: [{ text: "Continue." }] });
-        }
-
-        let response: GeminiResponse;
-        try {
-          response = await callApi(apiMessages, tools, system);
-        } catch (e) {
-          const errMsg = e instanceof Error ? e.message : String(e);
-          // Gemini 400 on turn ordering — reset conversation and retry with just the user prompt
-          if (errMsg.includes("function call turn") || errMsg.includes("function response turn")) {
-            console.warn("[Gemini] Turn ordering error — resetting conversation");
-            messages = [{ role: "user", parts: [{ text }] }];
-            response = await callApi(messages, tools, system);
-          } else {
-            throw e;
-          }
-        }
-
-        if (response.error) {
-          // Same recovery for turn-ordering errors in response body
-          if (response.error.message?.includes("function call turn")) {
-            console.warn("[Gemini] Turn ordering error in response — resetting");
-            messages = [{ role: "user", parts: [{ text }] }];
-            continue;
-          }
-          throw new Error(response.error.message);
-        }
-
-        const candidate = response.candidates?.[0];
-        if (!candidate?.content?.parts) {
-          const reason = candidate?.finishReason || "No response";
-          console.warn(`[Gemini] Empty response: finishReason=${reason}, round=${round}, lastToolCalls=${lastRoundHadToolCalls}, messages=${messages.length}`);
-
-          // MALFORMED_FUNCTION_CALL: auto-retry with shorter instruction
-          if (reason === "MALFORMED_FUNCTION_CALL" && round < MAX_TOOL_ROUNDS - 1) {
-            messages.push({
-              role: "user",
-              parts: [{ text: "Function call too large. Use project_create for 6+ scenes with prompts UNDER 20 WORDS each. For 1-5 items use create_media with max 3 steps. Summarize — don't copy descriptions." }],
-            });
-            continue;
-          }
-
-          // STOP with no content: Gemini didn't act.
-          // Detect multi-scene vs single-image and give appropriate instructions.
-          if (reason === "STOP" && round <= 1 && !lastRoundHadToolCalls) {
-            console.warn("[Gemini] Empty STOP on round", round, "— analyzing prompt type");
-
-            // Detect multi-scene: look for scene/shot numbering patterns
-            const isMultiScene = /scene\s*\d|shot\s*\d|\d\s*scene|\d[.\-)\s]+\w/i.test(text)
-              || (text.match(/scene/gi) || []).length >= 3
-              || text.length > 1500;
-
-            if (isMultiScene) {
-              // Route to project_create — the prompt is a storyboard brief
-              console.warn("[Gemini] Detected multi-scene prompt, routing to project_create");
-              messages[messages.length - 1] = {
-                role: "user",
-                parts: [{ text: `The user wants a multi-scene storyboard. Call project_create with:
-- brief: A 1-sentence summary of the project
-- style_guide: Extract visual_style, color_palette, mood, prompt_prefix from the brief
-- scenes: Array of scenes. For EACH scene: index, title (short), prompt (UNDER 20 WORDS — just the key visual), action: "generate"
-
-CRITICAL: Each scene prompt must be UNDER 20 WORDS. Summarize — do NOT copy the user's description.
-
-Here is the brief:
-${text.slice(0, 2000)}` }],
-              };
-            } else {
-              // Single image — enhance creatively
-              messages[messages.length - 1] = {
-                role: "user",
-                parts: [{ text: `Create a stunning image of: "${text.slice(0, 200)}". Call create_media with ONE step, prompt under 30 words. Be creative. Do NOT ask questions.` }],
-              };
+        switch (event.kind) {
+          case "text":
+            if (event.text) {
+              yield { type: "text", content: event.text };
+              say(event.text, "agent");
+              agentGaveText = true;
             }
-            continue;
-          }
+            break;
 
-          if (!lastRoundHadToolCalls) {
-            // Context-only messages (from preprocessor) — Gemini has nothing to do.
-            // Don't show an error; the preprocessor already handled the request.
-            if (text.startsWith("[Context:")) {
-              console.log("[Gemini] Context-only message — skipping (preprocessor handled)");
-              break;
-            }
-            if (reason === "MALFORMED_FUNCTION_CALL") {
-              say("Too complex — try a simpler prompt or fewer scenes.", "system");
-            } else if (reason === "STOP") {
-              say("Couldn't process that. Try rephrasing?", "system");
-            } else if (reason === "MAX_TOKENS") {
-              say("Response too long — try fewer scenes.", "system");
-            } else if (reason === "SAFETY") {
-              say("Blocked by safety filter.", "system");
-            } else if (reason === "RECITATION") {
-              say("Blocked — try rephrasing.", "system");
-            } else {
-              say(`Error: ${reason}`, "system");
-            }
-          }
-          break;
-        }
-
-        const parts = candidate.content.parts;
-        const functionCalls: Array<{ name: string; id?: string; args: Record<string, unknown> }> = [];
-
-        // Process response parts
-        for (const part of parts) {
-          if (part.text) {
-            yield { type: "text", content: part.text };
-            say(part.text, "agent");
-            agentGaveText = true;
-          }
-          if (part.functionCall) {
-            functionCalls.push(part.functionCall);
+          case "tool_call":
+            lastRoundHadToolCalls = true;
             yield {
               type: "tool_call",
-              name: part.functionCall.name,
-              input: part.functionCall.args,
+              name: event.name,
+              input: event.args,
             };
+            // Emit a progress message for long-running generation tools so
+            // the chat shows activity immediately (before the tool finishes).
+            if (event.name === "project_generate") {
+              say("Generating scenes...", "system");
+            }
+            break;
+
+          case "tool_result": {
+            // Parse the JSON string back into a shape for the UI
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(event.content);
+            } catch {
+              parsed = { raw: event.content };
+            }
+            yield {
+              type: "tool_result",
+              name: event.name,
+              result: parsed,
+            };
+            completedTools.push({
+              name: event.name,
+              success: event.ok,
+              summary: event.ok ? briefToolResult(event.name, parsed) : undefined,
+            });
+            // Capture any project_id this tool touched so we can
+            // attribute token usage to it after the run completes.
+            if (parsed && typeof parsed === "object") {
+              const pid = (parsed as Record<string, unknown>).project_id;
+              if (typeof pid === "string" && pid.length > 0) {
+                touchedProjectIds.add(pid);
+              }
+            }
+            // Emit inline progress for project_generate so the chat shows
+            // generation status after each batch (UI feedback, matches test
+            // expectations for "Generating scenes|scenes ready|done").
+            if (event.name === "project_generate" && event.ok && parsed && typeof parsed === "object") {
+              const d = parsed as Record<string, unknown>;
+              const completed = d.completed as number | undefined;
+              const total = d.total as number | undefined;
+              const remaining = d.remaining as number | undefined;
+              if (total !== undefined && completed !== undefined) {
+                const progressMsg = remaining === 0 || remaining === undefined
+                  ? `All ${completed} scenes ready.`
+                  : `Generating scenes — ${completed}/${total} done`;
+                say(progressMsg, "system");
+              }
+            }
+            break;
           }
+
+          case "error":
+            yield { type: "error", content: event.error };
+            say(`Gemini error: ${event.error}`, "system");
+            break;
+
+          case "usage":
+            promptTokens.input += event.usage.input;
+            promptTokens.output += event.usage.output;
+            promptTokens.cached += event.usage.cached ?? 0;
+            break;
+
+          case "turn_done":
+          case "done":
+            // No UI action needed for these internal runner events
+            break;
         }
-
-        // Append model message to history
-        messages.push({
-          role: "model",
-          parts,
-        });
-
-        // If no function calls, we're done
-        lastRoundHadToolCalls = functionCalls.length > 0;
-        if (functionCalls.length === 0) {
-          break;
-        }
-
-        // Execute tools and send results back as a user message with functionResponse parts
-        const responseParts: GeminiPart[] = [];
-        let hasProjectCreate = false;
-        let projectId: string | null = null;
-        let hasProjectGenerate = false;
-        let moreRemaining = false;
-
-        for (const fc of functionCalls) {
-          const result = await executeTool(fc.name, fc.args);
-
-          yield {
-            type: "tool_result",
-            name: fc.name,
-            result: result.data ?? result.error,
-          };
-
-          // Track for completion summary
-          completedTools.push({
-            name: fc.name,
-            success: result.success,
-            summary: result.success
-              ? briefToolResult(fc.name, result.data)
-              : (result.error || "failed"),
-          });
-
-          // Track project workflow state for auto-continuation
-          if (fc.name === "project_create" && result.success) {
-            hasProjectCreate = true;
-            projectId = (result.data as Record<string, unknown>)?.project_id as string;
-          }
-          if (fc.name === "project_generate" && result.success) {
-            hasProjectGenerate = true;
-            const remaining = (result.data as Record<string, unknown>)?.remaining as number;
-            if (remaining > 0) moreRemaining = true;
-          }
-
-          responseParts.push({
-            functionResponse: {
-              name: fc.name,
-              id: fc.id,
-              response: result.success
-                ? (result.data as Record<string, unknown>) ?? {}
-                : { error: result.error },
-            },
-          });
-        }
-
-        // Append tool results as user message.
-        // Merge any continuation nudges INTO the same user message to avoid
-        // consecutive user turns (Gemini requires strict user/model alternation).
-        const userParts: GeminiPart[] = [...responseParts];
-
-        if (hasProjectCreate && projectId && !hasProjectGenerate) {
-          userParts.push({ text: `Project created. Now call project_generate with project_id="${projectId}" to start generating scenes.` });
-        }
-        if (hasProjectGenerate && moreRemaining) {
-          userParts.push({ text: "More scenes remaining. Call project_generate again with the same project_id." });
-        }
-
-        messages.push({
-          role: "user",
-          parts: userParts,
-        });
       }
+      } // end else (runStream path)
 
       // Update working memory with action results
       const wmem = useWorkingMemory.getState();
@@ -456,6 +853,55 @@ ${text.slice(0, 2000)}` }],
       }
       wmem.syncFromProjectStore();
 
+      // L2: log the agent's outcome to the rolling digest. One line.
+      const outcomeBits: string[] = [];
+      if (completedTools.length > 0) {
+        const ok = completedTools.filter(t => t.success).length;
+        outcomeBits.push(`ran ${ok}/${completedTools.length} ${completedTools.map(t => t.name).slice(0, 3).join("+")}`);
+      }
+      if (outcomeBits.length > 0) {
+        wmem.appendDigest(`agent: ${outcomeBits.join(", ").slice(0, 120)}`);
+      }
+
+      // L3: auto-seed CreativeContext on first substantive generation.
+      // Only runs once per session (flag on sessionStorage). If the
+      // user already ran /context gen, this is a no-op. The seeded
+      // context carries style/characters across future turns even if
+      // ActiveRequest expires.
+      try {
+        const hasGeneratedMedia = completedTools.some(
+          (t) => t.success && (t.name === "create_media" || t.name === "project_generate")
+        );
+        if (hasGeneratedMedia && typeof window !== "undefined") {
+          const seedKey = "storyboard:creative-context-autoseeded";
+          const alreadySeeded = window.sessionStorage.getItem(seedKey) === "1";
+          const { useSessionContext } = await import("../session-context");
+          const existing = useSessionContext.getState().context;
+          if (!alreadySeeded && !existing) {
+            const active = useActiveRequest.getState().snapshot();
+            const seedText = [active.subject, ...active.modifiers].filter(Boolean).join(", ");
+            if (seedText.trim().length >= 5) {
+              // Seed only the fields we can derive deterministically.
+              // Style/palette/mood need an LLM to extract properly —
+              // leave them empty so /context show tells the user to
+              // enrich via /context gen, but subject/characters land.
+              useSessionContext.getState().setContext({
+                style: "",
+                palette: "",
+                characters: active.subject.slice(0, 200),
+                setting: active.modifiers.slice(0, 3).join(", ").slice(0, 200),
+                rules: "",
+                mood: "",
+              });
+              window.sessionStorage.setItem(seedKey, "1");
+              console.log(`[Gemini] Auto-seeded CreativeContext from ActiveRequest: ${seedText.slice(0, 80)}`);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[Gemini] Auto-seed failed (non-fatal):", e);
+      }
+
       // Completion summary — if agent didn't say anything after finishing tools,
       // generate a brief summary so the user knows what happened.
       if (completedTools.length > 0 && !agentGaveText) {
@@ -464,7 +910,7 @@ ${text.slice(0, 2000)}` }],
         const fail = completedTools.length - ok;
 
         // Build summary
-        const parts: string[] = [];
+        const summaryParts: string[] = [];
 
         // Group by tool name for concise output
         const byName = new Map<string, { ok: number; fail: number; summaries: string[] }>();
@@ -487,20 +933,124 @@ ${text.slice(0, 2000)}` }],
           };
           const label = toolLabel[name] || name;
           if (info.fail > 0 && info.ok === 0) {
-            parts.push(`${label}: failed`);
+            summaryParts.push(`${label}: failed`);
           } else if (info.fail > 0) {
-            parts.push(`${label}: ${info.ok} ok, ${info.fail} failed`);
+            summaryParts.push(`${label}: ${info.ok} ok, ${info.fail} failed`);
           } else if (info.summaries[0]) {
-            parts.push(`${label}: ${info.summaries[0]}`);
+            summaryParts.push(`${label}: ${info.summaries[0]}`);
           }
         }
 
+        const tokenTotal = promptTokens.input + promptTokens.output;
+        const tokenTag = tokenTotal > 0
+          ? ` — ${tokenTotal.toLocaleString()} tokens (${promptTokens.input.toLocaleString()} in / ${promptTokens.output.toLocaleString()} out${promptTokens.cached > 0 ? `, ${promptTokens.cached.toLocaleString()} cached` : ""})`
+          : "";
+
         const summaryText = fail === 0
-          ? `Done in ${elapsed}s${parts.length ? " — " + parts.join(", ") : ""}`
-          : `${ok}/${completedTools.length} succeeded (${elapsed}s)${parts.length ? " — " + parts.join(", ") : ""}`;
+          ? `Done in ${elapsed}s${summaryParts.length ? " — " + summaryParts.join(", ") : ""}${tokenTag}`
+          : `${ok}/${completedTools.length} succeeded (${elapsed}s)${summaryParts.length ? " — " + summaryParts.join(", ") : ""}${tokenTag}`;
 
         say(summaryText, "system");
         yield { type: "text", content: summaryText };
+
+        // Attribute tokens to every project this run touched, then
+        // emit a per-project running total so the user sees what
+        // each project has cost across all its turns.
+        if (tokenTotal > 0 && touchedProjectIds.size > 0) {
+          const { useProjectStore } = await import("@/lib/projects/store");
+          const store = useProjectStore.getState();
+          for (const pid of touchedProjectIds) {
+            store.addProjectTokens(pid, promptTokens);
+          }
+          // Re-read after mutation so we report the latest totals
+          const refreshed = useProjectStore.getState();
+          for (const pid of touchedProjectIds) {
+            const proj = refreshed.getProject(pid);
+            if (!proj?.tokensUsed) continue;
+            const t = proj.tokensUsed;
+            const total = t.input + t.output;
+            const label = proj.brief.slice(0, 40) + (proj.brief.length > 40 ? "…" : "");
+            say(
+              `Project "${label}" — ${total.toLocaleString()} tokens across ${t.turns} turn${t.turns === 1 ? "" : "s"}`,
+              "system",
+            );
+          }
+        }
+      } else if (promptTokens.input + promptTokens.output > 0) {
+        // No tools ran but we still consumed tokens (e.g., pure chat reply).
+        // Emit a standalone token line so the user always sees the cost.
+        const tokenTotal = promptTokens.input + promptTokens.output;
+        say(
+          `${tokenTotal.toLocaleString()} tokens (${promptTokens.input.toLocaleString()} in / ${promptTokens.output.toLocaleString()} out)`,
+          "system",
+        );
+      }
+
+      // If no tools were called and no text was given, ask the user for
+      // more detail instead of giving up. This path fires when Gemini
+      // returns an empty STOP (common on vague multi-scene prompts with
+      // many tools available). We make a second runStream call with a
+      // meta-prompt that asks Gemini to generate clarifying questions
+      // referencing the user's original request.
+      if (!lastRoundHadToolCalls && !agentGaveText && !text.startsWith("[Context:")) {
+        console.warn("[Gemini] Empty runStream — asking clarifying questions");
+        try {
+          // Use a tool-less registry so Gemini is forced to produce text
+          // instead of picking a tool.
+          const clarifierTools = new ToolRegistry();
+          const clarifierWorking = new WorkingMemoryStore();
+          const clarifierSession = new SessionMemoryStore();
+          const clarifierRunner = new AgentRunner(
+            provider,
+            clarifierTools,
+            clarifierWorking,
+            clarifierSession,
+          );
+          const clarifierPrompt =
+            `The user asked: "${text.slice(0, 500)}"\n\n` +
+            `You don't have enough detail to generate directly yet. ` +
+            `Reply with a single short message (3 sentences max) that:\n` +
+            `1. Acknowledges what they want in one line\n` +
+            `2. Asks 2 or 3 specific clarifying questions about style, ` +
+            `framing, or mood\n` +
+            `3. Offers to proceed once they answer\n\n` +
+            `Be warm and concise. Do not apologize. Do not list questions ` +
+            `as bullet points — write them as a natural follow-up.`;
+
+          let clarifierText = "";
+          for await (const ev of clarifierRunner.runStream({
+            user: clarifierPrompt,
+            maxIterations: 1,
+          })) {
+            if (stopped) break;
+            if (ev.kind === "text" && ev.text) {
+              clarifierText += ev.text;
+            }
+          }
+          if (clarifierText.trim().length > 0) {
+            yield { type: "text", content: clarifierText };
+            say(clarifierText, "agent");
+          } else {
+            // Even the clarifier failed — fall back to a static prompt
+            // that still engages the user instead of giving up.
+            const fallback =
+              "I can help with that. Tell me a bit more: what visual style " +
+              "(e.g., cinematic photograph, watercolor, anime), and what " +
+              "should each shot show differently?";
+            yield { type: "text", content: fallback };
+            say(fallback, "agent");
+          }
+        } catch (clarifierErr) {
+          const errMsg =
+            clarifierErr instanceof Error ? clarifierErr.message : "Unknown error";
+          console.warn("[Gemini] Clarifier failed:", errMsg);
+          const fallback =
+            "I can help with that. Tell me a bit more: what visual style " +
+            "(e.g., cinematic photograph, watercolor, anime), and what " +
+            "should each shot show differently?";
+          yield { type: "text", content: fallback };
+          say(fallback, "agent");
+        }
       }
 
       yield { type: "done" };
@@ -515,5 +1065,6 @@ ${text.slice(0, 2000)}` }],
 };
 
 export function resetGeminiConversation() {
-  messages = [];
+  // No-op: conversation state is now managed per-run by AgentRunner.
+  // Called by UI reset buttons — safe to keep as a no-op.
 }

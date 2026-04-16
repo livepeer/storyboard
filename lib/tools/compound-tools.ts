@@ -1,11 +1,105 @@
 import type { ToolDefinition } from "./types";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { runInference } from "@/lib/sdk/client";
-import { resolveCapability, isValidCapability } from "@/lib/sdk/capabilities";
+import { resolveCapability, isValidCapability, getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { useSkillStore } from "@/lib/skills/store";
 import { useChatStore } from "@/lib/chat/store";
 import { useSessionContext } from "@/lib/agents/session-context";
 import type { CardType } from "@/lib/canvas/types";
+
+/**
+ * Module-level cache of the current user message. Set by the active
+ * plugin (gemini/claude/openai) BEFORE invoking runStream, read by
+ * selectCapability when it needs to detect edit-intent vs motion-intent.
+ *
+ * Why: Gemini rewrites the user's request as a pure scene description
+ * in step.prompt when calling create_media, so the edit verbs ("with a
+ * tear", "add shadows", "deeper") get stripped. To detect the user's
+ * actual intent, we need the original text. Threading it through the
+ * SDK runner → tool context was too invasive for a hot-fix; a module-
+ * level pointer is simpler and single-consumer.
+ */
+let currentUserText = "";
+export function setCurrentUserText(text: string): void {
+  currentUserText = text;
+}
+
+/**
+ * Fallback chains for capability-level retry. When a capability fails
+ * with a recoverable error (empty response, upstream policy rejection,
+ * 5xx from upstream), we try the next capability in its chain BEFORE
+ * reporting failure to the user. Only same-type fallbacks (image→image,
+ * video→video) so the card type never flips mid-step.
+ *
+ * Rationale: Google Veo has aggressive safety filters and rejects
+ * benign content like "young girl + sky lantern". LTX-i2v, trained on
+ * different data with less content filtering, usually accepts the
+ * same prompt. Rather than forcing the user to re-prompt, cycle
+ * transparently and only surface failure if every option in the
+ * chain has exhausted.
+ */
+export const FALLBACK_CHAINS: Record<string, string[]> = {
+  // Image generation
+  "flux-dev": ["flux-schnell", "recraft-v4", "gemini-image", "nano-banana"],
+  "flux-schnell": ["flux-dev", "recraft-v4"],
+  "recraft-v4": ["flux-dev", "flux-schnell"],
+  "gemini-image": ["flux-dev", "nano-banana"],
+  "nano-banana": ["flux-dev", "gemini-image"],
+
+  // Image edit
+  "kontext-edit": ["flux-fill", "gemini-image"],
+  "flux-fill": ["kontext-edit"],
+
+  // Video image-to-video
+  "veo-i2v": ["ltx-i2v"],
+  "ltx-i2v": ["veo-i2v"],
+
+  // Video text-to-video
+  "veo-t2v": ["ltx-t2v"],
+  "ltx-t2v": ["veo-t2v"],
+  // bg-remove, topaz-upscale, chatterbox-tts, lipsync, music, sfx,
+  // face-swap, sam3, talking-head, veo-transition → single model,
+  // no fallback chain.
+};
+
+/**
+ * Given a capability name and the live capability list, return the
+ * ordered attempt list: [initial, ...chained-fallbacks-that-exist].
+ * Fallbacks that aren't in the live registry are silently dropped.
+ */
+export function buildAttemptChain(initialCap: string, liveCapNames: Set<string>): string[] {
+  const chain = FALLBACK_CHAINS[initialCap] ?? [];
+  const liveFallbacks = chain.filter((c) => liveCapNames.has(c));
+  // If the initial capability itself isn't live (cold cache, etc.),
+  // don't waste a round-trip on it — start with the first live sibling.
+  // Only drop it if we actually have a live alternative.
+  const attempts = liveCapNames.size > 0 && !liveCapNames.has(initialCap) && liveFallbacks.length > 0
+    ? liveFallbacks
+    : [initialCap, ...liveFallbacks];
+  // De-duplicate while preserving order
+  return Array.from(new Set(attempts));
+}
+
+/**
+ * True when an error string indicates the model couldn't produce
+ * output for this specific prompt — fallback to a sibling model may
+ * succeed. False for connectivity / auth errors, where retrying with
+ * a different capability against the same SDK will also fail.
+ */
+export function isRecoverableFailure(errorMsg: string | undefined): boolean {
+  if (!errorMsg) return true; // empty-result case
+  const lower = errorMsg.toLowerCase();
+  // Non-recoverable: same SDK, same outcome
+  if (lower.includes("failed to fetch")) return false;
+  if (lower.includes("err_connection")) return false;
+  if (lower.includes("networkerror")) return false;
+  if (lower.includes("cors")) return false;
+  if (lower.includes("401") || lower.includes("payment failed") || lower.includes("signer")) return false;
+  if (lower.includes("authentication failed")) return false;
+  if (lower.includes("api key")) return false;
+  // Everything else — upstream policy, empty output, 5xx, timeout, rate limit — worth trying a sibling.
+  return true;
+}
 
 /** Convert raw technical errors into short, user-friendly messages */
 function humanizeError(raw: string): string {
@@ -84,7 +178,9 @@ interface MediaStep {
 function selectCapability(
   action: string,
   styleHint?: string,
-  modelOverride?: string
+  modelOverride?: string,
+  hasSourceUrl?: boolean,
+  promptText?: string
 ): { capability: string; type: CardType } {
   // If model_override provided, resolve it (fuzzy match against live capabilities)
   if (modelOverride) {
@@ -101,9 +197,60 @@ function selectCapability(
     // Could not resolve — fall through to action-based selection
   }
 
+  // Detect "user wants video" from the prompt text. This must be
+  // STRICT — the step.prompt here is what Gemini wrote, not what the
+  // user said. Gemini inherits style language ("cinematic", "Ghibli",
+  // "8-second") from the CreativeContext, so a loose regex matches
+  // every generate call when there's a cinematic context active. The
+  // rule: require BOTH an explicit duration AND a video noun.
+  //
+  // We also check `currentUserText` (set by the plugin before
+  // runStream) because Gemini often rewrites the user's edit request
+  // as a pure scene description in step.prompt, stripping the edit
+  // verbs. The user-text fallback catches cases where the user
+  // clearly wanted an edit but Gemini's expansion lost the intent.
+  const lowerPrompt = (promptText ?? "").toLowerCase();
+  const lowerUser = (currentUserText || "").toLowerCase();
+  const combinedText = `${lowerPrompt} ${lowerUser}`.trim();
+  const lowerHint = (styleHint ?? "").toLowerCase();
+  // Video-intent check uses USER text (strict) not Gemini's rewritten
+  // prompt. This prevents cinematic style inheritance from routing
+  // image requests to veo-t2v.
+  const hasVideoNoun = /\b(video|clip|footage|animation)\b/.test(lowerUser);
+  const hasDuration = /\b\d+[- ]second\b/.test(lowerUser);
+  const explicitMakeVideo = /\b(make|generate|create|produce)\s+(a|an|me\s+a|me\s+an)?\s*\d*[- ]?\s*seconds?\s*(video|clip|animation|movie)\b/.test(lowerUser);
+  const asksForVideo = (hasVideoNoun && hasDuration) || explicitMakeVideo;
+
+  // Motion verbs that indicate the user wants an animation (image -> video).
+  // Checked on BOTH the user text AND Gemini's expanded prompt (either
+  // source is allowed to signal motion).
+  const motionVerbs = /\b(pan|tilt|zoom|push(?:-in| in)?|pull(?:-out| out)?|dolly|drift|sweep|rotate|move|fly|float|rise|fall|swirl|spin|shake|tremble|rustl\w*|flutter\w*|wind|breeze|ripple|wave|flow|cascade|gust|storm|rain|snow|drip|splash)\b/;
+  // Edit verbs — checked primarily on USER text (Gemini strips them
+  // when rewriting prompts). Extended keyword set: explicit iteration
+  // words ("regenerate", "redo", "redraw", "iterate", "fix"), visual
+  // modifiers ("deeper shadows", "tear", "still"), and any "scene N"
+  // reference (a strong signal the user is editing an existing scene).
+  const editVerbs = /\b(add|remove|change|make\s+\w+\s+(darker|lighter|brighter|softer|warmer|cooler|redder|bluer|greener)|with\s+(a|an|some|deeper|softer|stronger)\s|without\s|replace|adjust|tweak|darken|lighten|brighten|deepen|soften|sharpen|crop|blur|recolor|tint|regenerate|redo|redraw|re-?do|iterate|fix|refine|tweak|update|edit|modify|scene\s*#?\s*\d+|deeper\s+\w+|a\s+single\s+|too\s+(bright|dark|warm|cold|busy|empty|light)|feels\s+(too|like|kind\s+of))\b/;
+  const hasMotion = motionVerbs.test(combinedText);
+  const hasEditIntent = editVerbs.test(lowerUser) || editVerbs.test(lowerPrompt);
+
+  const valid = getCachedCapabilities();
+  const hasVeoT2V = !!valid && valid.some((c) => c.name === "veo-t2v");
+  const hasVeoI2V = !!valid && valid.some((c) => c.name === "veo-i2v");
+
   switch (action) {
     case "generate": {
-      const hint = styleHint?.toLowerCase() || "";
+      // Text-to-video path: ONLY if the prompt has an unambiguous video
+      // intent (duration + video noun, or "make a video" phrasing).
+      // Plain "cinematic watercolor" inherited from a style context
+      // should NOT fire this branch.
+      if (asksForVideo) {
+        if (hasVeoT2V) return { capability: "veo-t2v", type: "video" };
+        if (valid && valid.some((c) => c.name === "ltx-t2v")) {
+          return { capability: "ltx-t2v", type: "video" };
+        }
+      }
+      const hint = lowerHint;
       if (hint.includes("fast") || hint.includes("draft")) return { capability: "flux-schnell", type: "image" };
       if (hint.includes("professional") || hint.includes("illustration")) return { capability: "recraft-v4", type: "image" };
       if (hint.includes("photo")) return { capability: "flux-dev", type: "image" };
@@ -111,8 +258,35 @@ function selectCapability(
     }
     case "restyle":
       return { capability: "kontext-edit", type: "image" };
-    case "animate":
+    case "animate": {
+      // animate = image → video. Requires a source_url to work.
+      // Three branches, most specific first:
+      //
+      // 1) animate WITHOUT source: user said "make a video" but no
+      //    canvas card was attached. Rescue with text-to-video (veo-t2v).
+      // 2) animate WITH source BUT the prompt has visual-edit verbs
+      //    (add/remove/change/darker/with a...) AND NO motion verbs:
+      //    the LLM misclassified an image edit as an animation. Route
+      //    to kontext-edit (image→image) to produce a refined still.
+      // 3) animate WITH source AND motion: the real animation case.
+      //    Route to veo-i2v (with ltx-i2v fallback).
+      if (!hasSourceUrl) {
+        if (hasVeoT2V) return { capability: "veo-t2v", type: "video" };
+        if (valid && valid.some((c) => c.name === "ltx-t2v")) {
+          return { capability: "ltx-t2v", type: "video" };
+        }
+      }
+      if (hasSourceUrl && hasEditIntent && !hasMotion) {
+        // Image edit disguised as an animate call. Produce a still,
+        // not a video. kontext-edit is image-to-image refinement.
+        return { capability: "kontext-edit", type: "image" };
+      }
+      // Route to Veo 3.1 (via fal.ai) when available — dramatically
+      // better quality + audio than LTX. Falls back to ltx-i2v if the
+      // live capability registry doesn't include veo-i2v.
+      if (hasVeoI2V) return { capability: "veo-i2v", type: "video" };
       return { capability: "ltx-i2v", type: "video" };
+    }
     case "upscale":
       return { capability: "topaz-upscale", type: "image" };
     case "remove_bg":
@@ -215,12 +389,23 @@ export const createMediaTool: ToolDefinition = {
       // Apply session creative context + style-override skills
       // Session context = persistent style/character/setting from the original brief
       // Style overrides = loaded skills (ghibli, kids-drawing, etc.)
+      //
+      // IMPORTANT: for action:"animate" steps (image-to-video), we use
+      // a motion-only prefix that keeps style+mood+palette but drops
+      // characters+setting. The source image already carries character
+      // and setting visually; re-declaring them in the prompt confuses
+      // the video model AND trips safety filters (Google Veo rejects
+      // "young girl + fire" even when the scene is a benign lantern
+      // festival). See buildMotionPrefixFromContext for the rationale.
       let sessionPrefix = "";
       if (step.action !== "tts") {
+        const isAnimate = step.action === "animate";
         // Check for active episode — use its effective context if present
         try {
           const { useEpisodeStore } = await import("@/lib/episodes/store");
-          const { buildPrefixFromContext } = await import("@/lib/agents/session-context");
+          const { buildPrefixFromContext, buildMotionPrefixFromContext } = await import(
+            "@/lib/agents/session-context"
+          );
           const epStore = useEpisodeStore.getState();
           const activeEp = epStore.getActiveEpisode();
           if (activeEp) {
@@ -228,14 +413,26 @@ export const createMediaTool: ToolDefinition = {
             if (storyboardCtx) {
               const effective = epStore.getEffectiveContext(activeEp.id, storyboardCtx);
               if (effective) {
-                sessionPrefix = buildPrefixFromContext(effective);
+                sessionPrefix = isAnimate
+                  ? buildMotionPrefixFromContext(effective)
+                  : buildPrefixFromContext(effective);
               }
             }
           }
         } catch { /* episode store not available */ }
         // Fallback to session context if no episode active
         if (!sessionPrefix) {
-          sessionPrefix = useSessionContext.getState().buildPrefix();
+          if (isAnimate) {
+            const ctx = useSessionContext.getState().context;
+            if (ctx) {
+              const { buildMotionPrefixFromContext } = await import(
+                "@/lib/agents/session-context"
+              );
+              sessionPrefix = buildMotionPrefixFromContext(ctx);
+            }
+          } else {
+            sessionPrefix = useSessionContext.getState().buildPrefix();
+          }
         }
       }
       const styled = step.action !== "tts"
@@ -246,11 +443,18 @@ export const createMediaTool: ToolDefinition = {
         console.log(`[create_media] Session context injected (${sessionPrefix.split(/\s+/).length} words): "${sessionPrefix.slice(0, 80)}..."`);
       }
 
-      // Resolve capability through live registry (fuzzy-matches invalid names)
+      // Resolve capability through live registry (fuzzy-matches invalid names).
+      // Pass hasSourceUrl + promptText so the resolver can:
+      // - route animate-without-source to veo-t2v instead of failing on veo-i2v
+      // - route generate-with-video-intent to veo-t2v instead of flux-dev
+      const stepSourceUrl = step.source_url
+        || (step.depends_on !== undefined && results[step.depends_on]?.url);
       const { capability, type } = selectCapability(
         step.action,
         step.style_hint,
-        step.model_override || ("modelHint" in styled ? styled.modelHint : undefined) as string | undefined
+        step.model_override || ("modelHint" in styled ? styled.modelHint : undefined) as string | undefined,
+        !!stepSourceUrl,
+        effectivePrompt,
       );
 
       // Friendly names: short, memorable, easy to reference in chat
@@ -292,84 +496,138 @@ export const createMediaTool: ToolDefinition = {
         params.image_url = step.source_url;
       }
 
-      // Run inference with the validated capability and styled prompt
-      const t0 = performance.now();
-      try {
-        const result = await runInference({
-          capability,
-          prompt: effectivePrompt,
-          params,
-        });
-        const elapsed = performance.now() - t0;
+      // Build the fallback chain for this step. The first attempt is
+      // the resolved capability; if it fails with a recoverable error
+      // (empty output, upstream policy reject, 5xx, timeout), we try
+      // the next sibling model in FALLBACK_CHAINS before reporting.
+      // Only capabilities in the LIVE registry survive filtering.
+      const liveCapNames = new Set(
+        (getCachedCapabilities() || []).map((c: { name: string }) => c.name)
+      );
+      const attemptChain = buildAttemptChain(capability, liveCapNames);
 
-        const r = result as Record<string, unknown>;
-        const data = (r.data ?? r) as Record<string, unknown>;
-        const images = data.images as Array<{ url: string }> | undefined;
-        const image = data.image as { url: string } | undefined;
-        const video = data.video as { url: string } | undefined;
-        const audio = data.audio as { url: string } | undefined;
-        const audioFile = data.audio_file as { url: string } | undefined;
-        const output = data.output as { url: string } | undefined;
+      let stepDone = false;
+      let lastAttempt:
+        | { error: string; capability: string; elapsed: number }
+        | undefined;
 
-        const url =
-          (r.image_url as string) ??
-          images?.[0]?.url ??
-          image?.url ??
-          (r.video_url as string) ??
-          video?.url ??
-          (r.audio_url as string) ??
-          audio?.url ??
-          audioFile?.url ??
-          output?.url ??
-          (data.url as string) ??
-          undefined;
+      for (let attemptIdx = 0; attemptIdx < attemptChain.length; attemptIdx++) {
+        const currentCap = attemptChain[attemptIdx];
 
-        // Check both top-level and nested errors
-        const topError = r.error as string | undefined;
-        const dataError = data.error as string | undefined;
-        const effectiveError = topError || dataError;
-
-        // Store generation metadata on the card for the info banner
-        const genMeta = { capability, prompt: effectivePrompt, elapsed };
-
-        if (effectiveError) {
-          const friendly = humanizeError(effectiveError);
-          canvas.updateCard(card.id, { error: friendly, ...genMeta });
-          results.push({ refId, cardId: card.id, error: friendly, capability, elapsed });
-        } else if (url) {
-          canvas.updateCard(card.id, { url, ...genMeta });
-          results.push({ refId, cardId: card.id, url, capability, elapsed });
-        } else {
-          // Log the full response for debugging
-          console.warn(`[create_media] No URL extracted for ${capability}:`, JSON.stringify(r).slice(0, 300));
-          // Try one more extraction: some models return url at data level as string
-          const fallbackUrl = typeof data === "object"
-            ? (Object.values(data).find((v) => typeof v === "string" && (v as string).startsWith("http")) as string | undefined)
-            : undefined;
-          if (fallbackUrl) {
-            canvas.updateCard(card.id, { url: fallbackUrl, ...genMeta });
-            results.push({ refId, cardId: card.id, url: fallbackUrl, capability, elapsed });
-          } else {
-            const noMediaMsg = `No output from ${capability} — try a different prompt`;
-            canvas.updateCard(card.id, { error: noMediaMsg, ...genMeta });
-            results.push({ refId, cardId: card.id, error: noMediaMsg, capability, elapsed });
-          }
+        // User-facing notice when we fall back. Keep it short and
+        // actionable — the user sees "veo-i2v failed — trying ltx-i2v…".
+        if (attemptIdx > 0) {
+          const prev = attemptChain[attemptIdx - 1];
+          useChatStore
+            .getState()
+            .addMessage(`${prev} failed — trying ${currentCap}…`, "system");
+          console.log(`[create_media] Fallback: ${prev} → ${currentCap} (step ${i})`);
         }
 
-        if (step.depends_on !== undefined && results[step.depends_on]) {
-          canvas.addEdge(results[step.depends_on].refId, refId, {
-            capability,
-            prompt: step.prompt,
-            action: step.action,
-            elapsed,
+        const t0 = performance.now();
+        try {
+          const result = await runInference({
+            capability: currentCap,
+            prompt: effectivePrompt,
+            params,
           });
+          const elapsed = performance.now() - t0;
+
+          const r = result as Record<string, unknown>;
+          const data = (r.data ?? r) as Record<string, unknown>;
+          const images = data.images as Array<{ url: string }> | undefined;
+          const image = data.image as { url: string } | undefined;
+          const video = data.video as { url: string } | undefined;
+          const audio = data.audio as { url: string } | undefined;
+          const audioFile = data.audio_file as { url: string } | undefined;
+          const output = data.output as { url: string } | undefined;
+
+          let url: string | undefined =
+            (r.image_url as string) ??
+            images?.[0]?.url ??
+            image?.url ??
+            (r.video_url as string) ??
+            video?.url ??
+            (r.audio_url as string) ??
+            audio?.url ??
+            audioFile?.url ??
+            output?.url ??
+            (data.url as string) ??
+            undefined;
+
+          // Last-ditch extraction: some models bury the URL in an
+          // unlabeled field (e.g. top-level stringified). Find any
+          // "http..." string in the response as a fallback.
+          if (!url && typeof data === "object") {
+            url = Object.values(data).find(
+              (v) => typeof v === "string" && (v as string).startsWith("http")
+            ) as string | undefined;
+          }
+
+          const topError = r.error as string | undefined;
+          const dataError = data.error as string | undefined;
+          const effectiveError = topError || dataError;
+
+          if (url && !effectiveError) {
+            // Success — commit and break out of the attempt loop
+            const genMeta = { capability: currentCap, prompt: effectivePrompt, elapsed };
+            canvas.updateCard(card.id, { url, error: undefined, ...genMeta });
+            results.push({ refId, cardId: card.id, url, capability: currentCap, elapsed });
+            if (step.depends_on !== undefined && results[step.depends_on]) {
+              canvas.addEdge(results[step.depends_on].refId, refId, {
+                capability: currentCap,
+                prompt: step.prompt,
+                action: step.action,
+                elapsed,
+              });
+            }
+            stepDone = true;
+            break;
+          }
+
+          // No URL OR upstream error — record and decide whether to fallback
+          const failMsg = effectiveError
+            ? humanizeError(effectiveError)
+            : `No output from ${currentCap}`;
+          console.warn(`[create_media] ${currentCap} attempt failed: ${failMsg}`);
+          lastAttempt = { error: failMsg, capability: currentCap, elapsed };
+
+          if (!isRecoverableFailure(failMsg)) {
+            // Auth / connectivity failure — cycling won't help. Stop here.
+            break;
+          }
+          // else: continue to next attempt in chain
+        } catch (e) {
+          const elapsed = performance.now() - t0;
+          const raw = e instanceof Error ? e.message : "Unknown error";
+          const friendly = humanizeError(raw);
+          console.warn(`[create_media] ${currentCap} threw: ${raw}`);
+          lastAttempt = { error: friendly, capability: currentCap, elapsed };
+          if (!isRecoverableFailure(friendly)) break;
         }
-      } catch (e) {
-        const elapsed = performance.now() - t0;
-        const raw = e instanceof Error ? e.message : "Unknown error";
-        const friendly = humanizeError(raw);
-        canvas.updateCard(card.id, { error: friendly });
-        results.push({ refId, cardId: card.id, error: friendly, capability, elapsed });
+      }
+
+      if (!stepDone) {
+        // Every attempt in the chain failed. Commit the final error
+        // onto the card using the LAST attempt's capability (so the
+        // card badge shows what actually ran last, not what was
+        // originally requested).
+        const finalErr = lastAttempt?.error || `No output from any of: ${attemptChain.join(", ")}`;
+        const finalCap = lastAttempt?.capability || capability;
+        const finalElapsed = lastAttempt?.elapsed || 0;
+        canvas.updateCard(card.id, {
+          error: finalErr,
+          capability: finalCap,
+          prompt: effectivePrompt,
+          elapsed: finalElapsed,
+        });
+        results.push({
+          refId,
+          cardId: card.id,
+          error: finalErr,
+          capability: finalCap,
+          elapsed: finalElapsed,
+        });
       }
     }
 

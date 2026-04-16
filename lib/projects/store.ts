@@ -28,6 +28,12 @@ interface ProjectState {
   /** Check if all scenes are done */
   isProjectComplete: (projectId: string) => boolean;
 
+  /** Accumulate token usage on a project (per-project grand total). */
+  addProjectTokens: (
+    projectId: string,
+    usage: { input: number; output: number; cached?: number },
+  ) => void;
+
   clearProjects: () => void;
 }
 
@@ -165,6 +171,26 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const project = get().getProject(projectId);
     if (!project) return false;
     return project.scenes.every((s) => s.status === "done");
+  },
+
+  addProjectTokens: (projectId, usage) => {
+    set((state) => {
+      const projects = state.projects.map((p) => {
+        if (p.id !== projectId) return p;
+        const prev = p.tokensUsed ?? { input: 0, output: 0, cached: 0, turns: 0 };
+        return {
+          ...p,
+          tokensUsed: {
+            input: prev.input + (usage.input ?? 0),
+            output: prev.output + (usage.output ?? 0),
+            cached: prev.cached + (usage.cached ?? 0),
+            turns: prev.turns + 1,
+          },
+        };
+      });
+      saveProjects(projects);
+      return { projects };
+    });
   },
 
   clearProjects: () => {
