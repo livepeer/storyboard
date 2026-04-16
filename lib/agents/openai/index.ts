@@ -12,11 +12,44 @@ import {
 } from "@livepeer/agent";
 import { listTools as listStoryboardTools } from "@/lib/tools/registry";
 import { useChatStore } from "@/lib/chat/store";
-import { loadSystemPrompt } from "../claude/system-prompt";
 import { StoryboardOpenAIProvider } from "../storyboard-providers";
 import { wrapStoryboardTool } from "../runner-adapter";
+import { setCurrentUserText } from "@/lib/tools/compound-tools";
+import { buildAgentContext } from "../context-builder";
+import { useWorkingMemory } from "../working-memory";
+import { useActiveRequest } from "../active-request";
+import { classifyIntent } from "../intent";
 
 const MAX_TOOL_ROUNDS = 20;
+
+function pickToolsForIntent(intentType: string, userText: string): Set<string> {
+  const core = new Set<string>([
+    "create_media", "canvas_get", "canvas_create", "canvas_update",
+    "canvas_remove", "canvas_organize", "project_create",
+    "project_generate", "project_iterate", "project_status",
+  ]);
+  const lower = userText.toLowerCase();
+  const wantsStream = /\b(stream|webcam|live|camera|preset|lv2v|scope)\b/.test(lower);
+  const wantsEpisode = /\bepisode\b/.test(lower);
+  const wantsSdk = /\b(capab|sdk|inference|orch|capabilit)/.test(lower);
+  const wantsSkill = /\b(skill|load\s+skill)\b/.test(lower);
+  const allowed = new Set(core);
+  if (intentType !== "status" && intentType !== "none") {
+    allowed.add("memory_style"); allowed.add("memory_rate"); allowed.add("memory_preference");
+  } else if (intentType === "none") {
+    allowed.add("memory_style"); allowed.add("memory_preference");
+  }
+  if (wantsStream) {
+    for (const t of ["scope_start","scope_control","scope_stop","scope_preset","scope_graph","scope_status"]) allowed.add(t);
+  }
+  if (wantsEpisode) {
+    for (const t of ["episode_create","episode_update","episode_activate","episode_list","episode_get","episode_remove"]) allowed.add(t);
+  }
+  if (wantsSdk) { allowed.add("inference"); allowed.add("list_capabilities"); }
+  if (wantsSkill) { allowed.add("load_skill"); }
+  if (intentType === "status") return new Set(["canvas_get", "project_status"]);
+  return allowed;
+}
 
 let stopped = false;
 
@@ -58,21 +91,53 @@ export const openaiPlugin: AgentPlugin = {
     setProcessing(true);
 
     try {
-      // Load system prompt
-      const system = await loadSystemPrompt(context);
+      // L1: ActiveRequest — track subject across turns
+      setCurrentUserText(text);
+      useActiveRequest.getState().applyTurn(text);
+
+      // L2: Digest — rolling turn log for session continuity
+      useWorkingMemory.getState().appendDigest(`user: ${text.slice(0, 120)}`);
+
+      // Intent-aware system prompt
+      const projStore = (await import("@/lib/projects/store")).useProjectStore.getState();
+      let activeProj = projStore.getActiveProject();
+      if (!activeProj) {
+        const all = projStore.projects ?? [];
+        if (all.length > 0) activeProj = all[all.length - 1];
+      }
+      const pendingCount = activeProj
+        ? activeProj.scenes.filter((s: { status: string }) => s.status === "pending" || s.status === "regenerating").length
+        : 0;
+      const intent = classifyIntent(text, !!activeProj, pendingCount);
+      const mem = useWorkingMemory.getState();
+      const system = buildAgentContext(intent, {
+        project: mem.project,
+        digest: mem.digest,
+        recentActions: mem.recentActions,
+        preferences: mem.preferences,
+        canvasCards: context.cards.map((c) => ({
+          refId: c.refId, type: c.type, title: c.title, url: c.url,
+        })),
+        selectedCard: context.selectedCard,
+        activeEpisodeId: mem.activeEpisodeId,
+      });
 
       console.log(`[OpenAI] runStream: system=${system.length} chars, text="${text.slice(0, 80)}"`);
 
-      // Build runner with StoryboardOpenAIProvider (routes through /api/agent/openai proxy)
+      // Intent-based tool filtering
+      const allowedTools = pickToolsForIntent(intent.type, text);
+
       const provider = new StoryboardOpenAIProvider();
       const tools = new ToolRegistry();
+      let registeredCount = 0;
       for (const sbTool of listStoryboardTools()) {
-        tools.register(wrapStoryboardTool(sbTool));
+        if (allowedTools.has(sbTool.name)) {
+          tools.register(wrapStoryboardTool(sbTool));
+          registeredCount++;
+        }
       }
+      console.log(`[OpenAI] Tool filtering: intent=${intent.type}, registered ${registeredCount}/${listStoryboardTools().length} tools`);
 
-      // Inject the system prompt via WorkingMemory criticalConstraints.
-      // AgentRunner.runStream() marshals working.marshal().text into a system message
-      // at the start of each run, so the LLM always sees the full context.
       const working = new WorkingMemoryStore();
       working.setCriticalConstraints(system ? [system] : []);
       const session = new SessionMemoryStore();
@@ -80,6 +145,7 @@ export const openaiPlugin: AgentPlugin = {
 
       const promptTokens = { input: 0, output: 0, cached: 0 };
       const touchedProjectIds = new Set<string>();
+      const completedTools: Array<{ name: string; success: boolean }> = [];
       const startTime = Date.now();
       let sawAnyToolCall = false;
 
@@ -105,6 +171,7 @@ export const openaiPlugin: AgentPlugin = {
             let parsed: unknown;
             try { parsed = JSON.parse(event.content); } catch { parsed = { raw: event.content }; }
             yield { type: "tool_result", name: event.name, result: parsed };
+            completedTools.push({ name: event.name, success: event.ok });
             if (parsed && typeof parsed === "object") {
               const pid = (parsed as Record<string, unknown>).project_id;
               if (typeof pid === "string" && pid.length > 0) {
@@ -130,6 +197,45 @@ export const openaiPlugin: AgentPlugin = {
             break;
         }
       }
+
+      // L2: log agent outcome + sync working memory
+      const wmem = useWorkingMemory.getState();
+      if (completedTools.length > 0) {
+        const okCount = completedTools.filter((t) => t.success).length;
+        wmem.recordAction({
+          tool: completedTools.map((t) => t.name).join("+"),
+          summary: `${completedTools.length} tools`,
+          outcome: `${okCount}/${completedTools.length} succeeded`,
+          success: okCount === completedTools.length,
+        });
+        wmem.appendDigest(`agent: ran ${okCount}/${completedTools.length} ${completedTools.map((t) => t.name).slice(0, 3).join("+")}`);
+      }
+      wmem.syncFromProjectStore();
+
+      // L3: auto-seed CreativeContext on first substantive generation
+      try {
+        const hasGeneratedMedia = completedTools.some(
+          (t) => t.success && (t.name === "create_media" || t.name === "project_generate")
+        );
+        if (hasGeneratedMedia && typeof window !== "undefined") {
+          const seedKey = "storyboard:creative-context-autoseeded";
+          if (window.sessionStorage.getItem(seedKey) !== "1") {
+            const { useSessionContext } = await import("../session-context");
+            if (!useSessionContext.getState().context) {
+              const active = useActiveRequest.getState().snapshot();
+              const seedText = [active.subject, ...active.modifiers].filter(Boolean).join(", ");
+              if (seedText.trim().length >= 5) {
+                useSessionContext.getState().setContext({
+                  style: "", palette: "", characters: active.subject.slice(0, 200),
+                  setting: active.modifiers.slice(0, 3).join(", ").slice(0, 200),
+                  rules: "", mood: "",
+                });
+                window.sessionStorage.setItem(seedKey, "1");
+              }
+            }
+          }
+        }
+      } catch (e) { console.warn("[OpenAI] Auto-seed failed:", e); }
 
       const tokenTotal = promptTokens.input + promptTokens.output;
       if (tokenTotal > 0) {
