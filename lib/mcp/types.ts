@@ -59,15 +59,23 @@ export interface McpPreset {
   name: string;
   description: string;
   url: string;
-  authType: "bearer" | "oauth";
+  authType: "bearer" | "oauth" | "none";
   icon: string;
 }
 
 export const MCP_PRESETS: McpPreset[] = [
   {
+    id: "gmail-local",
+    name: "Gmail (Local)",
+    description: "Local Gmail MCP — run scripts/gmail-mcp-server.ts first",
+    url: "http://localhost:3100/mcp",
+    authType: "none",
+    icon: "\u2709",
+  },
+  {
     id: "gmail",
-    name: "Gmail",
-    description: "Search and read emails",
+    name: "Gmail (Claude.ai)",
+    description: "Anthropic-hosted — requires Claude client approval",
     url: "https://gmail.mcp.claude.com/mcp",
     authType: "oauth",
     icon: "\u2709",

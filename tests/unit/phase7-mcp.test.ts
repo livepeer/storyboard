@@ -79,8 +79,8 @@ describe("MCP Client Utilities", () => {
 });
 
 describe("MCP Presets", () => {
-  it("has 4 pre-configured servers", () => {
-    expect(MCP_PRESETS).toHaveLength(4);
+  it("has 5 pre-configured servers (including local Gmail)", () => {
+    expect(MCP_PRESETS).toHaveLength(5);
   });
 
   it("presets have required fields", () => {
@@ -88,12 +88,13 @@ describe("MCP Presets", () => {
       expect(preset.id).toBeTruthy();
       expect(preset.name).toBeTruthy();
       expect(preset.url).toBeTruthy();
-      expect(preset.authType).toMatch(/^(bearer|oauth)$/);
+      expect(preset.authType).toMatch(/^(bearer|oauth|none)$/);
     }
   });
 
-  it("includes Gmail and Slack", () => {
+  it("includes local Gmail, Anthropic Gmail, and Slack", () => {
     const ids = MCP_PRESETS.map((p) => p.id);
+    expect(ids).toContain("gmail-local");
     expect(ids).toContain("gmail");
     expect(ids).toContain("slack");
   });
