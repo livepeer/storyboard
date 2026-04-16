@@ -15,6 +15,8 @@ import { useChatStore } from "@/lib/chat/store";
 import { StoryboardOpenAIProvider } from "../storyboard-providers";
 import { wrapStoryboardTool } from "../runner-adapter";
 import { setCurrentUserText } from "@/lib/tools/compound-tools";
+import { getConnectedServers } from "@/lib/mcp/store";
+import { discoverTools, executeToolCall, parseMcpToolName } from "@/lib/mcp/client";
 import { buildAgentContext } from "../context-builder";
 import { useWorkingMemory } from "../working-memory";
 import { useActiveRequest } from "../active-request";
@@ -136,7 +138,35 @@ export const openaiPlugin: AgentPlugin = {
           registeredCount++;
         }
       }
-      console.log(`[OpenAI] Tool filtering: intent=${intent.type}, registered ${registeredCount}/${listStoryboardTools().length} tools`);
+      // Register MCP tools from connected servers
+      try {
+        const mcpServers = getConnectedServers();
+        for (const server of mcpServers) {
+          try {
+            const mcpTools = await discoverTools(server);
+            for (const mt of mcpTools) {
+              tools.register({
+                name: mt.name,
+                description: mt.description || "",
+                parameters: mt.inputSchema || {},
+                mcp_exposed: false,
+                async execute(args) {
+                  const parsed = parseMcpToolName(mt.name);
+                  if (!parsed) return JSON.stringify({ error: "Invalid MCP tool name" });
+                  const result = await executeToolCall(server.url, server.token || "", parsed.originalName, args);
+                  return JSON.stringify(result.content || []);
+                },
+              });
+              registeredCount++;
+            }
+            console.log(`[OpenAI] MCP: registered ${mcpTools.length} tools from ${server.name}`);
+          } catch (e) {
+            console.warn(`[OpenAI] MCP discovery failed for ${server.name}:`, e);
+          }
+        }
+      } catch { /* MCP store not available */ }
+
+      console.log(`[OpenAI] Tool filtering: intent=${intent.type}, registered ${registeredCount}/${listStoryboardTools().length} storyboard + MCP tools`);
 
       const working = new WorkingMemoryStore();
       working.setCriticalConstraints(system ? [system] : []);
