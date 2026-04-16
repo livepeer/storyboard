@@ -495,6 +495,15 @@ All of the above landed in `livepeer/simple-infra#11` (`feat/sdk-nonblocking-io`
 
 **Do not "fix" this by adding more workers** until LV2V session state is moved to a shared store (Redis, sqlite, or equivalent). With `asyncio.to_thread` on every blocking call, a single worker handles arbitrary concurrent load without session-state coherency issues. Multi-worker is neither needed nor safe.
 
+### Tier 1 resilience (as of 2026-04-16)
+Five improvements deployed on `feat/sdk-nonblocking-io` (commit `b7ed3ec`), all in app.py only — zero gateway library changes:
+
+1. **Structured error responses** — `/stream/start` and `/inference` error paths now return `{"error":"...", "rejections":[{"url":"...","reason":"..."}], "hint":"..."}` instead of bare strings. Clients can parse rejection details and show actionable hints.
+2. **Per-orch rejection logging** — every `NoOrchestratorAvailableError` logs each orch's URL + rejection reason at ERROR level. Eliminates the "30-min debug cycle" pattern from 2026-04-15.
+3. **Deposit-aware hint** — when LV2V 503s because `ticket faceValue > max faceValue`, the error includes: `"hint": "Broadcaster deposit too low for LV2V ticket. Fund the signer wallet on Arbitrum."`. Would have diagnosed the 2026-04-15 LV2V outage in 2 seconds.
+4. **Signer failover (SIGNER_URLS)** — new env var, comma-separated. `_signer_request_with_retry` tries each URL with one retry on 5xx/network errors. Handles mid-restart LB gaps.
+5. **Graceful shutdown** — `@app.on_event("shutdown")` explicitly stops every active LV2V stream via `job.stop()`, cleans up `_publish_locks`, `_stream_started_at`, `_stream_last_publish`. Prevents the "SDK restart → browser publishes to dead streams → 404 → 410 cascade" pattern.
+
 ### /capabilities caching (as of 2026-04-12)
 `/capabilities` in app.py is wrapped with a 60s in-process TTL cache plus stale-on-error fallback. Capability lists only change on byoc-orch deploy, so 60s is fine. Single uvicorn worker = single cache, so worst case is 1 orch hit per minute. On refresh failure, the old list is returned rather than an empty response — a transient orch blip no longer blanks out the capability registry in every browser tab. The change is on `feat/sdk-capabilities-cache` in `livepeer/simple-infra` (commits `3019c51` baseline snapshot + `cc2aa23` feat), and landed for real on `feat/sdk-nonblocking-io` (#11). Currently hot-patched onto the running container via `docker cp`; will be baked in on next SDK image rebuild.
 
