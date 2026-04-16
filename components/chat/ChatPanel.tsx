@@ -8,6 +8,7 @@ import { MessageBubble } from "./MessageBubble";
 import { ToolPill } from "./ToolPill";
 import { QuickActions } from "./QuickActions";
 import { parseCommand, executeCommand } from "@/lib/skills/commands";
+import { isApplyPendingIntent, applyPendingStory } from "@/lib/story/commands";
 import { preprocessPrompt } from "@/lib/agents/preprocessor";
 import { useSessionContext } from "@/lib/agents/session-context";
 import { EpisodeSwitcher } from "./EpisodeSwitcher";
@@ -287,6 +288,20 @@ export function ChatPanel() {
   const sendMessage = useCallback(
     (text: string) => {
       if (!text.trim()) return;
+
+      // Natural-language apply for a pending /story draft. When the
+      // user has a draft displayed and says "yes" / "apply them" /
+      // "I like it" / etc., shortcut straight to the apply path
+      // instead of sending the affirmative to the agent (which would
+      // interpret it as a creative prompt and do something
+      // unexpected). Only fires when there's actually a pending story,
+      // so normal "yes" replies to other questions are unaffected.
+      if (isApplyPendingIntent(text.trim())) {
+        addMessage(text.trim(), "user");
+        setInput("");
+        applyPendingStory().then((result) => addMessage(result, "system"));
+        return;
+      }
 
       // Check for /command
       const cmd = parseCommand(text.trim());
