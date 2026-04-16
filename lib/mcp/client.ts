@@ -119,6 +119,84 @@ export async function executeToolCall(
   return data.result || { content: [{ type: "text", text: "No result" }] };
 }
 
+// ---------------------------------------------------------------------------
+// Browser-safe proxies — route through /api/mcp/* to avoid CORS
+// ---------------------------------------------------------------------------
+
+/**
+ * Discover tools via the server-side proxy at /api/mcp/discover.
+ * Use this from browser-side code (Gemini/OpenAI plugins). The direct
+ * discoverTools() hits CORS because MCP servers don't set
+ * Access-Control-Allow-Origin headers.
+ */
+export async function discoverToolsViaProxy(
+  server: McpServerConfig
+): Promise<McpToolDef[]> {
+  const resp = await fetch("/api/mcp/discover", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ serverUrl: server.url, token: server.token }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+    throw new Error((err as Record<string, string>).error || `MCP proxy error ${resp.status}`);
+  }
+
+  const data = (await resp.json()) as {
+    result?: { tools?: Array<{ name: string; description?: string; inputSchema?: McpToolDef["inputSchema"] }> };
+    error?: { message: string };
+  };
+
+  if (data.error) throw new Error(`MCP error: ${data.error.message}`);
+  const tools = data.result?.tools || [];
+  return tools.map((t) => ({
+    name: `mcp__${server.id}__${t.name}`,
+    description: `[${server.name}] ${t.description || t.name}`,
+    inputSchema: t.inputSchema || { type: "object" as const },
+    _mcpServerId: server.id,
+    _mcpServerUrl: server.url,
+  }));
+}
+
+/**
+ * Execute a tool call via the server-side proxy at /api/mcp/call.
+ * Browser-safe equivalent of executeToolCall().
+ */
+export async function executeToolCallViaProxy(
+  serverUrl: string,
+  token: string | undefined,
+  originalToolName: string,
+  args: Record<string, unknown>
+): Promise<McpToolCallResponse> {
+  const resp = await fetch("/api/mcp/call", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ serverUrl, token, toolName: originalToolName, args }),
+  });
+
+  if (!resp.ok) {
+    return {
+      content: [{ type: "text", text: `MCP proxy error: HTTP ${resp.status}` }],
+      isError: true,
+    };
+  }
+
+  const data = (await resp.json()) as {
+    result?: McpToolCallResponse;
+    error?: { message: string };
+  };
+
+  if (data.error) {
+    return {
+      content: [{ type: "text", text: `MCP error: ${data.error.message}` }],
+      isError: true,
+    };
+  }
+
+  return data.result || { content: [{ type: "text", text: "No result" }] };
+}
+
 /**
  * Check if a tool name is an MCP tool (prefixed with mcp__).
  */

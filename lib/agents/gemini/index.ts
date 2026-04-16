@@ -20,7 +20,7 @@ import { StoryboardGeminiProvider } from "../storyboard-providers";
 import { wrapStoryboardTool } from "../runner-adapter";
 import { setCurrentUserText } from "@/lib/tools/compound-tools";
 import { getConnectedServers } from "@/lib/mcp/store";
-import { discoverTools, executeToolCall, parseMcpToolName } from "@/lib/mcp/client";
+import { discoverToolsViaProxy, executeToolCallViaProxy, parseMcpToolName } from "@/lib/mcp/client";
 
 const MAX_TOOL_ROUNDS = 20;
 
@@ -576,7 +576,7 @@ Do NOT generate generic placeholder images. Only create cards for REAL email con
         const mcpServers = getConnectedServers();
         for (const server of mcpServers) {
           try {
-            const mcpTools = await discoverTools(server);
+            const mcpTools = await discoverToolsViaProxy(server);
             for (const mt of mcpTools) {
               tools.register({
                 name: mt.name,
@@ -586,7 +586,7 @@ Do NOT generate generic placeholder images. Only create cards for REAL email con
                 async execute(args) {
                   const parsed = parseMcpToolName(mt.name);
                   if (!parsed) return JSON.stringify({ error: "Invalid MCP tool name" });
-                  const result = await executeToolCall(server.url, server.token || "", parsed.originalName, args);
+                  const result = await executeToolCallViaProxy(server.url, server.token || "", parsed.originalName, args);
                   return JSON.stringify(result.content || []);
                 },
               });
