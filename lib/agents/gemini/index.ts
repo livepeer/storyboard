@@ -321,46 +321,11 @@ Do NOT generate generic placeholder images. Only create cards for REAL email con
       const briefingDirective = isBriefingRequest && getConnectedServers().some((s) =>
         s.name.toLowerCase().includes("gmail") || s.id === "gmail" || s.id === "gmail-local"
       ) ? `
-## Daily Briefing Mode (ACTIVE) — YOU MUST GENERATE VISUAL SLIDES
-
-IMPORTANT: This is a TWO-PHASE workflow. You MUST complete BOTH phases.
-Do NOT stop after fetching emails. You MUST call create_media.
-
-### Phase 1 — Fetch emails (1 tool call)
-Call gmail_list to get recent inbox. Do NOT summarize in text yet.
-
-### Phase 2 — Generate 6 visual cards (1 create_media call with 6 steps)
-IMMEDIATELY after receiving gmail results, call create_media with EXACTLY 6 steps.
-
-Each card is a SCENE that represents the email topic — NOT an abstract slide.
-
-  step 0 — OVERVIEW CARD:
-    title: "Daily Briefing — [date]"
-    prompt: "cozy morning desk with a steaming coffee cup, laptop open showing notifications, warm golden sunrise light through window, productivity, photorealistic"
-
-  steps 1-5 — ONE per email. Write a SCENE prompt based on what the email is about:
-    title: "[Sender] — [Subject first 40 chars]"
-    prompt: Describe a SCENE that represents the email topic. Examples:
-      - GitHub PR notification → "developer workspace with multiple monitors showing code, dark room with screen glow, focused atmosphere"
-      - Job listing → "modern glass office building lobby, professional people walking, career opportunity, bright daylight"
-      - Product recall → "clean kitchen with stainless steel appliances, safety inspection checklist, warm household lighting"
-      - Promotional sale → "colorful retail store display with summer clothing, shopping bags, vibrant and inviting"
-      - Calendar invite → "group of friends meeting at sunrise for outdoor activity, morning energy, golden hour"
-      - CI/CD failure → "server room with blinking red warning lights, technical alert, dramatic lighting"
-      - Security alert → "digital shield protecting a glowing screen, cybersecurity, dark blue atmosphere"
-    Keep each prompt under 25 words. Make it vivid and specific to the email content.
-
-Then call canvas_organize with mode "narrative".
-Then tell the user their briefing deck is ready.
-
-### CRITICAL RULES
-- You MUST call create_media. A text-only summary is NOT acceptable.
-- Do NOT skip create_media. Do NOT say "I can create visuals if you want."
-- Call create_media in the SAME turn as the gmail results — do not wait.
-- EXACTLY 6 steps in create_media (1 title + 5 emails).
-- Each step title MUST use the REAL sender name + subject line.
-
-If Gmail returns zero emails: say "Inbox clear" and stop (no create_media needed).` : "";
+## Briefing Mode: call gmail_list THEN create_media (6 steps). Both required.
+Step 1: gmail_list. Step 2: create_media with 6 steps. Step 3: canvas_organize.
+Step 0 title="Briefing", prompt="morning desk, coffee, laptop, sunrise light, cozy".
+Steps 1-5: title="[Sender] — [Subject]", prompt=a vivid scene about the email topic (under 20 words). No abstract shapes — real scenes.
+If 0 emails: just say "Inbox clear". Otherwise you MUST call create_media.` : "";
 
       // Scene-iteration hard hint: if the user's message references
       // a specific "scene N" and there's an active project with that
