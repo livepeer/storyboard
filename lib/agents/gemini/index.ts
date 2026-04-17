@@ -57,6 +57,18 @@ const BRIEFING_STYLES: Record<string, { bg: string; accent: (urgency: string) =>
     bg: "cozy morning desk, steaming coffee, laptop open, warm sunrise through window",
     accent: () => "",
   },
+  isometric: {
+    bg: "minimalist isometric illustration, clean black lines on white background, geometric 3D perspective, simple vector art",
+    accent: (u) => u === "urgent" ? "with small red accent elements" : u === "normal" ? "with small blue accent elements" : "with small green accent elements",
+  },
+  iso: {
+    bg: "minimalist isometric illustration, clean black lines on white background, geometric 3D perspective, simple vector art",
+    accent: (u) => u === "urgent" ? "with small red accent elements" : u === "normal" ? "with small blue accent elements" : "with small green accent elements",
+  },
+  lego: {
+    bg: "LEGO brick style illustration, plastic toy aesthetic, yellow minifigure skin, colorful bricks, toy photography",
+    accent: (u) => u === "urgent" ? "red LEGO bricks" : u === "normal" ? "blue LEGO bricks" : "green LEGO bricks",
+  },
 };
 
 function detectBriefingStyle(text: string): string {
@@ -72,6 +84,16 @@ function briefingSlidePrompt(subject: string, snippet: string, style: string): s
   // Scenic/vivid: topic-based contextual images
   if (style === "scenic" || style === "vivid") {
     return guessEmailTopic(subject, snippet);
+  }
+  // Isometric: topic-based but in isometric vector style
+  if (style === "isometric" || style === "iso") {
+    const topic = guessIsoTopic(subject, snippet);
+    return `minimalist isometric illustration of ${topic}, clean black lines on white, geometric 3D, simple, no text`;
+  }
+  // LEGO: topic icons in brick style
+  if (style === "lego") {
+    const topic = guessIsoTopic(subject, snippet);
+    return `LEGO brick style scene of ${topic}, plastic minifigures, colorful bricks, toy photography`;
   }
   // All other styles: clean gradient backgrounds
   const combined = `${subject} ${snippet}`.toLowerCase();
@@ -109,6 +131,23 @@ function guessEmailTopic(subject: string, snippet: string): string {
   if (/uber|lyft|ride|delivery|food/i.test(combined))
     return "city street at dusk with car headlights, urban motion blur, energetic";
   return "professional desk with mail envelopes, morning light, warm atmosphere";
+}
+
+/** Simple topic labels for isometric/LEGO styles. */
+function guessIsoTopic(subject: string, snippet: string): string {
+  const combined = `${subject} ${snippet}`.toLowerCase();
+  if (/github|pull request|code|ci|deploy|build/i.test(combined)) return "a computer monitor showing code with a keyboard and coffee";
+  if (/job|career|hiring|interview/i.test(combined)) return "an office building with a person walking in";
+  if (/recall|safety|warning|urgent|alert/i.test(combined)) return "a warning triangle sign with exclamation mark";
+  if (/sale|discount|promo|shop|order/i.test(combined)) return "a shopping cart with gift boxes";
+  if (/calendar|invite|meeting|event/i.test(combined)) return "a calendar with a clock and people";
+  if (/security|password|login/i.test(combined)) return "a padlock with a shield";
+  if (/news|newsletter|digest/i.test(combined)) return "a newspaper with a coffee cup";
+  if (/payment|invoice|bill/i.test(combined)) return "a wallet with coins and receipt";
+  if (/travel|flight|hotel/i.test(combined)) return "an airplane taking off from a runway";
+  if (/education|university|course/i.test(combined)) return "a graduation cap on top of books";
+  if (/uber|ride|delivery|food/i.test(combined)) return "a delivery scooter with package";
+  return "an envelope with a notification bell";
 }
 
 /**
