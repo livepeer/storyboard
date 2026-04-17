@@ -503,23 +503,29 @@ export function ContextMenu() {
         const refId = `${isVideo ? "vid" : "img"}-${cardNum}`;
         const title = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
 
-        if (isVideo) {
-          // Videos: use blob URL (lightweight reference, plays immediately).
-          // Data URLs for video are multi-MB base64 strings that browsers choke on.
-          const blobUrl = URL.createObjectURL(file);
-          const card = store.addCard({ type, title, refId });
-          store.updateCard(card.id, { url: blobUrl });
-          addMessage(`Imported: ${refId} — "${title}". Right-click for actions.`, "system");
-        } else {
-          // Images: use data URL (works for display + inference)
-          const reader = new FileReader();
-          reader.onload = () => {
-            const card = store.addCard({ type, title, refId });
-            store.updateCard(card.id, { url: reader.result as string });
-            addMessage(`Imported: ${refId} — "${title}". Right-click for actions.`, "system");
-          };
-          reader.readAsDataURL(file);
-        }
+        // Show card immediately with blob URL for preview
+        const blobUrl = URL.createObjectURL(file);
+        const card = store.addCard({ type, title, refId });
+        store.updateCard(card.id, { url: blobUrl });
+        addMessage(`Imported: ${refId} — "${title}". Uploading…`, "system");
+
+        // Upload to get a public HTTP URL (needed for inference/restyle/animate)
+        const reader = new FileReader();
+        reader.onload = async () => {
+          try {
+            const resp = await fetch("/api/upload", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ dataUrl: reader.result, fileName: file.name }),
+            });
+            if (resp.ok) {
+              const { url } = (await resp.json()) as { url: string };
+              store.updateCard(card.id, { url });
+              addMessage(`${refId} uploaded — ready for restyle, animate, try-on, etc.`, "system");
+            }
+          } catch { /* upload failed — blob URL still works for display */ }
+        };
+        reader.readAsDataURL(file);
       };
       input.click();
     };
