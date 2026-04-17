@@ -10,6 +10,7 @@
 import type { Story, StoryScene } from "./types";
 import { STORYTELLER_SYSTEM_PROMPT } from "./storyteller-prompt";
 import type { CreativeContext } from "@/lib/agents/session-context";
+import { extractGeminiTokens } from "@/lib/utils/execution-tracker";
 
 /**
  * Tolerant JSON extractor. LLMs sometimes wrap output in code fences,
@@ -135,7 +136,7 @@ export function validateStoryPayload(
 export async function generateStory(
   userPrompt: string
 ): Promise<
-  | { ok: true; story: Omit<Story, "id" | "createdAt" | "status"> }
+  | { ok: true; story: Omit<Story, "id" | "createdAt" | "status">; tokens: { input: number; output: number } }
   | { ok: false; error: string }
 > {
   const trimmed = userPrompt.trim();
@@ -170,13 +171,11 @@ export async function generateStory(
     return { ok: false, error: `Storyteller error ${resp.status}: ${text.slice(0, 140)}` };
   }
 
-  const payload = (await resp.json()) as {
-    candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
-    }>;
-  };
+  const payload = await resp.json();
+  const tokens = extractGeminiTokens(payload);
 
-  const text = payload.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+  const text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
+    .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
   if (!text) {
     return { ok: false, error: "Storyteller returned an empty response — try again." };
   }
@@ -190,5 +189,5 @@ export async function generateStory(
   if (!validation.ok) {
     return { ok: false, error: validation.reason };
   }
-  return validation;
+  return { ...validation, tokens };
 }

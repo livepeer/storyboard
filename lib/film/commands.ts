@@ -2,6 +2,7 @@ import { useFilmStore } from "./store";
 import { generateFilm } from "./generator";
 import { FILM_SKILLS, setActiveFilmSkill, getActiveFilmSkill } from "./film-prompt";
 import type { Film } from "./types";
+import { createTracker } from "@/lib/utils/execution-tracker";
 
 export const FILM_CARD_MARKER = "@@film@@";
 export const FILM_CARD_END = "@@/film@@";
@@ -105,13 +106,17 @@ function filmShow(id: string): string {
 }
 
 async function filmGenerate(prompt: string): Promise<string> {
+  const tracker = createTracker("/film");
   const result = await generateFilm(prompt);
   if (!result.ok) return `Film director: ${result.error}`;
+  if (result.tokens) tracker.trackLLM(result.tokens.input, result.tokens.output);
+  tracker.announce();
   const film = useFilmStore.getState().addFilm(result.film);
   return renderFilmEnvelope(film);
 }
 
 async function filmApply(idOrEmpty: string): Promise<string> {
+  const tracker = createTracker("/film apply");
   const store = useFilmStore.getState();
   const film = idOrEmpty ? store.getById(idOrEmpty) : store.getPending();
   if (!film) return idOrEmpty ? `No film "${idOrEmpty}".` : "No pending film. Try /film <idea> first.";
@@ -141,6 +146,7 @@ async function filmApply(idOrEmpty: string): Promise<string> {
     const genTool = tools.find((t) => t.name === "project_generate");
     if (!createTool || !genTool) return "Apply failed: project tools not registered.";
 
+    tracker.trackTool("project_create", true);
     const createResult = await createTool.execute({
       brief: `Film: ${film.title} — ${film.style}`,
       scenes,
@@ -154,6 +160,7 @@ async function filmApply(idOrEmpty: string): Promise<string> {
     projectId = (createResult.data as Record<string, unknown>)?.project_id as string;
     if (!projectId) return "Apply failed: no project ID returned.";
 
+    tracker.trackTool("project_generate", true);
     await genTool.execute({ project_id: projectId });
   } catch (e) {
     return `Apply failed: ${e instanceof Error ? e.message : "unknown"}`;
@@ -198,6 +205,7 @@ async function filmApply(idOrEmpty: string): Promise<string> {
 
   useFilmStore.getState().markApplied(film.id);
   useFilmStore.getState().setPending(null);
+  tracker.announce();
 
   const shotSummary = film.shots.map((s) => `${s.index}. **${s.title}** [${s.camera}]`).join("\n");
   return `🎬 "${film.title}" applied — ${scenes.length} key frames + ${animatedCount} video clips on the canvas.\n\n${shotSummary}`;

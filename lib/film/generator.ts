@@ -2,10 +2,11 @@ import type { Film, FilmShot } from "./types";
 import type { CreativeContext } from "@/lib/agents/session-context";
 import { FILM_SYSTEM_PROMPT, FILM_SKILLS, getActiveFilmSkill, detectFilmSkill, setActiveFilmSkill } from "./film-prompt";
 import { extractJsonObject } from "@/lib/story/generator";
+import { extractGeminiTokens } from "@/lib/utils/execution-tracker";
 
 export async function generateFilm(
   userPrompt: string
-): Promise<{ ok: true; film: Omit<Film, "id" | "createdAt" | "status"> } | { ok: false; error: string }> {
+): Promise<{ ok: true; film: Omit<Film, "id" | "createdAt" | "status">; tokens: { input: number; output: number } } | { ok: false; error: string }> {
   const trimmed = userPrompt.trim();
   if (trimmed.length < 3) return { ok: false, error: "Give me a concept — a character, scene, or situation." };
 
@@ -39,10 +40,10 @@ export async function generateFilm(
     return { ok: false, error: `Film director error ${resp.status}: ${text.slice(0, 140)}` };
   }
 
-  const payload = (await resp.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  const text = payload.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+  const payload = await resp.json();
+  const tokens = extractGeminiTokens(payload);
+  const text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
+    .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
   if (!text) return { ok: false, error: "Film director returned empty response." };
 
   const parsed = extractJsonObject(text);
@@ -87,5 +88,6 @@ export async function generateFilm(
   return {
     ok: true,
     film: { originalPrompt: trimmed, title, style, characterLock, context, shots },
+    tokens,
   };
 }

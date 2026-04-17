@@ -58,12 +58,12 @@ const BRIEFING_STYLES: Record<string, { bg: string; accent: (urgency: string) =>
     accent: () => "",
   },
   isometric: {
-    bg: "minimalist isometric illustration, clean black lines on white background, geometric 3D perspective, simple vector art",
-    accent: (u) => u === "urgent" ? "with small red accent elements" : u === "normal" ? "with small blue accent elements" : "with small green accent elements",
+    bg: "detailed isometric 3D illustration, colorful, vibrant pastel palette, clean sharp edges, clay render aesthetic, soft shadows on light gray background",
+    accent: (u) => u === "urgent" ? "red and orange color scheme" : u === "normal" ? "blue and teal color scheme" : "green and mint color scheme",
   },
   iso: {
-    bg: "minimalist isometric illustration, clean black lines on white background, geometric 3D perspective, simple vector art",
-    accent: (u) => u === "urgent" ? "with small red accent elements" : u === "normal" ? "with small blue accent elements" : "with small green accent elements",
+    bg: "detailed isometric 3D illustration, colorful, vibrant pastel palette, clean sharp edges, clay render aesthetic, soft shadows on light gray background",
+    accent: (u) => u === "urgent" ? "red and orange color scheme" : u === "normal" ? "blue and teal color scheme" : "green and mint color scheme",
   },
   lego: {
     bg: "LEGO brick style illustration, plastic toy aesthetic, yellow minifigure skin, colorful bricks, toy photography",
@@ -85,10 +85,10 @@ function briefingSlidePrompt(subject: string, snippet: string, style: string): s
   if (style === "scenic" || style === "vivid") {
     return guessEmailTopic(subject, snippet);
   }
-  // Isometric: topic-based but in isometric vector style
+  // Isometric: topic-based in colorful clay-render isometric style
   if (style === "isometric" || style === "iso") {
     const topic = guessIsoTopic(subject, snippet);
-    return `minimalist isometric illustration of ${topic}, clean black lines on white, geometric 3D, simple, no text`;
+    return `detailed isometric 3D illustration of ${topic}, colorful pastel palette, clay render, soft shadows, light gray background, sharp edges, no text`;
   }
   // LEGO: topic icons in brick style
   if (style === "lego") {

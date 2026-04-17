@@ -20,6 +20,7 @@
 import { useStoryStore } from "./store";
 import { generateStory } from "./generator";
 import type { Story, StoryListItem } from "./types";
+import { createTracker } from "@/lib/utils/execution-tracker";
 
 /** Envelope marker used by MessageBubble to detect and render a StoryCard. */
 export const STORY_CARD_MARKER = "@@story@@";
@@ -157,10 +158,13 @@ function storyShow(id: string): string {
 }
 
 async function storyGenerate(prompt: string): Promise<string> {
+  const tracker = createTracker("/story");
   const result = await generateStory(prompt);
   if (!result.ok) {
     return `Storyteller: ${result.error}`;
   }
+  if (result.tokens) tracker.trackLLM(result.tokens.input, result.tokens.output);
+  tracker.announce();
   const story = useStoryStore.getState().addStory(result.story);
   return renderStoryEnvelope(story);
 }
@@ -174,6 +178,7 @@ async function storyGenerate(prompt: string): Promise<string> {
  * The agent plugin's existing image fast path handles the rest.
  */
 async function storyApply(idOrEmpty: string): Promise<string> {
+  const tracker = createTracker("/story apply");
   const store = useStoryStore.getState();
   const story = idOrEmpty
     ? store.getById(idOrEmpty)
@@ -222,6 +227,7 @@ async function storyApply(idOrEmpty: string): Promise<string> {
     if (!projectCreateTool || !projectGenerateTool) {
       return "Apply failed: project_create tool is not registered.";
     }
+    tracker.trackTool("project_create", true);
     createResult = await projectCreateTool.execute({
       brief,
       scenes: scenesPayload,
@@ -235,6 +241,7 @@ async function storyApply(idOrEmpty: string): Promise<string> {
     if (createResult?.success && createResult.data) {
       const projectId = (createResult.data as Record<string, unknown>).project_id as string | undefined;
       if (projectId) {
+        tracker.trackTool("project_generate", true);
         await projectGenerateTool.execute({ project_id: projectId });
       }
     }
@@ -246,6 +253,7 @@ async function storyApply(idOrEmpty: string): Promise<string> {
   useStoryStore.getState().markApplied(story.id);
   useStoryStore.getState().setPending(null);
 
+  tracker.announce();
   if (!createResult?.success) {
     return `Apply partially failed: ${createResult?.error ?? "unknown error"}`;
   }
