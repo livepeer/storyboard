@@ -51,12 +51,24 @@ export const FALLBACK_CHAINS: Record<string, string[]> = {
   "flux-fill": ["kontext-edit"],
 
   // Video image-to-video
-  "veo-i2v": ["ltx-i2v"],
-  "ltx-i2v": ["veo-i2v"],
+  "veo-i2v": ["ltx-i2v", "pixverse-i2v"],
+  "ltx-i2v": ["veo-i2v", "pixverse-i2v"],
+  "pixverse-i2v": ["veo-i2v", "ltx-i2v"],
 
   // Video text-to-video
-  "veo-t2v": ["ltx-t2v"],
-  "ltx-t2v": ["veo-t2v"],
+  "veo-t2v": ["ltx-t2v", "pixverse-t2v"],
+  "ltx-t2v": ["veo-t2v", "pixverse-t2v"],
+  "pixverse-t2v": ["veo-t2v", "ltx-t2v"],
+
+  // Video transition
+  "veo-transition": ["pixverse-transition"],
+  "pixverse-transition": ["veo-transition"],
+
+  // TTS
+  "chatterbox-tts": ["gemini-tts", "inworld-tts", "grok-tts"],
+  "gemini-tts": ["chatterbox-tts", "inworld-tts", "grok-tts"],
+  "inworld-tts": ["gemini-tts", "chatterbox-tts"],
+  "grok-tts": ["gemini-tts", "chatterbox-tts"],
   // bg-remove, topaz-upscale, chatterbox-tts, lipsync, music, sfx,
   // face-swap, sam3, talking-head, veo-transition → single model,
   // no fallback chain.
@@ -187,14 +199,46 @@ function selectCapability(
     const resolved = resolveCapability(modelOverride, action);
     if (resolved) {
       const id = resolved.toLowerCase();
-      const isVideo = id.includes("i2v") || id.includes("t2v") || id.includes("ltx");
+      const isVideo = id.includes("i2v") || id.includes("t2v") || id.includes("transition") || id.includes("pixverse") || id.includes("inpaint");
       const isAudio = id.includes("tts");
+      const is3D = id.includes("3d");
       return {
         capability: resolved,
-        type: isVideo ? "video" : isAudio ? "audio" : "image",
+        type: isVideo ? "video" : isAudio ? "audio" : is3D ? "image" : "image",
       };
     }
-    // Could not resolve — fall through to action-based selection
+  }
+
+  // Detect explicit model name in user text: "using pixverse", "with tripo",
+  // "grok tts", etc. This lets users bypass the automatic routing.
+  const userModelMention = (currentUserText || "").match(
+    /\b(?:using|with|via|use)\s+(pixverse|tripo|grok|inworld|gemini.tts|void)/i
+  ) || (currentUserText || "").match(
+    /\b(pixverse|tripo|grok.tts|inworld.tts|void.inpaint)\b/i
+  );
+  if (userModelMention) {
+    const mention = userModelMention[1].toLowerCase().replace(/[.\s]+/g, "-");
+    // Map user mentions to capability names
+    const mentionMap: Record<string, { capability: string; type: CardType }> = {
+      "pixverse": { capability: hasSourceUrl ? "pixverse-i2v" : "pixverse-t2v", type: "video" },
+      "pixverse-t2v": { capability: "pixverse-t2v", type: "video" },
+      "pixverse-i2v": { capability: "pixverse-i2v", type: "video" },
+      "tripo": { capability: hasSourceUrl ? "tripo-i3d" : "tripo-t3d", type: "image" },
+      "tripo-t3d": { capability: "tripo-t3d", type: "image" },
+      "tripo-i3d": { capability: "tripo-i3d", type: "image" },
+      "grok-tts": { capability: "grok-tts", type: "audio" },
+      "inworld-tts": { capability: "inworld-tts", type: "audio" },
+      "gemini-tts": { capability: "gemini-tts", type: "audio" },
+      "void-inpaint": { capability: "void-inpaint", type: "video" },
+    };
+    const match = mentionMap[mention];
+    if (match) {
+      const live = getCachedCapabilities();
+      if (live && live.some((c) => c.name === match.capability)) {
+        console.log(`[selectCapability] User requested "${mention}" → ${match.capability}`);
+        return match;
+      }
+    }
   }
 
   // Detect "user wants video" from the prompt text. This must be
@@ -219,7 +263,8 @@ function selectCapability(
   const hasVideoNoun = /\b(video|clip|footage|animation)\b/.test(lowerUser);
   const hasDuration = /\b\d+[- ]second\b/.test(lowerUser);
   const explicitMakeVideo = /\b(make|generate|create|produce)\s+(a|an|me\s+a|me\s+an)?\s*\d*[- ]?\s*seconds?\s*(video|clip|animation|movie)\b/.test(lowerUser);
-  const asksForVideo = (hasVideoNoun && hasDuration) || explicitMakeVideo;
+  const mentionsVideoModel = /\b(pixverse|veo|ltx)\b/.test(lowerUser) && hasVideoNoun;
+  const asksForVideo = (hasVideoNoun && hasDuration) || explicitMakeVideo || mentionsVideoModel;
 
   // Motion verbs that indicate the user wants an animation (image -> video).
   // Checked on BOTH the user text AND Gemini's expanded prompt (either
