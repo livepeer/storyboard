@@ -321,40 +321,37 @@ Do NOT generate generic placeholder images. Only create cards for REAL email con
       const briefingDirective = isBriefingRequest && getConnectedServers().some((s) =>
         s.name.toLowerCase().includes("gmail") || s.id === "gmail" || s.id === "gmail-local"
       ) ? `
-## Daily Briefing Mode (ACTIVE) — Slide Deck Video Format
-You have access to Gmail tools via MCP. Produce a 6-slide visual briefing:
+## Daily Briefing Mode (ACTIVE) — YOU MUST GENERATE VISUAL SLIDES
 
-### Step 1 — Fetch & Analyze
-1. Call gmail_list (or gmail_search with query "is:unread OR is:important") for last 24h
-2. From the results, pick the TOP 5 most important emails by urgency/sender/subject
-3. Briefly summarize each email in 1-2 sentences
+IMPORTANT: This is a TWO-PHASE workflow. You MUST complete BOTH phases.
+Do NOT stop after fetching emails. You MUST call create_media.
 
-### Step 2 — Generate Slides (EXACTLY 6 steps in ONE create_media call)
-Call create_media with exactly 6 steps. Each step produces one "slide" image:
+### Phase 1 — Fetch emails (1 tool call)
+Call gmail_list to get recent inbox. Do NOT summarize in text yet.
 
-  Step 0 — TITLE SLIDE:
-    title: "Daily Briefing — [today's date]"
-    prompt: "Clean modern presentation slide, dark background, centered white text reading 'Daily Briefing', minimalist corporate design, top 5 email summary overview"
+### Phase 2 — Generate 6 visual slides (1 create_media call with 6 steps)
+IMMEDIATELY after receiving gmail results, call create_media with EXACTLY 6 steps:
 
-  Steps 1-5 — EMAIL SLIDES (one per important email):
-    title: "[Sender] — [Subject line, first 40 chars]"
-    prompt: "Presentation slide, dark gradient background, [color for urgency: red-orange for urgent, blue for normal, green for FYI], abstract geometric shapes suggesting [email topic], corporate keynote aesthetic, clean and readable"
+  step 0: title="Daily Briefing — Today", action="generate",
+          prompt="minimalist dark presentation title slide, corporate keynote, centered white typography, abstract data visualization, professional"
 
-### Step 3 — Organize
-Call canvas_organize with mode "narrative" so slides flow left-to-right in a row.
+  steps 1-5: ONE per top email, each with:
+          title="[Sender] — [Subject first 40 chars]",
+          action="generate",
+          prompt="presentation slide, [red-orange gradient for urgent | blue for normal | green for FYI], abstract geometric shapes, corporate keynote, dark background, clean"
 
-### Step 4 — Present
-Tell the user: "Your briefing is ready — 6 slides on the canvas. Slide 1 is the overview, slides 2-6 are your top 5 emails. Each card title shows the sender and subject."
+Then call canvas_organize with mode "narrative".
 
-### Rules
-- EXACTLY 6 create_media steps — no more, no fewer
-- Each step title MUST reference the REAL email sender + subject (not generic)
-- Prompts describe ABSTRACT VISUALS themed to the email topic — NOT literal text screenshots
-- Color code by urgency: red/orange = urgent, blue = normal, green = FYI
-- If fewer than 5 emails found, fill remaining slides with "No more emails" placeholders but still create 6 total
+Then tell the user their briefing deck is ready.
 
-If Gmail returns zero emails:
-  Say "Your inbox is clear — nothing urgent today. Have a great day!" and do NOT generate any images.` : "";
+### CRITICAL RULES
+- You MUST call create_media. A text-only summary is NOT acceptable.
+- Do NOT skip create_media. Do NOT say "I can create visuals if you want."
+- Call create_media in the SAME turn as the gmail results — do not wait.
+- EXACTLY 6 steps in create_media (1 title + 5 emails).
+- Each step title MUST use the REAL sender name + subject line.
+
+If Gmail returns zero emails: say "Inbox clear" and stop (no create_media needed).` : "";
 
       // Scene-iteration hard hint: if the user's message references
       // a specific "scene N" and there's an active project with that
