@@ -5,6 +5,8 @@ import type { ChatMessage } from "@/lib/chat/store";
 import { RatingWidget } from "./RatingWidget";
 import { StoryCard } from "./StoryCard";
 import { isStoryEnvelope, parseStoryEnvelope } from "@/lib/story/commands";
+import { FilmCard } from "./FilmCard";
+import { isFilmEnvelope, parseFilmEnvelope } from "@/lib/film/commands";
 
 const roleStyles: Record<string, string> = {
   user: "self-end bg-white/[0.08] text-[var(--text)]",
@@ -84,6 +86,10 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
   if (isStoryEnvelope(message.text)) {
     const story = parseStoryEnvelope(message.text);
     if (story) return <StoryCard story={story} />;
+  }
+  if (isFilmEnvelope(message.text)) {
+    const film = parseFilmEnvelope(message.text);
+    if (film) return <FilmCard film={film} />;
   }
 
   const ratingMatch = message.role === "agent" ? RATING_RE.exec(message.text) : null;

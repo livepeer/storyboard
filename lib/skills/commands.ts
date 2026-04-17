@@ -8,6 +8,7 @@ import {
 } from "@/lib/agents/session-context";
 import { handleOrganize, handleLayoutCommand } from "@/lib/layout/commands";
 import { handleStoryCommand } from "@/lib/story/commands";
+import { handleFilmCommand } from "@/lib/film/commands";
 
 interface ParsedCommand {
   command: string;
@@ -62,8 +63,12 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return contextGen(cmd.args);
     case "story":
       return handleStoryCommand(cmd.args);
+    case "film":
+      return handleFilmCommand(cmd.args);
+    case "film/load":
+      return handleFilmCommand(`load ${cmd.args}`);
     default:
-      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /story, /capabilities, /organize, /layout, /save, /export`;
+      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /story, /film, /capabilities, /organize, /layout, /save, /export`;
   }
 }
 

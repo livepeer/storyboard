@@ -9,6 +9,7 @@ import { ToolPill } from "./ToolPill";
 import { QuickActions } from "./QuickActions";
 import { parseCommand, executeCommand } from "@/lib/skills/commands";
 import { isApplyPendingIntent, applyPendingStory } from "@/lib/story/commands";
+import { isFilmApplyIntent, applyPendingFilm } from "@/lib/film/commands";
 import { preprocessPrompt } from "@/lib/agents/preprocessor";
 import { useSessionContext } from "@/lib/agents/session-context";
 import { EpisodeSwitcher } from "./EpisodeSwitcher";
@@ -300,6 +301,12 @@ export function ChatPanel() {
         addMessage(text.trim(), "user");
         setInput("");
         applyPendingStory().then((result) => addMessage(result, "system"));
+        return;
+      }
+      if (isFilmApplyIntent(text.trim())) {
+        addMessage(text.trim(), "user");
+        setInput("");
+        applyPendingFilm().then((result) => addMessage(result, "system"));
         return;
       }
 
