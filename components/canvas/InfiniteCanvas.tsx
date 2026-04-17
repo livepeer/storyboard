@@ -125,64 +125,85 @@ export function InfiniteCanvas() {
     []
   );
 
-  // Dismiss canvas menu on click anywhere
+  // Dismiss canvas menu on click outside the menu
+  const canvasMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!canvasMenu) return;
-    const dismiss = () => setTimeout(() => setCanvasMenu(null), 10);
-    window.addEventListener("pointerdown", dismiss);
-    return () => window.removeEventListener("pointerdown", dismiss);
+    const dismiss = (e: PointerEvent) => {
+      // Don't dismiss if clicking inside the menu itself
+      if (canvasMenuRef.current?.contains(e.target as Node)) return;
+      setCanvasMenu(null);
+    };
+    // Use timeout so the opening right-click doesn't immediately dismiss
+    const timer = setTimeout(() => window.addEventListener("pointerdown", dismiss), 50);
+    return () => { clearTimeout(timer); window.removeEventListener("pointerdown", dismiss); };
   }, [canvasMenu]);
 
-  const importFile = useCallback(
-    (type: "image" | "video") => {
-      setCanvasMenu(null);
+  // Import dialog state
+  const [importDialog, setImportDialog] = useState<{
+    type: "image" | "video";
+    mode: "file" | "url";
+    previewUrl?: string;
+    fileName?: string;
+    urlInput?: string;
+    file?: File;
+  } | null>(null);
+
+  const openImportDialog = useCallback((type: "image" | "video", mode: "file" | "url") => {
+    setCanvasMenu(null);
+    if (mode === "file") {
+      // Open file picker SYNCHRONOUSLY in the click handler (user activation)
       const input = document.createElement("input");
       input.type = "file";
       input.accept = type === "image" ? "image/*" : "video/*";
       input.onchange = () => {
         const file = input.files?.[0];
         if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = reader.result as string;
-          const store = useCanvasStore.getState();
-          const cardNum = store.cards.length + 1;
-          const prefix = type === "image" ? "img" : "vid";
-          const refId = `${prefix}-${cardNum}`;
-          const title = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
-          const card = store.addCard({ type, title, refId });
-          store.updateCard(card.id, { url: dataUrl });
-          useChatStore.getState().addMessage(
-            `Imported ${type}: ${refId} — "${title}". Right-click for actions, or reference as "${refId}" in chat.`,
-            "system"
-          );
-        };
-        reader.readAsDataURL(file);
+        const url = URL.createObjectURL(file);
+        setImportDialog({ type, mode: "file", previewUrl: url, fileName: file.name, file });
       };
       input.click();
-    },
-    []
-  );
+    } else {
+      setImportDialog({ type, mode: "url", urlInput: "" });
+    }
+  }, []);
 
-  const importUrl = useCallback(
-    (type: "image" | "video") => {
-      setCanvasMenu(null);
-      const url = window.prompt(`Enter ${type} URL:`);
-      if (!url?.trim()) return;
+  const confirmImport = useCallback(() => {
+    if (!importDialog) return;
+    const { type, mode, file, previewUrl, urlInput, fileName } = importDialog;
+    setImportDialog(null);
+
+    if (mode === "file" && file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const store = useCanvasStore.getState();
+        const cardNum = store.cards.length + 1;
+        const refId = `${type === "image" ? "img" : "vid"}-${cardNum}`;
+        const title = (fileName || "imported").replace(/\.[^.]+$/, "").slice(0, 40);
+        const card = store.addCard({ type, title, refId });
+        store.updateCard(card.id, { url: dataUrl });
+        useChatStore.getState().addMessage(
+          `Imported ${type}: ${refId} — "${title}". Right-click for actions.`,
+          "system"
+        );
+      };
+      reader.readAsDataURL(file);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    } else if (mode === "url" && urlInput?.trim()) {
+      const url = urlInput.trim();
       const store = useCanvasStore.getState();
       const cardNum = store.cards.length + 1;
-      const prefix = type === "image" ? "img" : "vid";
-      const refId = `${prefix}-${cardNum}`;
+      const refId = `${type === "image" ? "img" : "vid"}-${cardNum}`;
       const title = url.split("/").pop()?.split("?")[0]?.slice(0, 40) || `Imported ${type}`;
       const card = store.addCard({ type, title, refId });
-      store.updateCard(card.id, { url: url.trim() });
+      store.updateCard(card.id, { url });
       useChatStore.getState().addMessage(
-        `Imported ${type} from URL: ${refId} — "${title}". Right-click for actions, or reference as "${refId}" in chat.`,
+        `Imported ${type} from URL: ${refId} — "${title}". Right-click for actions.`,
         "system"
       );
-    },
-    []
-  );
+    }
+  }, [importDialog]);
 
   return (
     <div
@@ -245,37 +266,98 @@ export function InfiniteCanvas() {
       {/* Canvas context menu — import media */}
       {canvasMenu && (
         <div
+          ref={canvasMenuRef}
           className="fixed z-[2000] min-w-[180px] rounded-xl border border-[var(--border)] bg-[rgba(20,20,20,0.97)] p-1 shadow-xl backdrop-blur-xl"
           style={{ left: canvasMenu.x, top: canvasMenu.y }}
         >
           <div className="px-2 py-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
             Import Media
           </div>
-          <button
-            onClick={() => importFile("image")}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]"
-          >
+          <button onClick={() => openImportDialog("image", "file")}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]">
             <span>🖼</span> Import Image (file)
           </button>
-          <button
-            onClick={() => importUrl("image")}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]"
-          >
+          <button onClick={() => openImportDialog("image", "url")}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]">
             <span>🔗</span> Import Image (URL)
           </button>
           <div className="my-1 border-t border-white/[0.06]" />
-          <button
-            onClick={() => importFile("video")}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]"
-          >
+          <button onClick={() => openImportDialog("video", "file")}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]">
             <span>🎬</span> Import Video (file)
           </button>
-          <button
-            onClick={() => importUrl("video")}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]"
-          >
+          <button onClick={() => openImportDialog("video", "url")}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]">
             <span>🔗</span> Import Video (URL)
           </button>
+        </div>
+      )}
+
+      {/* Import preview dialog */}
+      {importDialog && (
+        <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => { if (importDialog.previewUrl) URL.revokeObjectURL(importDialog.previewUrl); setImportDialog(null); }}>
+          <div className="w-[420px] rounded-2xl border border-[var(--border)] bg-[rgba(25,25,25,0.98)] p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-[var(--text)]">
+              Import {importDialog.type === "image" ? "Image" : "Video"}
+            </h3>
+
+            {/* URL input mode */}
+            {importDialog.mode === "url" && (
+              <div className="mt-3">
+                <input
+                  autoFocus
+                  type="url"
+                  placeholder={`Paste ${importDialog.type} URL…`}
+                  value={importDialog.urlInput || ""}
+                  onChange={(e) => setImportDialog({ ...importDialog, urlInput: e.target.value })}
+                  onKeyDown={(e) => { if (e.key === "Enter") confirmImport(); }}
+                  className="w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-xs text-[var(--text)] outline-none focus:border-[var(--border-hover)]"
+                />
+                {/* URL preview */}
+                {importDialog.urlInput && importDialog.urlInput.startsWith("http") && (
+                  <div className="mt-3 overflow-hidden rounded-lg border border-white/[0.06]">
+                    {importDialog.type === "image" ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={importDialog.urlInput} alt="preview" className="max-h-[200px] w-full object-contain bg-black/30"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                    ) : (
+                      <video src={importDialog.urlInput} controls className="max-h-[200px] w-full object-contain bg-black/30" />
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* File preview */}
+            {importDialog.mode === "file" && importDialog.previewUrl && (
+              <div className="mt-3">
+                <div className="text-[10px] text-[var(--text-dim)] mb-2">{importDialog.fileName}</div>
+                <div className="overflow-hidden rounded-lg border border-white/[0.06]">
+                  {importDialog.type === "image" ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={importDialog.previewUrl} alt="preview" className="max-h-[200px] w-full object-contain bg-black/30" />
+                  ) : (
+                    <video src={importDialog.previewUrl} controls className="max-h-[200px] w-full object-contain bg-black/30" />
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button onClick={() => { if (importDialog.previewUrl) URL.revokeObjectURL(importDialog.previewUrl); setImportDialog(null); }}
+                className="rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:bg-white/[0.06]">
+                Cancel
+              </button>
+              <button onClick={confirmImport}
+                disabled={importDialog.mode === "url" && !importDialog.urlInput?.trim()}
+                className="rounded-lg bg-emerald-500/20 px-4 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40">
+                Import
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
