@@ -27,6 +27,27 @@ export function parseCommand(input: string): ParsedCommand | null {
   return { command: match[1], args: (match[2] || "").trim() };
 }
 
+async function handleQuickStyle(styleName: string, prompt: string, stylePrompt: string): Promise<string> {
+  if (!prompt) return `Usage: /${styleName} <description>\nExample: /${styleName} a cute cat sitting on a mushroom`;
+  try {
+    const { runInference } = await import("@/lib/sdk/client");
+    const canvas = useCanvasStore.getState();
+    const cardNum = canvas.cards.length + 1;
+    const refId = `img-${cardNum}`;
+    const card = canvas.addCard({ type: "image", title: `${styleName}: ${prompt.slice(0, 30)}`, refId });
+    const result = await runInference({ capability: "flux-dev", prompt: `${stylePrompt}, ${prompt}`, params: { image_size: { width: 1024, height: 1024 } } });
+    const r = result as Record<string, unknown>;
+    const data = (r.data ?? r) as Record<string, unknown>;
+    const images = data.images as Array<{ url: string }> | undefined;
+    const url = (r.image_url as string) ?? images?.[0]?.url;
+    if (url) { canvas.updateCard(card.id, { url }); return `${styleName} created: ${refId}`; }
+    canvas.updateCard(card.id, { error: "No image returned" });
+    return `${styleName} generation failed — try a different description.`;
+  } catch (e) {
+    return `${styleName} failed: ${e instanceof Error ? e.message : "unknown"}`;
+  }
+}
+
 export async function executeCommand(cmd: ParsedCommand): Promise<string> {
   const store = useSkillStore.getState();
   if (!store.initialized) await store.initRegistry();
@@ -67,6 +88,12 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleFilmCommand(cmd.args);
     case "film/load":
       return handleFilmCommand(`load ${cmd.args}`);
+    case "lego":
+      return handleQuickStyle("lego", cmd.args, "Convert to LEGO minifigure style, plastic bricks, yellow skin, brick studs, toy photography, vibrant");
+    case "logo":
+      return handleQuickStyle("logo", cmd.args, `Professional logo design: ${cmd.args}. Clean vector, centered, simple background, brand identity`);
+    case "iso":
+      return handleQuickStyle("iso", cmd.args, "Minimalist isometric illustration, clean black lines on white, geometric 3D, SVG-style vector, no shading");
     default:
       return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /story, /film, /capabilities, /organize, /layout, /save, /export`;
   }

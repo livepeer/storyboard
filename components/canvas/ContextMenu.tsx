@@ -38,6 +38,10 @@ const ACTIONS: MenuAction[] = [
   { id: "to-3d", label: "Convert to 3D\u2026", icon: "\uD83D\uDDA5", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "virtual-tryon", label: "Virtual Try-On\u2026", icon: "\uD83D\uDC55", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "weather-effect", label: "Weather Effect\u2026", icon: "\u26C5", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "lego-style", label: "LEGO Style", icon: "\uD83E\uDDF1", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "make-logo", label: "Make Logo\u2026", icon: "\uD83C\uDFA8", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "replace-object", label: "Replace Object\u2026", icon: "\uD83D\uDD04", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "iso-style", label: "Isometric SVG Style", icon: "\u25C6", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "transform-video", label: "Transform Video\u2026", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   // --- LV2V from card ---
   { id: "lv2v-from-card", label: "Start LV2V Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
@@ -54,6 +58,8 @@ const DIRECT_CONFIG: Record<string, { capability: string; newType: string; defau
   upscale: { capability: "topaz-upscale", newType: "image", defaultPrompt: "Upscale and enhance with sharp details" },
   "remove-bg": { capability: "bg-remove", newType: "image", defaultPrompt: "Remove background" },
   "transform-video": { capability: "ltx-t2v", newType: "video" },
+  "lego-style": { capability: "kontext-edit", newType: "image", defaultPrompt: "Convert to LEGO minifigure style, plastic bricks, yellow skin, brick studs background, toy photography, vibrant colors" },
+  "iso-style": { capability: "kontext-edit", newType: "image", defaultPrompt: "Convert to minimalist isometric illustration, clean black lines on white background, simple geometric 3D perspective, SVG-style vector art, no shading" },
 };
 
 export function ContextMenu() {
@@ -129,6 +135,70 @@ export function ContextMenu() {
         const { downloadCard } = await import("@/lib/utils/download");
         const ok = await downloadCard(targetCard);
         addMessage(ok ? `Saved ${targetCard.refId}` : `Failed to save ${targetCard.refId}`, "system");
+        return;
+      }
+
+      // --- Make Logo: extract key elements from image → generate logo ---
+      if (action.id === "make-logo") {
+        const brandInfo = window.prompt(
+          "Describe the logo you want:\ne.g. tech startup called 'Nexus', minimalist, blue and silver"
+        );
+        if (!brandInfo) return;
+        addMessage(`Creating logo inspired by "${targetCard.title}"…`, "system");
+        try {
+          const { runInference } = await import("@/lib/sdk/client");
+          const result = await runInference({
+            capability: "kontext-edit",
+            prompt: `Create a professional logo: ${brandInfo}. Clean vector style, centered design, simple background, brand identity`,
+            params: { image_url: targetCard.url },
+          });
+          const r = result as Record<string, unknown>;
+          const data = (r.data ?? r) as Record<string, unknown>;
+          const images = data.images as Array<{ url: string }> | undefined;
+          const url = (r.image_url as string) ?? images?.[0]?.url ?? (data.image as { url: string })?.url;
+          if (url) {
+            const card = addCard({ type: "image", title: `Logo: ${brandInfo.slice(0, 30)}`, refId: `img-${Date.now()}` });
+            updateCard(card.id, { url });
+            addEdge(targetCard.refId, card.refId, { capability: "kontext-edit", prompt: brandInfo, action: "logo" });
+            addMessage("Logo created!", "system");
+          } else {
+            addMessage("Logo generation returned no image.", "system");
+          }
+        } catch (e) {
+          addMessage(`Logo failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
+        }
+        return;
+      }
+
+      // --- Replace Object: describe what to replace → what to put ---
+      if (action.id === "replace-object") {
+        const whatToReplace = window.prompt("What object do you want to replace?\ne.g. the car, the sky, the person's hat");
+        if (!whatToReplace) return;
+        const replaceWith = window.prompt(`Replace "${whatToReplace}" with what?\ne.g. a spaceship, a sunset sky, a crown`);
+        if (!replaceWith) return;
+        addMessage(`Replacing "${whatToReplace}" with "${replaceWith}" in "${targetCard.title}"…`, "system");
+        try {
+          const { runInference } = await import("@/lib/sdk/client");
+          const result = await runInference({
+            capability: "kontext-edit",
+            prompt: `Replace the ${whatToReplace} with ${replaceWith}. Keep everything else exactly the same. Seamless, photorealistic edit.`,
+            params: { image_url: targetCard.url },
+          });
+          const r = result as Record<string, unknown>;
+          const data = (r.data ?? r) as Record<string, unknown>;
+          const images = data.images as Array<{ url: string }> | undefined;
+          const url = (r.image_url as string) ?? images?.[0]?.url ?? (data.image as { url: string })?.url;
+          if (url) {
+            const card = addCard({ type: "image", title: `${replaceWith} — ${targetCard.title}`, refId: `img-${Date.now()}` });
+            updateCard(card.id, { url });
+            addEdge(targetCard.refId, card.refId, { capability: "kontext-edit", prompt: `${whatToReplace} → ${replaceWith}`, action: "replace" });
+            addMessage(`Replaced "${whatToReplace}" with "${replaceWith}"!`, "system");
+          } else {
+            addMessage("Replacement returned no image.", "system");
+          }
+        } catch (e) {
+          addMessage(`Replace failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
+        }
         return;
       }
 
