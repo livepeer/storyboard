@@ -587,7 +587,7 @@ Do NOT generate generic placeholder images. Only create cards for REAL email con
                   const parsed = parseMcpToolName(mt.name);
                   if (!parsed) return JSON.stringify({ error: "Invalid MCP tool name" });
                   const result = await executeToolCallViaProxy(server.url, server.token || "", parsed.originalName, args);
-                  return JSON.stringify(result.content || []);
+                  return JSON.stringify({ output: result.content || [] });
                 },
               });
               registeredCount++;
