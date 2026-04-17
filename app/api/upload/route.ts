@@ -15,8 +15,8 @@
  * via /api/upload/[id] (works for localhost dev, not production).
  */
 
-// In-memory fallback store (dev only — cleared on server restart)
-const memoryStore = new Map<string, { data: Buffer; contentType: string }>();
+// Shared memory store — exported so the [id] route can serve files
+export const memoryStore = new Map<string, { data: Buffer; contentType: string }>();
 
 export async function POST(req: Request) {
   const { dataUrl, fileName } = (await req.json()) as {
@@ -77,19 +77,4 @@ export async function POST(req: Request) {
   return Response.json({ url, id, storage: "memory" });
 }
 
-// Serve in-memory files
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const id = url.pathname.split("/").pop();
-  if (!id || !memoryStore.has(id)) {
-    return new Response("Not found", { status: 404 });
-  }
-  const { data, contentType } = memoryStore.get(id)!;
-  return new Response(new Uint8Array(data), {
-    headers: {
-      "Content-Type": contentType,
-      "Cache-Control": "public, max-age=3600",
-      "Access-Control-Allow-Origin": "*",
-    },
-  });
-}
+// GET on /api/upload is not used — files are served via /api/upload/[id]
