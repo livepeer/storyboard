@@ -498,17 +498,28 @@ export function ContextMenu() {
         if (!file) return;
         const isVideo = file.type.startsWith("video");
         const type = isVideo ? "video" as const : "image" as const;
-        const reader = new FileReader();
-        reader.onload = () => {
-          const store = useCanvasStore.getState();
-          const cardNum = store.cards.length + 1;
-          const refId = `${isVideo ? "vid" : "img"}-${cardNum}`;
-          const title = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
+        const store = useCanvasStore.getState();
+        const cardNum = store.cards.length + 1;
+        const refId = `${isVideo ? "vid" : "img"}-${cardNum}`;
+        const title = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
+
+        if (isVideo) {
+          // Videos: use blob URL (lightweight reference, plays immediately).
+          // Data URLs for video are multi-MB base64 strings that browsers choke on.
+          const blobUrl = URL.createObjectURL(file);
           const card = store.addCard({ type, title, refId });
-          store.updateCard(card.id, { url: reader.result as string });
+          store.updateCard(card.id, { url: blobUrl });
           addMessage(`Imported: ${refId} — "${title}". Right-click for actions.`, "system");
-        };
-        reader.readAsDataURL(file);
+        } else {
+          // Images: use data URL (works for display + inference)
+          const reader = new FileReader();
+          reader.onload = () => {
+            const card = store.addCard({ type, title, refId });
+            store.updateCard(card.id, { url: reader.result as string });
+            addMessage(`Imported: ${refId} — "${title}". Right-click for actions.`, "system");
+          };
+          reader.readAsDataURL(file);
+        }
       };
       input.click();
     };
