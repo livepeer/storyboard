@@ -131,6 +131,20 @@ export function ContextMenu() {
       if (!targetCard) return;
       setVisible(false);
 
+      // Read the CURRENT card from the store — targetCard is a stale
+      // snapshot from when the menu opened. If a background upload
+      // (GCS) finished between menu-open and action-click, the card's
+      // URL will have changed from blob: to https://storage.googleapis.com/...
+      // Merge fresh store data into targetCard so all references below
+      // use the latest URL (after GCS upload finishes, url changes from
+      // blob:... to https://storage.googleapis.com/...)
+      const freshFromStore = useCanvasStore.getState().cards.find((c) => c.id === targetCard.id);
+      if (freshFromStore) {
+        // Mutate the local ref — safe because targetCard is a state snapshot
+        // that won't be read again after this handler returns.
+        Object.assign(targetCard, { url: freshFromStore.url, type: freshFromStore.type });
+      }
+
       // --- Agent-assisted actions → route to chat ---
       if (action.mode === "chat") {
         const title = targetCard.title;
