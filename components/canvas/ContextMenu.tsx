@@ -80,7 +80,6 @@ export function ContextMenu() {
 
   const styledPrompt = useCallback((title: string, placeholder: string, defaultValue = ""): Promise<string | null> => {
     return new Promise((resolve) => {
-      setVisible(false); // hide menu as dialog opens
       setPromptState({ title, placeholder, value: defaultValue, resolve });
     });
   }, []);
@@ -144,14 +143,7 @@ export function ContextMenu() {
   const handleAction = useCallback(
     async (action: MenuAction) => {
       if (!targetCard) return;
-      // Don't close menu yet for prompt-based actions — the styled
-      // dialog should appear instantly without a gap. Menu hides
-      // when the dialog opens (styledPrompt sets promptState which
-      // triggers a render that replaces the menu visually).
-      // For one-click actions (LEGO, upscale, etc.), close immediately.
-      const needsPrompt = !DIRECT_CONFIG[action.id]?.defaultPrompt &&
-        DIRECT_CONFIG[action.id] && action.mode === "direct";
-      if (!needsPrompt) setVisible(false);
+      setVisible(false);
 
       // Read the CURRENT card from the store — targetCard is a stale
       // snapshot from when the menu opened. If a background upload
@@ -519,7 +511,36 @@ export function ContextMenu() {
     [targetCard, addCard, addEdge, updateCard, addMessage, prefillChat, sendToAgent]
   );
 
-  if (!visible) return null;
+  // Prompt dialog renders independently of menu visibility.
+  // When user clicks "Restyle", menu closes + dialog opens in the same cycle.
+  if (!visible && !promptState) return null;
+
+  // Prompt dialog only (menu closed, dialog open)
+  if (!visible && promptState) {
+    return (
+      <div className="fixed inset-0 z-[3000] flex items-start justify-center pt-[20vh]"
+        onClick={() => { promptState.resolve(null); setPromptState(null); }}>
+        <div className="w-[340px] rounded-2xl border border-[var(--border)] bg-[rgba(22,22,22,0.98)] p-4 shadow-2xl backdrop-blur-xl"
+          onClick={(e) => e.stopPropagation()}>
+          <div className="text-sm font-semibold text-[var(--text)]">{promptState.title}</div>
+          <input autoFocus type="text" placeholder={promptState.placeholder} value={promptState.value}
+            onChange={(e) => setPromptState({ ...promptState, value: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && promptState.value.trim()) { promptState.resolve(promptState.value.trim()); setPromptState(null); }
+              if (e.key === "Escape") { promptState.resolve(null); setPromptState(null); }
+            }}
+            className="mt-2 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-xs text-[var(--text)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]" />
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button onClick={() => { promptState.resolve(null); setPromptState(null); }}
+              className="rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:bg-white/[0.06]">Cancel</button>
+            <button onClick={() => { if (promptState.value.trim()) { promptState.resolve(promptState.value.trim()); setPromptState(null); } }}
+              disabled={!promptState.value.trim()}
+              className="rounded-lg bg-purple-500/20 px-4 py-1.5 text-xs font-semibold text-purple-300 hover:bg-purple-500/30 disabled:opacity-40">OK</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // --- Import mode (right-click on empty canvas) ---
   if (!targetCard) {
