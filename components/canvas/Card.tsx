@@ -308,6 +308,21 @@ export function Card({ card }: { card: CardData }) {
         </div>
       )}
 
+      {/* Caption banner — floating overlay at the bottom of the card image.
+          Used by daily briefing to show email summary text on each slide. */}
+      {card.caption && !card.minimized && card.url && (
+        <div
+          className="pointer-events-none absolute bottom-0 left-0 right-0 px-2 pb-1.5 pt-4"
+          style={{
+            background: "linear-gradient(transparent, rgba(0,0,0,0.85))",
+          }}
+        >
+          <p className="text-[10px] leading-snug text-white/90 line-clamp-3">
+            {card.caption}
+          </p>
+        </div>
+      )}
+
       {/* Model info bar — shows when card is selected; uses card metadata or incoming edge */}
       {isSelected && !card.minimized && (() => {
         const cap = card.capability || incomingEdge?.meta?.capability;

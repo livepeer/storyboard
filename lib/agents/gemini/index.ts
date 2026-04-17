@@ -685,6 +685,32 @@ export const geminiPlugin: AgentPlugin = {
                 yield { type: "tool_result", name: "project_generate", result: genResult.data || genResult };
                 completedTools.push({ name: "project_generate", success: !!genResult.success });
                 if (orgTool) { await orgTool.execute({ mode: "narrative" }); }
+
+                // Set captions on each generated card so the bottom
+                // banner shows the email summary text. Match cards to
+                // scenes by their scene index → cardRefId mapping.
+                try {
+                  const { useProjectStore } = await import("@/lib/projects/store");
+                  const { useCanvasStore } = await import("@/lib/canvas/store");
+                  const proj = useProjectStore.getState().getProject(projectId);
+                  if (proj) {
+                    const canvasState = useCanvasStore.getState();
+                    for (let si = 0; si < proj.scenes.length && si < scenes.length; si++) {
+                      const scene = proj.scenes[si];
+                      const card = canvasState.cards.find((c) => c.refId === scene.cardRefId);
+                      if (card) {
+                        let caption = scenes[si].title;
+                        if (si > 0 && si - 1 < topEmails.length) {
+                          const email = topEmails[si - 1];
+                          caption = `${(email.from?.split("<")[0] || "").trim()}: ${(email.subject || "").slice(0, 60)}\n${(email.snippet || "").slice(0, 120)}`;
+                        } else if (si === 0) {
+                          caption = `${topEmails.length} important emails today`;
+                        }
+                        canvasState.updateCard(card.id, { caption });
+                      }
+                    }
+                  }
+                } catch (e) { console.warn("[Gemini] Caption update failed:", e); }
               }
             }
 

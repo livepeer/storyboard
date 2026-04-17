@@ -18,6 +18,8 @@ export interface Card {
   capability?: string;
   /** The prompt used to generate this card */
   prompt?: string;
+  /** Floating bottom caption — shown as an overlay banner on the card */
+  caption?: string;
   /** Generation time in ms */
   elapsed?: number;
   /** Pinned cards stay fixed on screen when panning/zooming */
