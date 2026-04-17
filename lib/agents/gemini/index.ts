@@ -329,19 +329,28 @@ Do NOT stop after fetching emails. You MUST call create_media.
 ### Phase 1 — Fetch emails (1 tool call)
 Call gmail_list to get recent inbox. Do NOT summarize in text yet.
 
-### Phase 2 — Generate 6 visual slides (1 create_media call with 6 steps)
-IMMEDIATELY after receiving gmail results, call create_media with EXACTLY 6 steps:
+### Phase 2 — Generate 6 visual cards (1 create_media call with 6 steps)
+IMMEDIATELY after receiving gmail results, call create_media with EXACTLY 6 steps.
 
-  step 0: title="Daily Briefing — Today", action="generate",
-          prompt="minimalist dark presentation title slide, corporate keynote, centered white typography, abstract data visualization, professional"
+Each card is a SCENE that represents the email topic — NOT an abstract slide.
 
-  steps 1-5: ONE per top email, each with:
-          title="[Sender] — [Subject first 40 chars]",
-          action="generate",
-          prompt="presentation slide, [red-orange gradient for urgent | blue for normal | green for FYI], abstract geometric shapes, corporate keynote, dark background, clean"
+  step 0 — OVERVIEW CARD:
+    title: "Daily Briefing — [date]"
+    prompt: "cozy morning desk with a steaming coffee cup, laptop open showing notifications, warm golden sunrise light through window, productivity, photorealistic"
+
+  steps 1-5 — ONE per email. Write a SCENE prompt based on what the email is about:
+    title: "[Sender] — [Subject first 40 chars]"
+    prompt: Describe a SCENE that represents the email topic. Examples:
+      - GitHub PR notification → "developer workspace with multiple monitors showing code, dark room with screen glow, focused atmosphere"
+      - Job listing → "modern glass office building lobby, professional people walking, career opportunity, bright daylight"
+      - Product recall → "clean kitchen with stainless steel appliances, safety inspection checklist, warm household lighting"
+      - Promotional sale → "colorful retail store display with summer clothing, shopping bags, vibrant and inviting"
+      - Calendar invite → "group of friends meeting at sunrise for outdoor activity, morning energy, golden hour"
+      - CI/CD failure → "server room with blinking red warning lights, technical alert, dramatic lighting"
+      - Security alert → "digital shield protecting a glowing screen, cybersecurity, dark blue atmosphere"
+    Keep each prompt under 25 words. Make it vivid and specific to the email content.
 
 Then call canvas_organize with mode "narrative".
-
 Then tell the user their briefing deck is ready.
 
 ### CRITICAL RULES
