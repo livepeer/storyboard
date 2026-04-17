@@ -24,6 +24,30 @@ import { discoverToolsViaProxy, executeToolCallViaProxy, parseMcpToolName } from
 
 const MAX_TOOL_ROUNDS = 20;
 
+/** Generate a scene prompt from an email subject+snippet for the briefing deck. */
+function guessEmailScene(subject: string, snippet: string): string {
+  const combined = `${subject} ${snippet}`.toLowerCase();
+  if (/github|pull request|pr |merge|commit|ci|deploy|build/i.test(combined))
+    return "developer workspace, multiple monitors with code, dark room, screen glow, focused";
+  if (/job|career|hiring|position|recruit|role|interview/i.test(combined))
+    return "modern glass office lobby, professionals walking, career opportunity, bright daylight";
+  if (/recall|safety|warning|urgent|alert|emergency/i.test(combined))
+    return "warning sign with flashing light, safety inspection, dramatic red-orange lighting";
+  if (/sale|discount|promo|off|deal|shop|order|shipping/i.test(combined))
+    return "colorful retail store display, shopping bags, vibrant warm lighting, inviting";
+  if (/calendar|invite|meeting|event|rsvp|schedule/i.test(combined))
+    return "group gathering at sunrise, outdoor morning activity, golden hour, energetic";
+  if (/security|password|access|login|verify|2fa/i.test(combined))
+    return "digital shield protecting a glowing screen, cybersecurity, dark blue atmosphere";
+  if (/news|update|newsletter|digest|weekly|daily/i.test(combined))
+    return "newspaper front page on a cafe table with morning coffee, soft natural light";
+  if (/payment|invoice|receipt|bill|charge|subscription/i.test(combined))
+    return "elegant desk with financial documents, calculator, organized workspace, warm light";
+  if (/travel|flight|hotel|booking|trip|vacation/i.test(combined))
+    return "airplane window view of clouds at sunset, golden light, sense of adventure";
+  return "professional desk with scattered mail envelopes, morning light, organized workspace";
+}
+
 /**
  * Extract per-scene descriptions from a multi-scene brief, verbatim.
  * Used by the stream-brief fast path so we pass the user's actual
@@ -296,36 +320,15 @@ export const geminiPlugin: AgentPlugin = {
           return;
         }
 
-        // Gmail IS connected — inject the daily-briefing skill into
-        // the system prompt so the agent knows the fetch→analyze→script
-        // →visuals→narrate workflow. Also ensure Gmail MCP tools are
-        // in the allowed set.
-        console.log("[Gemini] Briefing request detected, Gmail MCP connected — injecting skill");
-        const briefingSkill = `
-## Daily Briefing Mode (ACTIVE)
-You have access to Gmail tools via MCP. Follow this workflow:
-1. Use Gmail tools to search inbox for last 24 hours
-2. Analyze and prioritize: urgent, important, FYI
-3. Create 3-5 visual cards summarizing the key emails using create_media
-   - Urgent items: bold warm colors
-   - Calm items: cool blues/greens
-   - Use abstract artistic styles, NOT literal email screenshots
-4. Each card title should reference the email subject/sender
-5. Open with "Good morning, here's your briefing for today"
-
-If Gmail returns no emails, say "Your inbox is clear — nothing urgent today."
-Do NOT generate generic placeholder images. Only create cards for REAL email content.`;
-
+        // Gmail IS connected — mark for fast path execution (after
+        // variable declarations below). The actual MCP + project_create
+        // call happens in the briefingFastPath block.
+        console.log("[Gemini] Briefing fast path: will fetch emails + project_create after setup");
       }
-      // Briefing directive — appended to finalSystem alongside scene/stream directives
-      const briefingDirective = isBriefingRequest && getConnectedServers().some((s) =>
+      const briefingFastPathActive = isBriefingRequest && getConnectedServers().some((s) =>
         s.name.toLowerCase().includes("gmail") || s.id === "gmail" || s.id === "gmail-local"
-      ) ? `
-## Briefing Mode: call gmail_list THEN create_media (6 steps). Both required.
-Step 1: gmail_list. Step 2: create_media with 6 steps. Step 3: canvas_organize.
-Step 0 title="Briefing", prompt="morning desk, coffee, laptop, sunrise light, cozy".
-Steps 1-5: title="[Sender] — [Subject]", prompt=a vivid scene about the email topic (under 20 words). No abstract shapes — real scenes.
-If 0 emails: just say "Inbox clear". Otherwise you MUST call create_media.` : "";
+      );
+      const briefingDirective = "";
 
       // Scene-iteration hard hint: if the user's message references
       // a specific "scene N" and there's an active project with that
@@ -603,14 +606,100 @@ If 0 emails: just say "Inbox clear". Otherwise you MUST call create_media.` : ""
       const session = new SessionMemoryStore();
       const runner = new AgentRunner(provider, tools, working, session);
 
-      // Stream-brief fast path: we've extracted the scene descriptions
-      // deterministically (extractedScenes). Gemini has repeatedly
-      // proven unreliable at following "use this text verbatim" — it
-      // keeps calling scope_start with style-only prompts and dropping
-      // the scene content entirely. Bypass the LLM for this path and
-      // call scope_start directly, once per scene, with the extracted
-      // text. Same yield pattern as the scene-animate fast path.
-      if (
+      // Briefing fast path: fetch emails via MCP, build project scenes,
+      // call project_create + project_generate deterministically.
+      // Bypass Gemini entirely — same reliability pattern as other fast paths.
+      if (briefingFastPathActive) {
+        console.log("[Gemini] Briefing fast path: fetching emails then project_create");
+        yield { type: "text", content: "Fetching your emails..." };
+        say("Fetching emails via Gmail MCP...", "system");
+
+        try {
+          const mcpServers = getConnectedServers();
+          const gmailServer = mcpServers.find((s) =>
+            s.name.toLowerCase().includes("gmail") || s.id === "gmail" || s.id === "gmail-local"
+          );
+          if (!gmailServer) throw new Error("Gmail server not found");
+
+          const { discoverToolsViaProxy: discover, executeToolCallViaProxy: execute, parseMcpToolName: parseName } =
+            await import("@/lib/mcp/client");
+          const mcpTools = await discover(gmailServer);
+          const toolToUse = mcpTools.find((t) => t.name.includes("gmail_list")) || mcpTools.find((t) => t.name.includes("gmail_search"));
+          if (!toolToUse) throw new Error("No gmail_list or gmail_search tool");
+          const parsedName = parseName(toolToUse.name);
+          if (!parsedName) throw new Error("Invalid MCP tool name");
+
+          yield { type: "tool_call", name: "gmail_list", input: { max_results: 10 } };
+          lastRoundHadToolCalls = true;
+          const mcpResult = await execute(gmailServer.url, gmailServer.token || "", parsedName.originalName, { max_results: 10 });
+
+          let emails: Array<{ from: string; subject: string; snippet: string }> = [];
+          try {
+            const content = mcpResult.content?.[0];
+            if (content && "text" in content && typeof (content as { text?: string }).text === "string") emails = JSON.parse((content as { text: string }).text).emails || [];
+          } catch { /* parse failure */ }
+
+          yield { type: "tool_result", name: "gmail_list", result: { count: emails.length } };
+
+          if (emails.length === 0) {
+            yield { type: "text", content: "Your inbox is clear — nothing urgent today!" };
+            say("Inbox clear.", "system");
+            agentGaveText = true;
+          } else {
+            const topEmails = emails.slice(0, 5);
+            const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            const scenes = [
+              { index: 0, title: `Daily Briefing — ${today}`, prompt: `cozy morning desk, steaming coffee, laptop with ${topEmails.length} notifications, warm sunrise light`, action: "generate" as const },
+              ...topEmails.map((email, i) => ({
+                index: i + 1,
+                title: `${(email.from?.split("<")[0] || "").trim()} — ${(email.subject || "").slice(0, 50)}`,
+                prompt: guessEmailScene(email.subject || "", email.snippet || ""),
+                action: "generate" as const,
+              })),
+            ];
+
+            const { listTools: lt } = await import("@/lib/tools/registry");
+            const allTools = lt();
+            const createTool = allTools.find((t) => t.name === "project_create");
+            const genTool = allTools.find((t) => t.name === "project_generate");
+            const orgTool = allTools.find((t) => t.name === "canvas_organize");
+            if (!createTool || !genTool) throw new Error("project tools not registered");
+
+            yield { type: "tool_call", name: "project_create", input: { scenes: scenes.length } };
+            say(`Creating briefing with ${scenes.length} slides...`, "system");
+            const createResult = await createTool.execute({
+              brief: `Daily email briefing for ${today}`,
+              scenes,
+              style_guide: { visual_style: "warm photorealistic, cinematic lighting", mood: "professional morning energy", prompt_prefix: "editorial photo, " },
+            });
+            yield { type: "tool_result", name: "project_create", result: createResult.data || createResult };
+            completedTools.push({ name: "project_create", success: !!createResult.success, summary: `${scenes.length} slides` });
+
+            if (createResult.success && createResult.data) {
+              const projectId = (createResult.data as Record<string, unknown>).project_id as string;
+              if (projectId) {
+                touchedProjectIds.add(projectId);
+                yield { type: "tool_call", name: "project_generate", input: { project_id: projectId } };
+                say("Generating slides...", "system");
+                const genResult = await genTool.execute({ project_id: projectId });
+                yield { type: "tool_result", name: "project_generate", result: genResult.data || genResult };
+                completedTools.push({ name: "project_generate", success: !!genResult.success });
+                if (orgTool) { await orgTool.execute({ mode: "narrative" }); }
+              }
+            }
+
+            const summary = topEmails.map((e, i) => `${i + 1}. **${(e.from?.split("<")[0] || "").trim()}** — ${(e.subject || "").slice(0, 60)}`).join("\n");
+            yield { type: "text", content: `Your daily briefing — ${scenes.length} slides on the canvas:\n\n${summary}` };
+            agentGaveText = true;
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "unknown";
+          console.error("[Gemini] Briefing fast path failed:", msg);
+          yield { type: "error", content: `Briefing failed: ${msg}` };
+          completedTools.push({ name: "briefing", success: false });
+        }
+      } else if (
+        // Stream-brief fast path
         isNewBrief &&
         wantsLiveStream &&
         extractedScenes.length > 0
