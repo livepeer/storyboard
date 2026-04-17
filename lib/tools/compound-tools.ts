@@ -526,6 +526,18 @@ export const createMediaTool: ToolDefinition = {
 
       // Build params — inject source URL from depends_on or source_url
       const params: Record<string, unknown> = {};
+
+      // Auto-detect portrait orientation for person/fashion prompts.
+      // Flux-dev defaults to landscape 1024×768 which squeezes full-body
+      // subjects into a small area, causing perceived "blur". Setting
+      // portrait (768×1024) fills the frame properly.
+      if (
+        type === "image" &&
+        !step.source_url &&
+        /\b(person|woman|man|girl|boy|portrait|full.body|standing|fashion|model|wear|clothing|dress|outfit)\b/i.test(effectivePrompt)
+      ) {
+        params.image_size = { width: 768, height: 1024 };
+      }
       if (step.depends_on !== undefined && results[step.depends_on]) {
         const dep = results[step.depends_on];
         if (dep.url) {
