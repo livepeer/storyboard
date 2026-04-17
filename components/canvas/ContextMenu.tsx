@@ -35,6 +35,7 @@ const ACTIONS: MenuAction[] = [
   // --- Direct execution with prompt ---
   { id: "animate", label: "Animate\u2026", icon: "\u25B6", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "restyle", label: "Restyle\u2026", icon: "\u2728", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "to-3d", label: "Convert to 3D\u2026", icon: "\uD83D\uDDA5", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "transform-video", label: "Transform Video\u2026", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   // --- LV2V from card ---
   { id: "lv2v-from-card", label: "Start LV2V Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
@@ -47,6 +48,7 @@ const ACTIONS: MenuAction[] = [
 const DIRECT_CONFIG: Record<string, { capability: string; newType: string; defaultPrompt?: string }> = {
   animate: { capability: "ltx-i2v", newType: "video" },
   restyle: { capability: "kontext-edit", newType: "image" },
+  "to-3d": { capability: "tripo-i3d", newType: "image", defaultPrompt: "Convert to 3D model" },
   upscale: { capability: "topaz-upscale", newType: "image", defaultPrompt: "Upscale and enhance with sharp details" },
   "remove-bg": { capability: "bg-remove", newType: "image", defaultPrompt: "Remove background" },
   "transform-video": { capability: "ltx-t2v", newType: "video" },
