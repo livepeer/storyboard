@@ -151,14 +151,16 @@ export function ContextMenu() {
             capability: "fashn-tryon",
             prompt: "virtual try-on",
             params: {
-              person_image_url: targetCard.url,
-              garment_image_url: garmentCard.url,
+              model_image: targetCard.url,
+              garment_image: garmentCard.url,
+              category: "auto",
             },
           });
           const r = result as Record<string, unknown>;
           const data = (r.data ?? r) as Record<string, unknown>;
           const images = data.images as Array<{ url: string }> | undefined;
-          const url = (r.image_url as string) ?? images?.[0]?.url ?? (data.image as { url: string })?.url;
+          const output = data.output as string | undefined;
+          const url = (r.image_url as string) ?? images?.[0]?.url ?? (data.image as { url: string })?.url ?? output;
           if (url) {
             const card = addCard({ type: "image", title: `Try-On: ${targetCard.title}`, refId: `img-${Date.now()}` });
             updateCard(card.id, { url });
