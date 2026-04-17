@@ -70,6 +70,14 @@ export function ContextMenu() {
   const { addCard, addEdge, updateCard } = useCanvasStore();
   const addMessage = useChatStore((s) => s.addMessage);
 
+  // Import dialog state
+  const [importDialog, setImportDialog] = useState<{
+    previewUrl?: string;
+    fileName?: string;
+    urlInput?: string;
+    file?: File;
+  } | null>(null);
+
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { card: Card; x: number; y: number };
@@ -78,7 +86,20 @@ export function ContextMenu() {
       setVisible(true);
     };
     window.addEventListener("card-context-menu", handler);
-    return () => window.removeEventListener("card-context-menu", handler);
+
+    // Empty-space right-click → import menu
+    const canvasHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { x: number; y: number };
+      setTargetCard(null); // no card targeted → import mode
+      setPos({ x: detail.x, y: detail.y });
+      setVisible(true);
+    };
+    window.addEventListener("canvas-context-menu", canvasHandler);
+
+    return () => {
+      window.removeEventListener("card-context-menu", handler);
+      window.removeEventListener("canvas-context-menu", canvasHandler);
+    };
   }, []);
 
   useEffect(() => {
@@ -463,8 +484,77 @@ export function ContextMenu() {
     [targetCard, addCard, addEdge, updateCard, addMessage, prefillChat, sendToAgent]
   );
 
-  if (!visible || !targetCard) return null;
+  if (!visible) return null;
 
+  // --- Import mode (right-click on empty canvas) ---
+  if (!targetCard) {
+    const handleImportFile = () => {
+      setVisible(false);
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*,video/*";
+      input.onchange = () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        const isVideo = file.type.startsWith("video");
+        const type = isVideo ? "video" as const : "image" as const;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const store = useCanvasStore.getState();
+          const cardNum = store.cards.length + 1;
+          const refId = `${isVideo ? "vid" : "img"}-${cardNum}`;
+          const title = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
+          const card = store.addCard({ type, title, refId });
+          store.updateCard(card.id, { url: reader.result as string });
+          addMessage(`Imported: ${refId} — "${title}". Right-click for actions.`, "system");
+        };
+        reader.readAsDataURL(file);
+      };
+      input.click();
+    };
+
+    const handleImportUrl = () => {
+      setVisible(false);
+      const url = window.prompt("Paste image or video URL:");
+      if (!url?.trim()) return;
+      const isVideo = /\.(mp4|webm|mov|avi|mkv)(\?|$)/i.test(url);
+      const type = isVideo ? "video" as const : "image" as const;
+      const store = useCanvasStore.getState();
+      const cardNum = store.cards.length + 1;
+      const refId = `${isVideo ? "vid" : "img"}-${cardNum}`;
+      const title = url.split("/").pop()?.split("?")[0]?.slice(0, 40) || "Imported";
+      const card = store.addCard({ type, title, refId });
+      store.updateCard(card.id, { url: url.trim() });
+      addMessage(`Imported from URL: ${refId} — "${title}". Right-click for actions.`, "system");
+    };
+
+    return (
+      <div
+        ref={menuRef}
+        className="fixed z-[2500] min-w-[180px] overflow-hidden rounded-lg border border-[var(--border)] bg-[rgba(16,16,16,0.96)] py-1 shadow-[var(--shadow-lg)] backdrop-blur-xl backdrop-saturate-[1.3]"
+        style={{ left: pos.x, top: pos.y }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-3 py-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
+          Import
+        </div>
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={handleImportFile}
+        >
+          <span className="w-4 text-center">📁</span> From Computer
+        </button>
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={handleImportUrl}
+        >
+          <span className="w-4 text-center">🔗</span> From Internet (URL)
+        </button>
+      </div>
+    );
+  }
+
+  // --- Card mode (right-click on a card) ---
   const hasMedia = !!targetCard.url;
   const directActions = ACTIONS.filter(
     (a) => a.mode === "direct" && a.forTypes.includes(targetCard.type) && (!a.requiresMedia || hasMedia)
