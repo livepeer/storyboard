@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { useChatStore } from "@/lib/chat/store";
 import { Card } from "./Card";
 import { ArrowLayer } from "./ArrowEdge";
 import { GroupButton } from "./GroupButton";
 import { EpisodeLabels } from "./EpisodeLabel";
-// EdgeInfoPopup is now inline in ArrowLayer (no separate component)
 
 export function InfiniteCanvas() {
   const { viewport, cards, setViewport, zoomTo, selectCard, selectEdge, selectCards } =
@@ -112,6 +112,78 @@ export function InfiniteCanvas() {
     return () => el.removeEventListener("wheel", handler);
   }, [zoomTo]);
 
+  // --- Canvas context menu (right-click on empty space) ---
+  const [canvasMenu, setCanvasMenu] = useState<{ x: number; y: number } | null>(null);
+
+  const onCanvasContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      // Only fire on empty canvas, not on cards
+      if ((e.target as HTMLElement).closest("[data-card]")) return;
+      e.preventDefault();
+      setCanvasMenu({ x: e.clientX, y: e.clientY });
+    },
+    []
+  );
+
+  // Dismiss canvas menu on click anywhere
+  useEffect(() => {
+    if (!canvasMenu) return;
+    const dismiss = () => setTimeout(() => setCanvasMenu(null), 10);
+    window.addEventListener("pointerdown", dismiss);
+    return () => window.removeEventListener("pointerdown", dismiss);
+  }, [canvasMenu]);
+
+  const importFile = useCallback(
+    (type: "image" | "video") => {
+      setCanvasMenu(null);
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = type === "image" ? "image/*" : "video/*";
+      input.onchange = () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          const store = useCanvasStore.getState();
+          const cardNum = store.cards.length + 1;
+          const prefix = type === "image" ? "img" : "vid";
+          const refId = `${prefix}-${cardNum}`;
+          const title = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
+          const card = store.addCard({ type, title, refId });
+          store.updateCard(card.id, { url: dataUrl });
+          useChatStore.getState().addMessage(
+            `Imported ${type}: ${refId} — "${title}". Right-click for actions, or reference as "${refId}" in chat.`,
+            "system"
+          );
+        };
+        reader.readAsDataURL(file);
+      };
+      input.click();
+    },
+    []
+  );
+
+  const importUrl = useCallback(
+    (type: "image" | "video") => {
+      setCanvasMenu(null);
+      const url = window.prompt(`Enter ${type} URL:`);
+      if (!url?.trim()) return;
+      const store = useCanvasStore.getState();
+      const cardNum = store.cards.length + 1;
+      const prefix = type === "image" ? "img" : "vid";
+      const refId = `${prefix}-${cardNum}`;
+      const title = url.split("/").pop()?.split("?")[0]?.slice(0, 40) || `Imported ${type}`;
+      const card = store.addCard({ type, title, refId });
+      store.updateCard(card.id, { url: url.trim() });
+      useChatStore.getState().addMessage(
+        `Imported ${type} from URL: ${refId} — "${title}". Right-click for actions, or reference as "${refId}" in chat.`,
+        "system"
+      );
+    },
+    []
+  );
+
   return (
     <div
       ref={containerRef}
@@ -119,6 +191,7 @@ export function InfiniteCanvas() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onContextMenu={onCanvasContextMenu}
     >
       {/* Dot grid — moves with pan/zoom to give sense of scale */}
       <div
@@ -168,6 +241,43 @@ export function InfiniteCanvas() {
 
       {/* Edge popup is inline in ArrowLayer */}
       <GroupButton />
+
+      {/* Canvas context menu — import media */}
+      {canvasMenu && (
+        <div
+          className="fixed z-[2000] min-w-[180px] rounded-xl border border-[var(--border)] bg-[rgba(20,20,20,0.97)] p-1 shadow-xl backdrop-blur-xl"
+          style={{ left: canvasMenu.x, top: canvasMenu.y }}
+        >
+          <div className="px-2 py-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
+            Import Media
+          </div>
+          <button
+            onClick={() => importFile("image")}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]"
+          >
+            <span>🖼</span> Import Image (file)
+          </button>
+          <button
+            onClick={() => importUrl("image")}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]"
+          >
+            <span>🔗</span> Import Image (URL)
+          </button>
+          <div className="my-1 border-t border-white/[0.06]" />
+          <button
+            onClick={() => importFile("video")}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]"
+          >
+            <span>🎬</span> Import Video (file)
+          </button>
+          <button
+            onClick={() => importUrl("video")}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)]"
+          >
+            <span>🔗</span> Import Video (URL)
+          </button>
+        </div>
+      )}
     </div>
   );
 }
