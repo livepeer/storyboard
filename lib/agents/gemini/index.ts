@@ -24,28 +24,50 @@ import { discoverToolsViaProxy, executeToolCallViaProxy, parseMcpToolName } from
 
 const MAX_TOOL_ROUNDS = 20;
 
-/** Generate a scene prompt from an email subject+snippet for the briefing deck. */
-function guessEmailScene(subject: string, snippet: string): string {
+/**
+ * Briefing slide style presets. The user can say "briefing dark" or
+ * "briefing colorful" to pick a style. Default is "modern".
+ */
+const BRIEFING_STYLES: Record<string, { bg: string; accent: (urgency: string) => string }> = {
+  modern: {
+    bg: "clean minimalist gradient background, soft blur, professional",
+    accent: (u) => u === "urgent" ? "warm red-orange gradient" : u === "normal" ? "cool blue gradient" : "soft green gradient",
+  },
+  dark: {
+    bg: "dark charcoal background, subtle grid pattern, sleek",
+    accent: (u) => u === "urgent" ? "dark red accent stripe" : u === "normal" ? "dark blue accent stripe" : "dark green accent stripe",
+  },
+  light: {
+    bg: "white background, soft pastel gradient, airy, minimal",
+    accent: (u) => u === "urgent" ? "light coral accent" : u === "normal" ? "light sky blue accent" : "light mint green accent",
+  },
+  colorful: {
+    bg: "vibrant gradient background, bold colors, energetic",
+    accent: (u) => u === "urgent" ? "hot orange-pink gradient" : u === "normal" ? "electric blue-purple gradient" : "lime green-teal gradient",
+  },
+  corporate: {
+    bg: "navy blue background, subtle geometric pattern, executive",
+    accent: (u) => u === "urgent" ? "gold accent bar" : u === "normal" ? "silver accent bar" : "white accent bar",
+  },
+};
+
+function detectBriefingStyle(text: string): string {
+  const lower = text.toLowerCase();
+  for (const key of Object.keys(BRIEFING_STYLES)) {
+    if (lower.includes(key)) return key;
+  }
+  return "modern";
+}
+
+/** Generate a simple slide background prompt based on email urgency + user style. */
+function briefingSlidePrompt(subject: string, snippet: string, style: string): string {
   const combined = `${subject} ${snippet}`.toLowerCase();
-  if (/github|pull request|pr |merge|commit|ci|deploy|build/i.test(combined))
-    return "developer workspace, multiple monitors with code, dark room, screen glow, focused";
-  if (/job|career|hiring|position|recruit|role|interview/i.test(combined))
-    return "modern glass office lobby, professionals walking, career opportunity, bright daylight";
-  if (/recall|safety|warning|urgent|alert|emergency/i.test(combined))
-    return "warning sign with flashing light, safety inspection, dramatic red-orange lighting";
-  if (/sale|discount|promo|off|deal|shop|order|shipping/i.test(combined))
-    return "colorful retail store display, shopping bags, vibrant warm lighting, inviting";
-  if (/calendar|invite|meeting|event|rsvp|schedule/i.test(combined))
-    return "group gathering at sunrise, outdoor morning activity, golden hour, energetic";
-  if (/security|password|access|login|verify|2fa/i.test(combined))
-    return "digital shield protecting a glowing screen, cybersecurity, dark blue atmosphere";
-  if (/news|update|newsletter|digest|weekly|daily/i.test(combined))
-    return "newspaper front page on a cafe table with morning coffee, soft natural light";
-  if (/payment|invoice|receipt|bill|charge|subscription/i.test(combined))
-    return "elegant desk with financial documents, calculator, organized workspace, warm light";
-  if (/travel|flight|hotel|booking|trip|vacation/i.test(combined))
-    return "airplane window view of clouds at sunset, golden light, sense of adventure";
-  return "professional desk with scattered mail envelopes, morning light, organized workspace";
+  let urgency = "normal";
+  if (/urgent|alert|recall|warning|emergency|overdue|failed|error/i.test(combined)) urgency = "urgent";
+  else if (/newsletter|promo|sale|fyi|digest|weekly/i.test(combined)) urgency = "fyi";
+
+  const s = BRIEFING_STYLES[style] || BRIEFING_STYLES.modern;
+  return `${s.bg}, ${s.accent(urgency)}, presentation slide, simple, no text`;
 }
 
 /**
@@ -648,12 +670,15 @@ export const geminiPlugin: AgentPlugin = {
           } else {
             const topEmails = emails.slice(0, 5);
             const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            const slideStyle = detectBriefingStyle(text);
+            console.log(`[Gemini] Briefing style: ${slideStyle}`);
+            const styleDef = BRIEFING_STYLES[slideStyle] || BRIEFING_STYLES.modern;
             const scenes = [
-              { index: 0, title: `Daily Briefing — ${today}`, prompt: `cozy morning desk, steaming coffee, laptop with ${topEmails.length} notifications, warm sunrise light`, action: "generate" as const },
+              { index: 0, title: `Daily Briefing — ${today}`, prompt: `${styleDef.bg}, title slide, overview, simple, no text`, action: "generate" as const },
               ...topEmails.map((email, i) => ({
                 index: i + 1,
                 title: `${(email.from?.split("<")[0] || "").trim()} — ${(email.subject || "").slice(0, 50)}`,
-                prompt: guessEmailScene(email.subject || "", email.snippet || ""),
+                prompt: briefingSlidePrompt(email.subject || "", email.snippet || "", slideStyle),
                 action: "generate" as const,
               })),
             ];
@@ -715,7 +740,10 @@ export const geminiPlugin: AgentPlugin = {
             }
 
             const summary = topEmails.map((e, i) => `${i + 1}. **${(e.from?.split("<")[0] || "").trim()}** — ${(e.subject || "").slice(0, 60)}`).join("\n");
-            yield { type: "text", content: `Your daily briefing — ${scenes.length} slides on the canvas:\n\n${summary}` };
+            const styleTip = slideStyle === "modern"
+              ? `\n\n_Style: modern. Try "daily briefing dark" or "briefing colorful" for a different look._`
+              : `\n\n_Style: ${slideStyle}_`;
+            yield { type: "text", content: `Your daily briefing — ${scenes.length} slides on the canvas:\n\n${summary}${styleTip}` };
             agentGaveText = true;
           }
         } catch (e) {
