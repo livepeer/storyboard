@@ -80,6 +80,7 @@ export function ContextMenu() {
 
   const styledPrompt = useCallback((title: string, placeholder: string, defaultValue = ""): Promise<string | null> => {
     return new Promise((resolve) => {
+      setVisible(false); // hide menu as dialog opens
       setPromptState({ title, placeholder, value: defaultValue, resolve });
     });
   }, []);
@@ -143,7 +144,14 @@ export function ContextMenu() {
   const handleAction = useCallback(
     async (action: MenuAction) => {
       if (!targetCard) return;
-      setVisible(false);
+      // Don't close menu yet for prompt-based actions — the styled
+      // dialog should appear instantly without a gap. Menu hides
+      // when the dialog opens (styledPrompt sets promptState which
+      // triggers a render that replaces the menu visually).
+      // For one-click actions (LEGO, upscale, etc.), close immediately.
+      const needsPrompt = !DIRECT_CONFIG[action.id]?.defaultPrompt &&
+        DIRECT_CONFIG[action.id] && action.mode === "direct";
+      if (!needsPrompt) setVisible(false);
 
       // Read the CURRENT card from the store — targetCard is a stale
       // snapshot from when the menu opened. If a background upload
@@ -478,14 +486,19 @@ export function ContextMenu() {
         const images = data.images as Array<{ url: string }> | undefined;
         const video = data.video as { url: string } | undefined;
         const audio = data.audio as { url: string } | undefined;
+        // 3D models return rendered_image.url (preview) + model_mesh.url (GLB)
+        const renderedImage = data.rendered_image as { url: string } | undefined;
+        const modelMesh = data.model_mesh as { url: string } | undefined;
         const url =
           (r.image_url as string) ??
           images?.[0]?.url ??
           image?.url ??
+          renderedImage?.url ??  // tripo 3D preview image
           (r.video_url as string) ??
           video?.url ??
           (r.audio_url as string) ??
           audio?.url ??
+          modelMesh?.url ??     // tripo 3D model (.glb)
           (data.url as string);
 
         const effectiveError = (r.error as string) || (data.error as string);
