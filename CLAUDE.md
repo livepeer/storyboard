@@ -558,6 +558,73 @@ The page renders `null` on server and defers all UI to client-side `useEffect`. 
 
 ---
 
+## SKILL: Slash Commands — /story, /film, /stream, /briefing
+
+### /story — Multi-scene story generator
+```
+/story <concept>        — generate 6-scene story with style + characters
+/story list             — recent stories
+/story apply [id]       — create project + generate images
+/story show <id>        — re-display a saved story
+```
+Architecture: Gemini generates JSON (title, audience, arc, context, 6 scenes) → user reviews in StoryCard → apply calls project_create + project_generate directly (image fast path, 0 LLM tokens). Natural-language apply: "yes", "apply them", "I like it".
+Files: `lib/story/`, `components/chat/StoryCard.tsx`, `skills/storyteller.md`
+
+### /film — 4-shot mini-film with camera directions
+```
+/film <concept>         — generate 4-shot film script
+/film/load <genre>      — load genre skill (animation, action, documentary, noir, scifi)
+/film apply [id]        — generate key frames → animate each to video via kling-i2v
+/film skills            — list available genre skills
+```
+Architecture: Gemini generates JSON (title, style, character_lock, 4 shots with camera directions) → user reviews in FilmCard → apply calls project_create + project_generate + per-shot create_media(animate) + canvas_organize(narrative). Auto-detects genre from keywords.
+Files: `lib/film/`, `components/chat/FilmCard.tsx`, `skills/film-*.md`
+
+### /stream — Live stream with prompt traveling
+```
+/stream <concept>       — plan multi-scene live stream
+/stream apply [id]      — start stream, scenes transition automatically
+/stream stop            — stop active stream
+/stream list            — recent stream plans
+```
+Architecture: Gemini generates JSON (title, style, graph_template, 3-6 scenes with prompts/presets/durations) → user reviews in StreamPlanCard with visual timeline → apply calls scope_start with Scene 1 → setTimeout schedules scope_control for each subsequent scene → scope_stop auto-fires after total duration. Each transition updates the prompt + preset via the Scope control API. Like "prompt traveling" through a visual story.
+
+Key concept: **prompt traveling** — the stream's visual content evolves over time as the prompt changes scene-by-scene. The viewer sees the stream morph from one scene to the next, creating a narrative arc in real-time.
+Files: `lib/stream-cmd/`, `components/chat/StreamPlanCard.tsx`
+
+### Daily Briefing — Email-powered visual deck
+```
+daily briefing [style]  — fetch Gmail → generate visual slides
+```
+Styles: modern, dark, light, colorful, corporate, scenic, vivid, isometric, iso, lego
+Requires Gmail MCP connection (local server at scripts/gmail-mcp-server.ts).
+Architecture: briefing fast path in gemini/index.ts → gmail_list via MCP → LLM summarization → analyzeEmail (urgency/action/date) → project_create + project_generate → canvas_organize → caption banners with CaptionBanner component (date=cyan, action=amber, expandable). Cover slide uses coverText field.
+
+### Creative Tools — context menu + slash commands
+| Tool | Context Menu | Slash Command | Capability |
+|---|---|---|---|
+| LEGO Style | 🧱 right-click card | `/lego <desc>` | kontext-edit |
+| Make Logo | 🎨 right-click card | `/logo <desc>` | kontext-edit / flux-dev |
+| Replace Object | 🔄 right-click card | — | kontext-edit |
+| Isometric | ◆ right-click card | `/iso <desc>` | kontext-edit / flux-dev |
+| Virtual Try-On | 👕 right-click card | — | fashn-tryon |
+| Weather Effect | ⛅ right-click card | — | kontext-edit → kling-i2v |
+| Convert to 3D | 🖥 right-click card | — | tripo-i3d |
+| Import Media | 📁/🔗 right-click canvas | — | — (GCS upload) |
+
+### Capabilities (37 on BYOC orch)
+Image: flux-dev, flux-schnell, recraft-v4, gemini-image, nano-banana, flux-flex
+Edit: kontext-edit, flux-fill
+Video T2V: veo-t2v, ltx-t2v, pixverse-t2v
+Video I2V: veo-i2v, ltx-i2v, pixverse-i2v, kling-i2v
+Video misc: veo-transition, pixverse-transition, pixverse-ref2v, void-inpaint
+TTS: chatterbox-tts, gemini-tts, inworld-tts, grok-tts
+3D: tripo-t3d, tripo-i3d, tripo-mv3d, tripo-p1-t3d
+Other: bg-remove, topaz-upscale, lipsync, music, sfx, face-swap, sam3, talking-head, fashn-tryon
+Fallback chains: all video/image/TTS models have 2-4 siblings for automatic retry on failure.
+
+---
+
 ## Key Files
 
 ### App
@@ -588,7 +655,24 @@ The page renders `null` on server and defers all UI to client-side `useEffect`. 
 - `lib/stream/scope-graphs.ts` — 6 graph templates (simple-lv2v, depth-guided, etc.)
 - `lib/stream/frame-extractor.ts` — Multi-source frame extraction (webcam, image, video, URL)
 
-### Skills (17 total)
+### Slash Commands
+- `lib/story/` — /story generator, store, commands, storyteller prompt
+- `lib/film/` — /film generator, store, commands, film prompt + 5 genre skills
+- `lib/stream-cmd/` — /stream generator, store, commands, stream prompt
+- `components/chat/StoryCard.tsx` — Story card (purple theme, per-scene copy/edit)
+- `components/chat/FilmCard.tsx` — Film card (orange theme, camera icons)
+- `components/chat/StreamPlanCard.tsx` — Stream card (cyan theme, visual timeline)
+
+### MCP
+- `lib/mcp/client.ts` — MCP tool discovery + execution (discoverToolsViaProxy, executeToolCallViaProxy)
+- `lib/mcp/store.ts` — MCP server persistence (localStorage)
+- `lib/mcp/types.ts` — McpServerConfig, McpToolDef, MCP_PRESETS (5 presets including Gmail Local)
+- `app/api/mcp/discover/route.ts` — Server-side MCP discovery proxy (CORS bypass)
+- `app/api/mcp/call/route.ts` — Server-side MCP tool execution proxy
+- `app/api/mcp/auth/route.ts` — OAuth 2.0 + PKCE flow for Anthropic remote MCP
+- `scripts/gmail-mcp-server.ts` — Local Gmail MCP server (Google OAuth + 3 tools)
+
+### Skills (22 total)
 - `skills/scope-agent.md` — Scope Domain Agent: full parameter reference + natural language mapping
 - `skills/director.md` — Director workflow + Scope integration for multi-stream orchestration
 - `skills/base.md` — Base system prompt (rules for create_media, project_create routing)
