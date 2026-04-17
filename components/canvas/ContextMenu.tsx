@@ -36,6 +36,8 @@ const ACTIONS: MenuAction[] = [
   { id: "animate", label: "Animate\u2026", icon: "\u25B6", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "restyle", label: "Restyle\u2026", icon: "\u2728", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "to-3d", label: "Convert to 3D\u2026", icon: "\uD83D\uDDA5", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "virtual-tryon", label: "Virtual Try-On\u2026", icon: "\uD83D\uDC55", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "weather-effect", label: "Weather Effect\u2026", icon: "\u26C5", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "transform-video", label: "Transform Video\u2026", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   // --- LV2V from card ---
   { id: "lv2v-from-card", label: "Start LV2V Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
@@ -127,6 +129,98 @@ export function ContextMenu() {
         const { downloadCard } = await import("@/lib/utils/download");
         const ok = await downloadCard(targetCard);
         addMessage(ok ? `Saved ${targetCard.refId}` : `Failed to save ${targetCard.refId}`, "system");
+        return;
+      }
+
+      // --- Virtual Try-On: person card + garment card → result ---
+      if (action.id === "virtual-tryon") {
+        const garmentRef = window.prompt(
+          "Enter the garment card refId (e.g. img-3).\nThe current card will be used as the person image."
+        );
+        if (!garmentRef) return;
+        const allCards = useCanvasStore.getState().cards;
+        const garmentCard = allCards.find((c) => c.refId === garmentRef.trim());
+        if (!garmentCard?.url) {
+          addMessage(`Card "${garmentRef}" not found or has no image.`, "system");
+          return;
+        }
+        addMessage(`Starting virtual try-on: person="${targetCard.title}" + garment="${garmentCard.title}"`, "system");
+        try {
+          const { runInference } = await import("@/lib/sdk/client");
+          const result = await runInference({
+            capability: "fashn-tryon",
+            prompt: "virtual try-on",
+            params: {
+              person_image_url: targetCard.url,
+              garment_image_url: garmentCard.url,
+            },
+          });
+          const r = result as Record<string, unknown>;
+          const data = (r.data ?? r) as Record<string, unknown>;
+          const images = data.images as Array<{ url: string }> | undefined;
+          const url = (r.image_url as string) ?? images?.[0]?.url ?? (data.image as { url: string })?.url;
+          if (url) {
+            const card = addCard({ type: "image", title: `Try-On: ${targetCard.title}`, refId: `img-${Date.now()}` });
+            updateCard(card.id, { url });
+            addEdge(targetCard.refId, card.refId, { capability: "fashn-tryon", action: "tryon" });
+            addMessage("Virtual try-on complete!", "system");
+          } else {
+            addMessage("Try-on returned no image — try different source images.", "system");
+          }
+        } catch (e) {
+          addMessage(`Try-on failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
+        }
+        return;
+      }
+
+      // --- Weather Effect: image + weather text → modified image → animated video ---
+      if (action.id === "weather-effect") {
+        const weatherText = window.prompt(
+          "Describe the weather effect:\ne.g. heavy rain, thunderstorm, snow falling, sunny with lens flare"
+        );
+        if (!weatherText) return;
+        addMessage(`Adding weather effect "${weatherText}" to "${targetCard.title}"…`, "system");
+        try {
+          const { runInference } = await import("@/lib/sdk/client");
+          // Step 1: Apply weather to image via kontext-edit
+          const editResult = await runInference({
+            capability: "kontext-edit",
+            prompt: `Add realistic ${weatherText} weather effect to this scene, dramatic atmosphere`,
+            params: { image_url: targetCard.url },
+          });
+          const editData = (editResult as Record<string, unknown>).data ?? editResult;
+          const editImages = (editData as Record<string, unknown>).images as Array<{ url: string }> | undefined;
+          const weatherImageUrl = ((editResult as Record<string, unknown>).image_url as string) ?? editImages?.[0]?.url;
+          if (!weatherImageUrl) {
+            addMessage("Weather image generation failed — try a different description.", "system");
+            return;
+          }
+          // Create the weather image card
+          const imgCard = addCard({ type: "image", title: `${weatherText} — ${targetCard.title}`, refId: `img-${Date.now()}` });
+          updateCard(imgCard.id, { url: weatherImageUrl });
+          addEdge(targetCard.refId, imgCard.refId, { capability: "kontext-edit", prompt: weatherText, action: "weather" });
+          addMessage(`Weather image ready. Animating with video…`, "system");
+
+          // Step 2: Animate the weather image into a video
+          const vidResult = await runInference({
+            capability: "kling-i2v",
+            prompt: `${weatherText} weather, atmospheric motion, cinematic`,
+            params: { image_url: weatherImageUrl },
+          });
+          const vidData = (vidResult as Record<string, unknown>).data ?? vidResult;
+          const videoUrl = ((vidResult as Record<string, unknown>).video_url as string)
+            ?? ((vidData as Record<string, unknown>).video as { url: string })?.url;
+          if (videoUrl) {
+            const vidCard = addCard({ type: "video", title: `Weather Video: ${weatherText}`, refId: `vid-${Date.now()}` });
+            updateCard(vidCard.id, { url: videoUrl });
+            addEdge(imgCard.refId, vidCard.refId, { capability: "kling-i2v", prompt: weatherText, action: "animate" });
+            addMessage("Weather video complete!", "system");
+          } else {
+            addMessage("Weather image created but video animation failed. The image is still on the canvas.", "system");
+          }
+        } catch (e) {
+          addMessage(`Weather effect failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
+        }
         return;
       }
 
