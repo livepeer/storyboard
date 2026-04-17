@@ -70,6 +70,20 @@ export function ContextMenu() {
   const { addCard, addEdge, updateCard } = useCanvasStore();
   const addMessage = useChatStore((s) => s.addMessage);
 
+  // Styled prompt dialog — Promise-based drop-in for window.prompt()
+  const [promptState, setPromptState] = useState<{
+    title: string;
+    placeholder: string;
+    value: string;
+    resolve: (value: string | null) => void;
+  } | null>(null);
+
+  const styledPrompt = useCallback((title: string, placeholder: string, defaultValue = ""): Promise<string | null> => {
+    return new Promise((resolve) => {
+      setPromptState({ title, placeholder, value: defaultValue, resolve });
+    });
+  }, []);
+
   // Import dialog state
   const [importDialog, setImportDialog] = useState<{
     previewUrl?: string;
@@ -175,9 +189,7 @@ export function ContextMenu() {
 
       // --- Make Logo: extract key elements from image → generate logo ---
       if (action.id === "make-logo") {
-        const brandInfo = window.prompt(
-          "Describe the logo you want:\ne.g. tech startup called 'Nexus', minimalist, blue and silver"
-        );
+        const brandInfo = await styledPrompt("Make Logo", "e.g. tech startup Nexus, minimalist, blue and silver");
         if (!brandInfo) return;
         addMessage(`Creating logo inspired by "${targetCard.title}"…`, "system");
         try {
@@ -207,9 +219,9 @@ export function ContextMenu() {
 
       // --- Replace Object: describe what to replace → what to put ---
       if (action.id === "replace-object") {
-        const whatToReplace = window.prompt("What object do you want to replace?\ne.g. the car, the sky, the person's hat");
+        const whatToReplace = await styledPrompt("Replace Object", "What to replace? e.g. the car, the sky");
         if (!whatToReplace) return;
-        const replaceWith = window.prompt(`Replace "${whatToReplace}" with what?\ne.g. a spaceship, a sunset sky, a crown`);
+        const replaceWith = await styledPrompt(`Replace "${whatToReplace}" with`, "e.g. a spaceship, a sunset sky");
         if (!replaceWith) return;
         addMessage(`Replacing "${whatToReplace}" with "${replaceWith}" in "${targetCard.title}"…`, "system");
         try {
@@ -239,9 +251,7 @@ export function ContextMenu() {
 
       // --- Virtual Try-On: person card + garment card → result ---
       if (action.id === "virtual-tryon") {
-        const garmentRef = window.prompt(
-          "Enter the garment card refId (e.g. img-3).\nThe current card will be used as the person image."
-        );
+        const garmentRef = await styledPrompt("Virtual Try-On", "Enter garment card refId (e.g. img-3)");
         if (!garmentRef) return;
         const allCards = useCanvasStore.getState().cards;
         const garmentCard = allCards.find((c) => c.refId === garmentRef.trim());
@@ -282,9 +292,7 @@ export function ContextMenu() {
 
       // --- Weather Effect: image + weather text → modified image → animated video ---
       if (action.id === "weather-effect") {
-        const weatherText = window.prompt(
-          "Describe the weather effect:\ne.g. heavy rain, thunderstorm, snow falling, sunny with lens flare"
-        );
+        const weatherText = await styledPrompt("Weather Effect", "e.g. heavy rain, thunderstorm, snow falling");
         if (!weatherText) return;
         addMessage(`Adding weather effect "${weatherText}" to "${targetCard.title}"…`, "system");
         try {
@@ -333,7 +341,7 @@ export function ContextMenu() {
 
       // --- LV2V from card ---
       if (action.id === "lv2v-from-card") {
-        const prompt = window.prompt("LV2V style prompt:", "transform into a cyberpunk scene with neon lights");
+        const prompt = await styledPrompt("LV2V Stream", "e.g. cyberpunk neon scene", "transform into a cyberpunk scene with neon lights");
         if (!prompt) return;
 
         addMessage(`Starting LV2V from "${targetCard.title}"\u2026`, "system");
@@ -430,7 +438,7 @@ export function ContextMenu() {
 
       let prompt = config.defaultPrompt || null;
       if (!prompt) {
-        prompt = window.prompt(`${action.label.replace("\u2026", "")} — describe what you want:`);
+        prompt = await styledPrompt(action.label.replace("\u2026", ""), "Describe what you want…");
         if (!prompt) return;
       }
 
@@ -558,9 +566,9 @@ export function ContextMenu() {
       input.click();
     };
 
-    const handleImportUrl = () => {
+    const handleImportUrl = async () => {
       setVisible(false);
-      const url = window.prompt("Paste image or video URL:");
+      const url = await styledPrompt("Import from URL", "Paste image or video URL");
       if (!url?.trim()) return;
       const isVideo = /\.(mp4|webm|mov|avi|mkv)(\?|$)/i.test(url);
       const type = isVideo ? "video" as const : "image" as const;
@@ -574,6 +582,7 @@ export function ContextMenu() {
     };
 
     return (
+      <>
       <div
         ref={menuRef}
         className="fixed z-[2500] min-w-[180px] overflow-hidden rounded-lg border border-[var(--border)] bg-[rgba(16,16,16,0.96)] py-1 shadow-[var(--shadow-lg)] backdrop-blur-xl backdrop-saturate-[1.3]"
@@ -596,6 +605,25 @@ export function ContextMenu() {
           <span className="w-4 text-center">🔗</span> From Internet (URL)
         </button>
       </div>
+      {/* Prompt dialog renders here too so URL import can use it */}
+      {promptState && (
+        <div className="fixed inset-0 z-[3000] flex items-start justify-center pt-[20vh]"
+          onClick={() => { promptState.resolve(null); setPromptState(null); }}>
+          <div className="w-[340px] rounded-2xl border border-[var(--border)] bg-[rgba(22,22,22,0.98)] p-4 shadow-2xl backdrop-blur-xl"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="text-sm font-semibold text-[var(--text)]">{promptState.title}</div>
+            <input autoFocus type="text" placeholder={promptState.placeholder} value={promptState.value}
+              onChange={(e) => setPromptState({ ...promptState, value: e.target.value })}
+              onKeyDown={(e) => { if (e.key === "Enter" && promptState.value.trim()) { promptState.resolve(promptState.value.trim()); setPromptState(null); } if (e.key === "Escape") { promptState.resolve(null); setPromptState(null); } }}
+              className="mt-2 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-xs text-[var(--text)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]" />
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button onClick={() => { promptState.resolve(null); setPromptState(null); }} className="rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:bg-white/[0.06]">Cancel</button>
+              <button onClick={() => { if (promptState.value.trim()) { promptState.resolve(promptState.value.trim()); setPromptState(null); } }} disabled={!promptState.value.trim()} className="rounded-lg bg-purple-500/20 px-4 py-1.5 text-xs font-semibold text-purple-300 hover:bg-purple-500/30 disabled:opacity-40">OK</button>
+            </div>
+          </div>
+        </div>
+      )}
+      </>
     );
   }
 
@@ -609,6 +637,7 @@ export function ContextMenu() {
   );
 
   return (
+    <>
     <div
       ref={menuRef}
       className="fixed z-[2500] min-w-[200px] overflow-hidden rounded-lg border border-[var(--border)] bg-[rgba(16,16,16,0.96)] py-1 shadow-[var(--shadow-lg)] backdrop-blur-xl backdrop-saturate-[1.3]"
@@ -648,5 +677,59 @@ export function ContextMenu() {
         <div className="px-3 py-2 text-xs text-[var(--text-dim)]">No actions available</div>
       )}
     </div>
+
+    {/* Styled prompt dialog — appears near the card, replaces browser prompts */}
+    {promptState && (
+      <div
+        className="fixed inset-0 z-[3000] flex items-start justify-center pt-[20vh]"
+        onClick={() => { promptState.resolve(null); setPromptState(null); }}
+      >
+        <div
+          className="w-[340px] rounded-2xl border border-[var(--border)] bg-[rgba(22,22,22,0.98)] p-4 shadow-2xl backdrop-blur-xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="text-sm font-semibold text-[var(--text)]">{promptState.title}</div>
+          <input
+            autoFocus
+            type="text"
+            placeholder={promptState.placeholder}
+            value={promptState.value}
+            onChange={(e) => setPromptState({ ...promptState, value: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && promptState.value.trim()) {
+                promptState.resolve(promptState.value.trim());
+                setPromptState(null);
+              }
+              if (e.key === "Escape") {
+                promptState.resolve(null);
+                setPromptState(null);
+              }
+            }}
+            className="mt-2 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-xs text-[var(--text)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
+          />
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              onClick={() => { promptState.resolve(null); setPromptState(null); }}
+              className="rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:bg-white/[0.06]"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                if (promptState.value.trim()) {
+                  promptState.resolve(promptState.value.trim());
+                  setPromptState(null);
+                }
+              }}
+              disabled={!promptState.value.trim()}
+              className="rounded-lg bg-purple-500/20 px-4 py-1.5 text-xs font-semibold text-purple-300 hover:bg-purple-500/30 disabled:opacity-40"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
