@@ -125,19 +125,7 @@ export function InfiniteCanvas() {
     []
   );
 
-  // Dismiss canvas menu on click outside the menu
   const canvasMenuRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!canvasMenu) return;
-    const dismiss = (e: PointerEvent) => {
-      // Don't dismiss if clicking inside the menu itself
-      if (canvasMenuRef.current?.contains(e.target as Node)) return;
-      setCanvasMenu(null);
-    };
-    // Use timeout so the opening right-click doesn't immediately dismiss
-    const timer = setTimeout(() => window.addEventListener("pointerdown", dismiss), 50);
-    return () => { clearTimeout(timer); window.removeEventListener("pointerdown", dismiss); };
-  }, [canvasMenu]);
 
   // Import dialog state
   const [importDialog, setImportDialog] = useState<{
@@ -150,9 +138,10 @@ export function InfiniteCanvas() {
   } | null>(null);
 
   const openImportDialog = useCallback((type: "image" | "video", mode: "file" | "url") => {
-    setCanvasMenu(null);
+    console.log(`[Import] openImportDialog called: type=${type} mode=${mode}`);
     if (mode === "file") {
-      // Open file picker SYNCHRONOUSLY in the click handler (user activation)
+      // Open file picker SYNCHRONOUSLY in the click handler (user activation).
+      // Close the menu AFTER input.click() so the user-activation context is preserved.
       const input = document.createElement("input");
       input.type = "file";
       input.accept = type === "image" ? "image/*" : "video/*";
@@ -163,8 +152,13 @@ export function InfiniteCanvas() {
         setImportDialog({ type, mode: "file", previewUrl: url, fileName: file.name, file });
       };
       input.click();
+      // Close menu after picker is open (deferred so React doesn't unmount mid-handler)
+      setTimeout(() => setCanvasMenu(null), 0);
     } else {
+      // Set dialog FIRST, then close menu in the same batch
       setImportDialog({ type, mode: "url", urlInput: "" });
+      // Defer menu close to next tick so React can batch the dialog open
+      setTimeout(() => setCanvasMenu(null), 0);
     }
   }, []);
 
@@ -265,6 +259,9 @@ export function InfiniteCanvas() {
 
       {/* Canvas context menu — import media */}
       {canvasMenu && (
+        <>
+        {/* Transparent backdrop — click to dismiss */}
+        <div className="fixed inset-0 z-[1999]" onClick={() => setCanvasMenu(null)} />
         <div
           ref={canvasMenuRef}
           className="fixed z-[2000] min-w-[180px] rounded-xl border border-[var(--border)] bg-[rgba(20,20,20,0.97)] p-1 shadow-xl backdrop-blur-xl"
@@ -291,6 +288,7 @@ export function InfiniteCanvas() {
             <span>🔗</span> Import Video (URL)
           </button>
         </div>
+        </>
       )}
 
       {/* Import preview dialog */}
