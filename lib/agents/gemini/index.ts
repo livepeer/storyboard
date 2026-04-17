@@ -49,6 +49,14 @@ const BRIEFING_STYLES: Record<string, { bg: string; accent: (urgency: string) =>
     bg: "navy blue background, subtle geometric pattern, executive",
     accent: (u) => u === "urgent" ? "gold accent bar" : u === "normal" ? "silver accent bar" : "white accent bar",
   },
+  scenic: {
+    bg: "cozy morning desk, steaming coffee, laptop open, warm sunrise through window",
+    accent: () => "", // accent is ignored — guessEmailScene provides the full prompt
+  },
+  vivid: {
+    bg: "cozy morning desk, steaming coffee, laptop open, warm sunrise through window",
+    accent: () => "",
+  },
 };
 
 function detectBriefingStyle(text: string): string {
@@ -59,8 +67,13 @@ function detectBriefingStyle(text: string): string {
   return "modern";
 }
 
-/** Generate a simple slide background prompt based on email urgency + user style. */
+/** Generate a slide prompt based on email content + user style. */
 function briefingSlidePrompt(subject: string, snippet: string, style: string): string {
+  // Scenic/vivid: topic-based contextual images
+  if (style === "scenic" || style === "vivid") {
+    return guessEmailTopic(subject, snippet);
+  }
+  // All other styles: clean gradient backgrounds
   const combined = `${subject} ${snippet}`.toLowerCase();
   let urgency = "normal";
   if (/urgent|alert|recall|warning|emergency|overdue|failed|error/i.test(combined)) urgency = "urgent";
@@ -68,6 +81,34 @@ function briefingSlidePrompt(subject: string, snippet: string, style: string): s
 
   const s = BRIEFING_STYLES[style] || BRIEFING_STYLES.modern;
   return `${s.bg}, ${s.accent(urgency)}, presentation slide, simple, no text`;
+}
+
+/** Map email topic to a vivid contextual scene for scenic/vivid style. */
+function guessEmailTopic(subject: string, snippet: string): string {
+  const combined = `${subject} ${snippet}`.toLowerCase();
+  if (/github|pull request|pr |merge|commit|ci|deploy|build/i.test(combined))
+    return "developer workspace, multiple monitors showing code, dark room, blue screen glow";
+  if (/job|career|hiring|position|recruit|role|interview/i.test(combined))
+    return "modern glass office building lobby, professionals walking, bright daylight";
+  if (/recall|safety|warning|urgent|alert|emergency/i.test(combined))
+    return "red warning light flashing in a clean industrial space, dramatic lighting";
+  if (/sale|discount|promo|off|deal|shop|order|shipping/i.test(combined))
+    return "colorful retail store display, shopping bags, vibrant warm lighting";
+  if (/calendar|invite|meeting|event|rsvp|schedule/i.test(combined))
+    return "friends gathering at golden hour sunrise, outdoor morning activity";
+  if (/security|password|access|login|verify|2fa/i.test(combined))
+    return "digital shield with glowing circuits, cybersecurity, dark blue";
+  if (/news|update|newsletter|digest|weekly|daily/i.test(combined))
+    return "newspaper on cafe table with morning coffee, soft natural window light";
+  if (/payment|invoice|receipt|bill|charge|subscription/i.test(combined))
+    return "elegant desk with financial documents, warm lamp light, organized";
+  if (/travel|flight|hotel|booking|trip|vacation/i.test(combined))
+    return "airplane window view of clouds at golden sunset, adventure";
+  if (/stanford|course|university|education|learn|enroll/i.test(combined))
+    return "ivy-covered university campus at autumn, golden leaves, academic";
+  if (/uber|lyft|ride|delivery|food/i.test(combined))
+    return "city street at dusk with car headlights, urban motion blur, energetic";
+  return "professional desk with mail envelopes, morning light, warm atmosphere";
 }
 
 /**
