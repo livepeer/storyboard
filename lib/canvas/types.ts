@@ -20,6 +20,11 @@ export interface Card {
   prompt?: string;
   /** Floating bottom caption — shown as an overlay banner on the card */
   caption?: string;
+  /** Full-card text overlay — renders as a slide cover (title, subtitle, stats).
+   *  When set, the card displays this text over the image as a centered overlay
+   *  instead of the bottom-only caption banner. Used by briefing title slides. */
+  coverText?: { title: string; subtitle?: string; stats?: string };
+
   /** Generation time in ms */
   elapsed?: number;
   /** Pinned cards stay fixed on screen when panning/zooming */

@@ -362,10 +362,33 @@ export function Card({ card }: { card: CardData }) {
         </div>
       )}
 
+      {/* Cover slide — full-card text overlay for briefing title cards.
+          Renders like a PPT cover: centered title, subtitle, stats. */}
+      {card.coverText && !card.minimized && card.url && (
+        <div
+          className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center p-4 text-center"
+          style={{ background: "rgba(0,0,0,0.65)" }}
+        >
+          <div className="text-[16px] font-bold leading-tight text-white tracking-wide">
+            {card.coverText.title}
+          </div>
+          {card.coverText.subtitle && (
+            <div className="mt-1.5 text-[11px] font-medium text-white/70">
+              {card.coverText.subtitle}
+            </div>
+          )}
+          {card.coverText.stats && (
+            <div className="mt-3 rounded-full bg-white/15 px-3 py-1 text-[10px] font-semibold text-white/90">
+              {card.coverText.stats}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Caption banner — floating overlay at the bottom of the card image.
           Used by daily briefing to show email summary text on each slide.
           Dates are highlighted in cyan, action words in amber. */}
-      {card.caption && !card.minimized && card.url && (
+      {card.caption && !card.coverText && !card.minimized && card.url && (
         <CaptionBanner caption={card.caption} />
       )}
 

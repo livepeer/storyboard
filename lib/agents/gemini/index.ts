@@ -913,10 +913,19 @@ export const geminiPlugin: AgentPlugin = {
                             ].filter(Boolean).join("\n");
                           }
                         } else if (si === 0) {
+                          // Summary card — render as a full-card cover slide
                           const urgentCount = analyzed.filter((a) => a.urgency === "urgent").length;
-                          caption = urgentCount > 0
-                            ? `${topEmails.length} emails today · ${urgentCount} urgent`
-                            : `${topEmails.length} emails today`;
+                          const statsText = urgentCount > 0
+                            ? `${topEmails.length} emails · ${urgentCount} urgent`
+                            : `${topEmails.length} important emails`;
+                          canvasState.updateCard(card.id, {
+                            coverText: {
+                              title: `Daily Briefing`,
+                              subtitle: today,
+                              stats: statsText,
+                            },
+                          });
+                          continue; // skip the caption update below
                         }
                         canvasState.updateCard(card.id, { caption });
                       }
