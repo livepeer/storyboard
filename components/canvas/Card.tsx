@@ -9,6 +9,60 @@ import { EpisodeBadge } from "./EpisodeBadge";
 import { useEpisodeStore } from "@/lib/episodes/store";
 import { StreamCockpit } from "./StreamCockpit";
 
+/** Caption banner with date + action highlighting and expand-on-click. */
+function CaptionBanner({ caption }: { caption: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const isLong = caption.length > 100;
+
+  // Split caption into lines, highlight dates (cyan) and actions (amber)
+  const highlightText = (text: string) => {
+    // Date patterns: Apr 16, 2026-04-16, April 26, Sunday, 5:30am, June 7th, etc.
+    const dateRe = /\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{4})?|\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*|\d{1,2}:\d{2}\s*(?:am|pm|AM|PM)?)\b/g;
+    // Action patterns: review, respond, book, call, sign up, enroll, register, pay, update, join, RSVP
+    const actionRe = /\b(review|respond|reply|book|call|sign up|enroll|register|pay|update|join|rsvp|renew|cancel|approve|submit|schedule|confirm|attend|download|upgrade)\b/gi;
+
+    const parts: Array<{ text: string; type: "normal" | "date" | "action" }> = [];
+    let last = 0;
+    const combined = `(${dateRe.source})|(${actionRe.source})`;
+    const re = new RegExp(combined, "gi");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) parts.push({ text: text.slice(last, m.index), type: "normal" });
+      const isDate = m[1] !== undefined;
+      parts.push({ text: m[0], type: isDate ? "date" : "action" });
+      last = re.lastIndex;
+    }
+    if (last < text.length) parts.push({ text: text.slice(last), type: "normal" });
+    if (parts.length === 0) parts.push({ text, type: "normal" });
+    return parts;
+  };
+
+  const parts = highlightText(caption);
+  const displayText = !expanded && isLong ? caption.slice(0, 100) : caption;
+  const displayParts = !expanded && isLong ? highlightText(displayText) : parts;
+
+  return (
+    <div
+      className={`absolute bottom-0 left-0 right-0 px-2.5 pb-2 pt-5 ${isLong ? "cursor-pointer" : "pointer-events-none"}`}
+      style={{ background: "linear-gradient(transparent, rgba(0,0,0,0.88))" }}
+      onClick={isLong ? (e) => { e.stopPropagation(); setExpanded(!expanded); } : undefined}
+    >
+      <p className="text-[12px] font-medium leading-snug text-white/95">
+        {displayParts.map((p, i) =>
+          p.type === "date" ? (
+            <span key={i} className="font-bold text-cyan-300">{p.text}</span>
+          ) : p.type === "action" ? (
+            <span key={i} className="font-bold text-amber-300">{p.text}</span>
+          ) : (
+            <span key={i}>{p.text}</span>
+          )
+        )}
+        {!expanded && isLong && <span className="text-white/50">… tap to expand</span>}
+      </p>
+    </div>
+  );
+}
+
 const TYPE_COLORS: Record<string, { text: string; bg: string }> = {
   image: { text: "#8b5cf6", bg: "rgba(139,92,246,0.1)" },
   video: { text: "#06b6d4", bg: "rgba(6,182,212,0.1)" },
@@ -309,18 +363,10 @@ export function Card({ card }: { card: CardData }) {
       )}
 
       {/* Caption banner — floating overlay at the bottom of the card image.
-          Used by daily briefing to show email summary text on each slide. */}
+          Used by daily briefing to show email summary text on each slide.
+          Dates are highlighted in cyan, action words in amber. */}
       {card.caption && !card.minimized && card.url && (
-        <div
-          className="pointer-events-none absolute bottom-0 left-0 right-0 px-2 pb-1.5 pt-4"
-          style={{
-            background: "linear-gradient(transparent, rgba(0,0,0,0.85))",
-          }}
-        >
-          <p className="text-[10px] leading-snug text-white/90 line-clamp-3">
-            {card.caption}
-          </p>
-        </div>
+        <CaptionBanner caption={card.caption} />
       )}
 
       {/* Model info bar — shows when card is selected; uses card metadata or incoming edge */}
