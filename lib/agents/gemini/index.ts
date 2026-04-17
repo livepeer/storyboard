@@ -133,6 +133,48 @@ function guessEmailTopic(subject: string, snippet: string): string {
   return "professional desk with mail envelopes, morning light, warm atmosphere";
 }
 
+/** Analyze an email for urgency, action, dates, and build a rich caption. */
+function analyzeEmail(from: string, subject: string, snippet: string): {
+  urgency: "urgent" | "normal" | "later";
+  sender: string;
+  tagline: string;
+  action: string;
+  dates: string;
+  imageKeywords: string;
+} {
+  const combined = `${subject} ${snippet}`.toLowerCase();
+  const sender = (from?.split("<")[0] || "").trim() || "Unknown";
+
+  // Urgency classification
+  let urgency: "urgent" | "normal" | "later" = "normal";
+  if (/urgent|asap|immediately|overdue|critical|deadline|expired|action required|last chance|final/i.test(combined)) urgency = "urgent";
+  else if (/recall|security|alert|warning|failed|error|broken/i.test(combined)) urgency = "urgent";
+  else if (/newsletter|digest|weekly|promotion|sale|unsubscribe|no.reply/i.test(combined)) urgency = "later";
+
+  // Extract dates
+  const dateMatches = combined.match(/\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{4})?|(?:mon|tue|wed|thu|fri|sat|sun)\w*\s+\w+\s+\d{1,2}|\d{1,2}:\d{2}\s*(?:am|pm)?|today|tomorrow|this week|next week)/gi) || [];
+  const dates = dateMatches.slice(0, 2).join(", ");
+
+  // Extract action
+  const actionMatch = combined.match(/\b(review|respond|reply|book|call|sign up|enroll|register|pay|update|join|rsvp|renew|cancel|approve|submit|schedule|confirm|attend|download|upgrade|complete|check|fix|deploy|merge)\b/i);
+  const action = actionMatch ? actionMatch[1] : "";
+
+  // Build tagline
+  const subjectClean = (subject || "No subject").slice(0, 60);
+  const snippetClean = (snippet || "").replace(/\s+/g, " ").slice(0, 80);
+  const tagline = snippetClean ? `${subjectClean} — ${snippetClean}` : subjectClean;
+
+  // Image keywords — combine urgency + topic for contextual image
+  const topicWords = combined.match(/\b(code|pr|deploy|build|meeting|interview|job|sale|travel|flight|security|payment|food|delivery|course|campus)\b/i);
+  const imageKeywords = [
+    urgency === "urgent" ? "warning, alert, red accent" : urgency === "later" ? "relaxed, calm, green" : "professional, focused, blue",
+    action || "notification",
+    topicWords?.[1] || "email",
+  ].join(", ");
+
+  return { urgency, sender, tagline, action, dates, imageKeywords };
+}
+
 /** Simple topic labels for isometric/LEGO styles. */
 function guessIsoTopic(subject: string, snippet: string): string {
   const combined = `${subject} ${snippet}`.toLowerCase();
@@ -743,6 +785,41 @@ export const geminiPlugin: AgentPlugin = {
 
           yield { type: "tool_result", name: "gmail_list", result: { count: emails.length } };
 
+          // LLM summarization — ask Gemini for one-line summaries
+          // highlighting key dates, actions, and context. This produces
+          // much better captions than raw snippet truncation.
+          if (emails.length > 0) {
+            try {
+              say("Analyzing emails...", "system");
+              const emailList = emails.slice(0, 5).map((e, i) =>
+                `${i + 1}. From: ${e.from || "?"}\nSubject: ${e.subject || "?"}\nSnippet: ${(e.snippet || "").slice(0, 200)}`
+              ).join("\n\n");
+              const sumResp = await fetch("/api/agent/gemini", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  model: "gemini-2.5-flash",
+                  contents: [{ role: "user", parts: [{ text: emailList }] }],
+                  system_instruction: { parts: [{ text:
+                    `Summarize each email in EXACTLY one line (max 80 chars). Format per email:\n` +
+                    `[URGENT/NORMAL/LATER] From: <sender name> | <key summary> | Date: <date if any> | Action: <action if any>\n` +
+                    `Respond with ONLY the numbered lines, no other text. Highlight the most actionable info.`
+                  }] },
+                }),
+              });
+              if (sumResp.ok) {
+                const sumPayload = await sumResp.json();
+                const sumText = (sumPayload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
+                  .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+                // Parse the LLM summaries back into the email objects
+                const lines = sumText.split("\n").filter((l) => l.trim());
+                for (let li = 0; li < Math.min(lines.length, emails.length); li++) {
+                  (emails[li] as Record<string, string>)._llmSummary = lines[li].replace(/^\d+\.\s*/, "").trim();
+                }
+              }
+            } catch { /* LLM summary failed — fall back to snippet */ }
+          }
+
           if (emails.length === 0) {
             yield { type: "text", content: "Your inbox is clear — nothing urgent today!" };
             say("Inbox clear.", "system");
@@ -753,14 +830,26 @@ export const geminiPlugin: AgentPlugin = {
             const slideStyle = detectBriefingStyle(text);
             console.log(`[Gemini] Briefing style: ${slideStyle}`);
             const styleDef = BRIEFING_STYLES[slideStyle] || BRIEFING_STYLES.modern;
+
+            // Analyze each email for urgency, actions, dates
+            const analyzed = topEmails.map((e) => analyzeEmail(e.from || "", e.subject || "", e.snippet || ""));
+
             const scenes = [
               { index: 0, title: `Daily Briefing — ${today}`, prompt: `${styleDef.bg}, title slide, overview, simple, no text`, action: "generate" as const },
-              ...topEmails.map((email, i) => ({
-                index: i + 1,
-                title: `${(email.from?.split("<")[0] || "").trim()} — ${(email.subject || "").slice(0, 50)}`,
-                prompt: briefingSlidePrompt(email.subject || "", email.snippet || "", slideStyle),
-                action: "generate" as const,
-              })),
+              ...topEmails.map((email, i) => {
+                const a = analyzed[i];
+                // Image prompt driven by action keywords for contextual relevance
+                const actionPrompt = briefingSlidePrompt(email.subject || "", email.snippet || "", slideStyle);
+                const enrichedPrompt = actionPrompt.includes(a.imageKeywords)
+                  ? actionPrompt
+                  : `${actionPrompt}, ${a.imageKeywords}`;
+                return {
+                  index: i + 1,
+                  title: `[${a.urgency.toUpperCase()}] ${a.sender} — ${(email.subject || "").slice(0, 40)}`,
+                  prompt: enrichedPrompt.slice(0, 400),
+                  action: "generate" as const,
+                };
+              }),
             ];
 
             const { listTools: lt } = await import("@/lib/tools/registry");
@@ -805,11 +894,29 @@ export const geminiPlugin: AgentPlugin = {
                       const card = canvasState.cards.find((c) => c.refId === scene.cardRefId);
                       if (card) {
                         let caption = scenes[si].title;
-                        if (si > 0 && si - 1 < topEmails.length) {
+                        if (si > 0 && si - 1 < analyzed.length) {
                           const email = topEmails[si - 1];
-                          caption = `${(email.from?.split("<")[0] || "").trim()}: ${(email.subject || "").slice(0, 60)}\n${(email.snippet || "").slice(0, 120)}`;
+                          const llmSummary = (email as Record<string, string>)._llmSummary;
+                          if (llmSummary) {
+                            // Use LLM-generated summary (best quality)
+                            caption = llmSummary;
+                          } else {
+                            // Fallback to analyzed data
+                            const a = analyzed[si - 1];
+                            const urgencyTag = a.urgency === "urgent" ? "🔴 URGENT" : a.urgency === "later" ? "🟢 LATER" : "🔵 NORMAL";
+                            const dateLine = a.dates ? `📅 ${a.dates}` : "";
+                            const actionLine = a.action ? `⚡ Action: ${a.action}` : "";
+                            caption = [
+                              `${urgencyTag} | From: ${a.sender}`,
+                              a.tagline,
+                              [dateLine, actionLine].filter(Boolean).join(" | "),
+                            ].filter(Boolean).join("\n");
+                          }
                         } else if (si === 0) {
-                          caption = `${topEmails.length} important emails today`;
+                          const urgentCount = analyzed.filter((a) => a.urgency === "urgent").length;
+                          caption = urgentCount > 0
+                            ? `${topEmails.length} emails today · ${urgentCount} urgent`
+                            : `${topEmails.length} emails today`;
                         }
                         canvasState.updateCard(card.id, { caption });
                       }
@@ -819,7 +926,13 @@ export const geminiPlugin: AgentPlugin = {
               }
             }
 
-            const summary = topEmails.map((e, i) => `${i + 1}. **${(e.from?.split("<")[0] || "").trim()}** — ${(e.subject || "").slice(0, 60)}`).join("\n");
+            const summary = topEmails.map((e, i) => {
+              const a = analyzed[i];
+              const tag = a.urgency === "urgent" ? "🔴" : a.urgency === "later" ? "🟢" : "🔵";
+              const actionBit = a.action ? ` → **${a.action}**` : "";
+              const dateBit = a.dates ? ` (${a.dates})` : "";
+              return `${tag} ${i + 1}. **${a.sender}** — ${(e.subject || "").slice(0, 50)}${actionBit}${dateBit}`;
+            }).join("\n");
             const styleTip = slideStyle === "modern"
               ? `\n\n_Style: modern. Try "daily briefing dark" or "briefing colorful" for a different look._`
               : `\n\n_Style: ${slideStyle}_`;
