@@ -38,12 +38,18 @@ export async function POST(req: Request) {
   const ext = contentType.split("/")[1]?.split("+")[0] || "bin";
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
-  // Try GCP Cloud Storage
-  const bucket = process.env.GCS_BUCKET;
-  if (bucket) {
+  // Try GCP Cloud Storage (default bucket for dev — override with GCS_BUCKET env)
+  const bucket = process.env.GCS_BUCKET || "storyboard-uploads";
+  {
     try {
-      // Use GCS JSON API directly (no SDK needed)
-      const token = process.env.GCS_ACCESS_TOKEN || "";
+      // Get auth token: env var first, then try gcloud CLI (dev), then skip
+      let token = process.env.GCS_ACCESS_TOKEN || "";
+      if (!token) {
+        try {
+          const { execSync } = await import("child_process");
+          token = execSync("gcloud auth print-access-token 2>/dev/null", { encoding: "utf-8" }).trim();
+        } catch { /* no gcloud — will try without auth */ }
+      }
       const uploadUrl = `https://storage.googleapis.com/upload/storage/v1/b/${bucket}/o?uploadType=media&name=uploads/${id}`;
       const gcsResp = await fetch(uploadUrl, {
         method: "POST",

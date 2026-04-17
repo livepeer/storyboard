@@ -503,23 +503,43 @@ export function ContextMenu() {
         const refId = `${isVideo ? "vid" : "img"}-${cardNum}`;
         const title = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
 
-        // Use data URL for images (works for BOTH display and inference — fal
-        // accepts data URLs directly, no upload/proxy needed). Use blob URL for
-        // videos (too large for data URL, and video inference takes HTTP URLs).
-        if (isVideo) {
-          const blobUrl = URL.createObjectURL(file);
-          const card = store.addCard({ type, title, refId });
-          store.updateCard(card.id, { url: blobUrl });
-          addMessage(`Imported: ${refId} — "${title}". Ready for playback.`, "system");
-        } else {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const card = store.addCard({ type, title, refId });
+        // Show card immediately with blob URL for instant preview
+        const blobUrl = URL.createObjectURL(file);
+        const card = store.addCard({ type, title, refId });
+        store.updateCard(card.id, { url: blobUrl });
+        addMessage(`Imported: ${refId} — "${title}". Uploading for inference…`, "system");
+
+        // Upload to GCS (or fallback) in background so the card gets a
+        // public HTTP URL that the BYOC orch can fetch for inference.
+        const reader = new FileReader();
+        reader.onload = async () => {
+          try {
+            const resp = await fetch("/api/upload", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ dataUrl: reader.result, fileName: file.name }),
+            });
+            if (resp.ok) {
+              const { url: publicUrl } = (await resp.json()) as { url: string };
+              // Only replace blob URL if we got a real public URL (not localhost)
+              if (publicUrl.startsWith("https://")) {
+                store.updateCard(card.id, { url: publicUrl });
+                addMessage(`${refId} ready — right-click for restyle, LEGO, animate, etc.`, "system");
+              } else {
+                // Fallback: keep data URL (fal accepts it for small images)
+                store.updateCard(card.id, { url: reader.result as string });
+                addMessage(`${refId} ready (local mode).`, "system");
+              }
+            } else {
+              // Upload failed — use data URL directly
+              store.updateCard(card.id, { url: reader.result as string });
+            }
+          } catch {
             store.updateCard(card.id, { url: reader.result as string });
-            addMessage(`Imported: ${refId} — "${title}". Right-click for restyle, LEGO, animate, etc.`, "system");
-          };
-          reader.readAsDataURL(file);
-        }
+          }
+          URL.revokeObjectURL(blobUrl);
+        };
+        reader.readAsDataURL(file);
       };
       input.click();
     };
