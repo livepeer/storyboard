@@ -9,6 +9,7 @@ import {
 import { handleOrganize, handleLayoutCommand } from "@/lib/layout/commands";
 import { handleStoryCommand } from "@/lib/story/commands";
 import { handleFilmCommand } from "@/lib/film/commands";
+import { handleStreamCommand } from "@/lib/stream-cmd/commands";
 
 interface ParsedCommand {
   command: string;
@@ -88,6 +89,8 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleFilmCommand(cmd.args);
     case "film/load":
       return handleFilmCommand(`load ${cmd.args}`);
+    case "stream":
+      return handleStreamCommand(cmd.args);
     case "lego":
       return handleQuickStyle("lego", cmd.args, "Convert to LEGO minifigure style, plastic bricks, yellow skin, brick studs, toy photography, vibrant");
     case "logo":
@@ -95,7 +98,7 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
     case "iso":
       return handleQuickStyle("iso", cmd.args, "Minimalist isometric illustration, clean black lines on white, geometric 3D, SVG-style vector, no shading");
     default:
-      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /story, /film, /capabilities, /organize, /layout, /save, /export`;
+      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /story, /film, /stream, /capabilities, /organize, /layout, /save, /export`;
   }
 }
 

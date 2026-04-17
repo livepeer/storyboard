@@ -10,6 +10,7 @@ import { QuickActions } from "./QuickActions";
 import { parseCommand, executeCommand } from "@/lib/skills/commands";
 import { isApplyPendingIntent, applyPendingStory } from "@/lib/story/commands";
 import { isFilmApplyIntent, applyPendingFilm } from "@/lib/film/commands";
+import { isStreamApplyIntent, applyPendingStream } from "@/lib/stream-cmd/commands";
 import { preprocessPrompt } from "@/lib/agents/preprocessor";
 import { useSessionContext } from "@/lib/agents/session-context";
 import { EpisodeSwitcher } from "./EpisodeSwitcher";
@@ -307,6 +308,12 @@ export function ChatPanel() {
         addMessage(text.trim(), "user");
         setInput("");
         applyPendingFilm().then((result) => addMessage(result, "system"));
+        return;
+      }
+      if (isStreamApplyIntent(text.trim())) {
+        addMessage(text.trim(), "user");
+        setInput("");
+        applyPendingStream().then((result) => addMessage(result, "system"));
         return;
       }
 
