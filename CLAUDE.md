@@ -122,15 +122,69 @@ go-livepeer in BYOC mode. Routes inference requests to fal.ai/Gemini providers v
 | chatterbox-tts | fal-ai/chatterbox/text-to-speech | ✅ (NOT fal-ai/chatterbox-tts) |
 | gemini-text | gemini/gemini-2.5-flash | ✅ |
 | nano-banana | fal-ai/nano-banana-2 | ✅ |
+| seedream-5-lite | fal-ai/bytedance/seedream/v5/lite/text-to-image | ✅ |
+| seedance-i2v | bytedance/seedance-2.0/image-to-video | ✅ |
+| seedance-i2v-fast | bytedance/seedance-2.0/fast/image-to-video | ✅ |
 
 **CRITICAL: fal renames models. Always verify with `curl https://fal.ai/models/<model_id>` before adding.**
 
-### Updating Capabilities
+### Adding / Updating BYOC Capabilities
+
+Capabilities are registered by the inference adapter. The adapter reads `CAPABILITIES_JSON` from `/opt/byoc/.env` on startup and auto-registers each entry with the BYOC orch. No go-livepeer code changes needed.
+
+**Step 1: Find the fal model ID.** Go to `https://fal.ai/models/<model_path>` and confirm the model exists. fal renames models — always verify.
+
+**Step 2: Add to CAPABILITIES_JSON on the VM.** Use Python to avoid shell quoting issues with JSON:
 ```bash
-gcloud compute ssh byoc-a3-staging-1 --zone=us-west1-b --project=livepeer-simple-infra
-sudo vi /opt/byoc/.env  # Edit CAPABILITIES_JSON
-cd /opt/byoc && sudo docker compose up -d
+gcloud compute ssh byoc-staging-1 --zone=us-west1-b --project=livepeer-simple-infra
+sudo python3 -c "
+import json
+with open('/opt/byoc/.env') as f: content = f.read()
+# Find the existing CAPABILITIES_JSON line and parse it
+for line in content.splitlines():
+    if line.startswith('CAPABILITIES_JSON='):
+        caps = json.loads(line.split('=', 1)[1])
+        break
+# Append new capability
+caps.append({'name': 'my-new-cap', 'model_id': 'fal-ai/some/model', 'capacity': 2, 'price_per_unit': 3})
+# Write back
+import re
+content = re.sub(r'^CAPABILITIES_JSON=.*$', 'CAPABILITIES_JSON=' + json.dumps(caps), content, flags=re.MULTILINE)
+with open('/opt/byoc/.env', 'w') as f: f.write(content)
+print(f'Wrote {len(caps)} capabilities')
+"
 ```
+
+**Step 3: Restart the adapter** (must be `down && up`, not `restart`, so compose re-reads `.env`):
+```bash
+sudo bash -c 'cd /opt/byoc && docker compose down && docker compose up -d'
+```
+
+**Step 4: Verify registration:**
+```bash
+sudo docker logs byoc-adapter --tail 10  # Look for "Registered capability 'my-new-cap'"
+curl -s https://sdk.daydream.monster/capabilities | python3 -c "import sys,json; [print(c['name']) for c in json.load(sys.stdin) if 'my-new' in c['name']]"
+```
+
+**Step 5: Update storyboard code** (in storyboard-a3 repo):
+- `lib/sdk/capabilities.ts` — add to `FALLBACK_CAPABILITIES` set + keyword resolution
+- `lib/tools/compound-tools.ts` — add to `FALLBACK_CHAINS` + `selectCapability` routing + user mention detection
+- `CLAUDE.md` — update capabilities table and count
+
+**Each capability entry:**
+```json
+{"name": "capability-name", "model_id": "fal-ai/vendor/model", "capacity": 2, "price_per_unit": 3}
+```
+- `name`: short kebab-case name used in storyboard code (e.g., `seedance-i2v`)
+- `model_id`: exact fal model path (e.g., `bytedance/seedance-2.0/image-to-video`). Some models omit the `fal-ai/` prefix.
+- `capacity`: max concurrent jobs (2 for video/3D, 4 for image/audio)
+- `price_per_unit`: relative cost tier (1=cheap, 5=expensive)
+
+**Common mistakes:**
+- Using `docker restart` instead of `down && up` — won't re-read `.env`
+- Using `sed` or shell quoting for JSON — use Python instead, JSON with `{}` breaks shell interpolation
+- Wrong model_id — fal renames models; verify the URL works first
+- The BYOC VM is `byoc-staging-1` (not `byoc-a3-staging-1` — that VM no longer exists)
 
 ---
 
@@ -609,19 +663,21 @@ Architecture: briefing fast path in gemini/index.ts → gmail_list via MCP → L
 | Isometric | ◆ right-click card | `/iso <desc>` | kontext-edit / flux-dev |
 | Virtual Try-On | 👕 right-click card | — | fashn-tryon |
 | Weather Effect | ⛅ right-click card | — | kontext-edit → kling-i2v |
+| Cinematic Video | 🎬 right-click card | — | seedance-i2v (up to 15s + audio) |
 | Convert to 3D | 🖥 right-click card | — | tripo-i3d |
 | Import Media | 📁/🔗 right-click canvas | — | — (GCS upload) |
 
-### Capabilities (37 on BYOC orch)
-Image: flux-dev, flux-schnell, recraft-v4, gemini-image, nano-banana, flux-flex
+### Capabilities (40 on BYOC orch)
+Image: flux-dev, flux-schnell, recraft-v4, gemini-image, nano-banana, flux-flex, seedream-5-lite
 Edit: kontext-edit, flux-fill
 Video T2V: veo-t2v, ltx-t2v, pixverse-t2v
-Video I2V: veo-i2v, ltx-i2v, pixverse-i2v, kling-i2v
+Video I2V: veo-i2v, ltx-i2v, pixverse-i2v, kling-i2v, seedance-i2v, seedance-i2v-fast
 Video misc: veo-transition, pixverse-transition, pixverse-ref2v, void-inpaint
 TTS: chatterbox-tts, gemini-tts, inworld-tts, grok-tts
 3D: tripo-t3d, tripo-i3d, tripo-mv3d, tripo-p1-t3d
 Other: bg-remove, topaz-upscale, lipsync, music, sfx, face-swap, sam3, talking-head, fashn-tryon
 Fallback chains: all video/image/TTS models have 2-4 siblings for automatic retry on failure.
+Seedance 2.0: primary i2v model for /film and context menu animate. Up to 15s cinematic video with audio.
 
 ---
 
@@ -672,11 +728,12 @@ Fallback chains: all video/image/TTS models have 2-4 siblings for automatic retr
 - `app/api/mcp/auth/route.ts` — OAuth 2.0 + PKCE flow for Anthropic remote MCP
 - `scripts/gmail-mcp-server.ts` — Local Gmail MCP server (Google OAuth + 3 tools)
 
-### Skills (22 total)
+### Skills (23 total)
 - `skills/scope-agent.md` — Scope Domain Agent: full parameter reference + natural language mapping
 - `skills/director.md` — Director workflow + Scope integration for multi-stream orchestration
 - `skills/base.md` — Base system prompt (rules for create_media, project_create routing)
 - `skills/scope-lv2v.md`, `skills/live-director.md`, `skills/scope-graphs.md` — LV2V reference
+- `skills/seedance-cinematic.md` — Seedance 2.0 cinematic video: prompt craft, film integration, duration guide
 
 ### Infrastructure
 - `simple-infra/sdk-service-build/app.py` — SDK service code

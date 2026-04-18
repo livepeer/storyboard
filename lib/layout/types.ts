@@ -6,7 +6,7 @@ export interface LayoutPreset {
   gap: number;
   cardScale: number;
   flow: "ltr" | "zigzag" | "center-out";
-  groupBy: "batch" | "episode" | "none";
+  groupBy: "batch" | "episode" | "project" | "none";
   rowSeparator: number;
   startCorner: "top-left" | "center";
 }

@@ -9,9 +9,9 @@ const BUILT_IN_SKILLS: LayoutSkill[] = [
   },
   {
     id: "narrative", name: "Narrative Flow",
-    description: "Story sequence, one row per prompt batch",
+    description: "Story sequence, one row per project with scene ordering",
     category: "built-in",
-    preset: { cols: 8, gap: 24, cardScale: 1.0, flow: "ltr", groupBy: "batch", rowSeparator: 40, startCorner: "top-left" },
+    preset: { cols: 8, gap: 24, cardScale: 1.0, flow: "ltr", groupBy: "project", rowSeparator: 40, startCorner: "top-left" },
   },
   {
     id: "episode", name: "Episode Groups",
@@ -33,9 +33,9 @@ const BUILT_IN_SKILLS: LayoutSkill[] = [
   },
   {
     id: "movie-board", name: "Movie Storyboard",
-    description: "Cinematic 5-col wide flow with scene breaks",
+    description: "Cinematic 5-col wide flow with project scene ordering",
     category: "built-in",
-    preset: { cols: 5, gap: 24, cardScale: 1.0, flow: "ltr", groupBy: "batch", rowSeparator: 48, startCorner: "top-left" },
+    preset: { cols: 5, gap: 24, cardScale: 1.0, flow: "ltr", groupBy: "project", rowSeparator: 48, startCorner: "top-left" },
   },
   {
     id: "balanced", name: "Balanced Flow",

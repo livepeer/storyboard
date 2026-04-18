@@ -166,7 +166,9 @@ async function filmApply(idOrEmpty: string): Promise<string> {
     return `Apply failed: ${e instanceof Error ? e.message : "unknown"}`;
   }
 
-  // 3. Animate each scene card to video via kling-i2v
+  // 3. Animate each scene card to video via Seedance 2.0 (cinematic i2v).
+  //    Seedance produces up to 15s clips with synchronized audio —
+  //    ideal for film-style shots with camera directions.
   let animatedCount = 0;
   try {
     const { useProjectStore } = await import("@/lib/projects/store");
@@ -187,7 +189,7 @@ async function filmApply(idOrEmpty: string): Promise<string> {
               action: "animate",
               source_url: card.url,
               prompt: `${shot.camera}, ${shot.description}, ${film.style}`.slice(0, 300),
-              duration: shot.duration || 4,
+              duration: shot.duration || 6,
             }],
           });
           animatedCount++;

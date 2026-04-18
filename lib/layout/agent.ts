@@ -8,7 +8,15 @@ import { getBuiltInSkill } from "./skills";
 export function pickStrategy(ctx: LayoutContext, userPref: string | null): string {
   if (userPref) return userPref;
   if (ctx.activeEpisodeId && ctx.episodes.length > 1) return "episode";
-  if (ctx.edges.length > 3) return "narrative";
+  // Prefer narrative (project-grouped) when projects exist — keeps
+  // each project's scenes together in scene order on separate rows.
+  let hasProjects = false;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { useProjectStore } = require("@/lib/projects/store");
+    hasProjects = useProjectStore.getState().projects.length > 0;
+  } catch { /* test env or SSR — skip project check */ }
+  if (hasProjects || ctx.edges.length > 3) return "narrative";
   return "basic";
 }
 

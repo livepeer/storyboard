@@ -34,6 +34,7 @@ const ACTIONS: MenuAction[] = [
   { id: "remove-bg", label: "Remove Background", icon: "\u2702", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   // --- Direct execution with prompt ---
   { id: "animate", label: "Animate\u2026", icon: "\u25B6", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "seedance", label: "Cinematic Video (Seedance)\u2026", icon: "\uD83C\uDFAC", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "restyle", label: "Restyle\u2026", icon: "\u2728", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "to-3d", label: "Convert to 3D\u2026", icon: "\uD83D\uDDA5", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "virtual-tryon", label: "Virtual Try-On\u2026", icon: "\uD83D\uDC55", forTypes: ["image"], requiresMedia: true, mode: "direct" },
@@ -53,6 +54,7 @@ const ACTIONS: MenuAction[] = [
 
 const DIRECT_CONFIG: Record<string, { capability: string; newType: string; defaultPrompt?: string }> = {
   animate: { capability: "ltx-i2v", newType: "video" },
+  seedance: { capability: "seedance-i2v", newType: "video" },
   restyle: { capability: "kontext-edit", newType: "image" },
   "to-3d": { capability: "tripo-i3d", newType: "image", defaultPrompt: "Convert to 3D model" },
   upscale: { capability: "topaz-upscale", newType: "image", defaultPrompt: "Upscale and enhance with sharp details" },
@@ -467,6 +469,11 @@ export function ContextMenu() {
             params.image_url = targetCard.url;
           }
         }
+        // Seedance i2v: default to 8s cinematic clip with audio
+        if (action.id === "seedance") {
+          params.duration = "8";
+          params.generate_audio = true;
+        }
 
         const t0 = performance.now();
         const result = await runInference({ capability: resolved, prompt, params });
@@ -493,19 +500,39 @@ export function ContextMenu() {
           modelMesh?.url ??     // tripo 3D model (.glb)
           (data.url as string);
 
+        if (!url) {
+          console.warn(`[ContextMenu] ${action.id} (${resolved}): no URL extracted from response`, JSON.stringify(r).slice(0, 500));
+        }
+
         const effectiveError = (r.error as string) || (data.error as string);
         if (effectiveError) {
           updateCard(card.id, { error: effectiveError });
         } else if (url) {
-          updateCard(card.id, { url });
-          addMessage(`${action.label.replace("\u2026", "")} — ${resolved} (${(elapsed / 1000).toFixed(1)}s)`, "agent");
+          updateCard(card.id, { url, capability: resolved, elapsed });
+          const elapsedSec = (elapsed / 1000).toFixed(1);
+          const balance = r.balance as string | undefined;
+          const orchElapsed = r.elapsed_ms as number | undefined;
+          const costInfo = balance && balance !== "0" ? ` · balance: ${balance}` : "";
+          const orchInfo = orchElapsed ? ` · orch: ${(orchElapsed / 1000).toFixed(1)}s` : "";
+          addMessage(`${action.label.replace("\u2026", "")} — ${resolved} (${elapsedSec}s${orchInfo}${costInfo})`, "system");
         } else {
           updateCard(card.id, { error: "No media returned" });
         }
 
         addEdge(targetCard.refId, newRefId, { capability: resolved, prompt, action: action.id, elapsed });
       } catch (e) {
-        updateCard(card.id, { error: e instanceof Error ? e.message : "Unknown error" });
+        const errMsg = e instanceof Error ? e.message : "Unknown error";
+        console.error(`[ContextMenu] ${action.id} (${resolved}) failed:`, errMsg);
+        // Extract a user-friendly message from SDK structured errors
+        let friendly = errMsg;
+        if (errMsg.includes("No orchestrator available") || errMsg.includes("No capacity")) {
+          friendly = `${resolved} not available — try again or use a different model`;
+        } else if (errMsg.includes("signer") || errMsg.includes("401")) {
+          friendly = "Auth error — check your API key in settings";
+        } else if (errMsg.length > 120) {
+          friendly = errMsg.slice(0, 120) + "…";
+        }
+        updateCard(card.id, { error: friendly });
       }
     },
     [targetCard, addCard, addEdge, updateCard, addMessage, prefillChat, sendToAgent]

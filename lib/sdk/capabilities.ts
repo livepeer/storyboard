@@ -71,6 +71,7 @@ const FALLBACK_CAPABILITIES = new Set([
   "flux-dev", "flux-schnell", "recraft-v4", "gemini-image", "gemini-text",
   "ltx-i2v", "ltx-t2v", "kontext-edit",
   "topaz-upscale", "bg-remove", "chatterbox-tts", "nano-banana",
+  "seedream-5-lite", "seedance-i2v", "seedance-i2v-fast",
 ]);
 
 export function resolveCapability(
@@ -110,7 +111,9 @@ export function resolveCapability(
 
   // Try keyword match (e.g. "kling-i2v" contains "i2v" → "ltx-i2v")
   const keywords: Record<string, string[]> = {
-    "i2v": ["ltx-i2v"],
+    "seedance": ["seedance-i2v", "seedance-i2v-fast"],
+    "seedream": ["seedream-5-lite"],
+    "i2v": ["seedance-i2v", "ltx-i2v"],
     "t2v": ["ltx-t2v"],
     "tts": ["chatterbox-tts"],
     "upscale": ["topaz-upscale"],
@@ -119,7 +122,7 @@ export function resolveCapability(
     "flux": ["flux-dev"],
     "gemini": ["gemini-image"],
     "image": ["flux-dev"],
-    "video": ["ltx-i2v"],
+    "video": ["seedance-i2v", "ltx-i2v"],
     "audio": ["chatterbox-tts"],
   };
   for (const [kw, targets] of Object.entries(keywords)) {

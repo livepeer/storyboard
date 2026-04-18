@@ -5,6 +5,29 @@ const STORAGE_KEY = "storyboard_projects";
 
 let nextProjectId = 0;
 
+/**
+ * Generate a short, friendly project name from the brief.
+ * "give me 5 pictures of people riding bikes" → "people-riding-bikes"
+ * "Story: The Grand Journey of Leo" → "grand-journey-leo"
+ * "Film: Sunset over Tokyo" → "sunset-over-tokyo"
+ */
+function friendlyName(brief: string): string {
+  let text = brief
+    .replace(/^(Story|Film|Stream|Project|Brief):\s*/i, "")
+    .replace(/[—–\-]+[\s\S]*/, "") // strip after em-dash (arc/style suffix)
+    .toLowerCase()
+    .trim();
+  // Remove common filler words
+  const stopWords = new Set(["give", "me", "make", "create", "generate", "a", "an", "the", "of", "for", "with", "in", "on", "at", "to", "and", "some", "few", "pictures", "images", "photos", "scene", "scenes"]);
+  const words = text
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !stopWords.has(w));
+  // Take up to 4 meaningful words
+  const slug = words.slice(0, 4).join("-");
+  return slug || `project-${nextProjectId}`;
+}
+
 interface ProjectState {
   projects: Project[];
   activeProjectId: string | null;
@@ -55,7 +78,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   activeProjectId: null,
 
   createProject: (brief, scenes, styleGuide) => {
-    const id = `proj_${Date.now()}_${nextProjectId++}`;
+    const name = friendlyName(brief);
+    const id = `${name}_${(nextProjectId++).toString(36)}`;
     const project: Project = {
       id,
       brief,

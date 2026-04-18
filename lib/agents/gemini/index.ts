@@ -641,7 +641,26 @@ export const geminiPlugin: AgentPlugin = {
           }
         }
       }
-      const finalSystem = system + sceneDirective + streamOverrideDirective + briefingDirective;
+      // Detect explicit video-model mentions ("using seedance", "with pixverse")
+      // and inject a directive so Gemini uses the right action + model.
+      let videoModelDirective = "";
+      const videoModelMention = text.match(
+        /\b(?:using|with|via|use)\s+(seedance|pixverse|veo|kling)\b/i
+      ) || text.match(/\b(seedance|pixverse)\s+model\b/i);
+      if (videoModelMention && !sceneAnimateDetected && !streamOverrideDirective) {
+        const model = videoModelMention[1].toLowerCase();
+        const hasVideoWord = /\b(video|clip|animation|movie|film|short)\b/i.test(text);
+        if (hasVideoWord) {
+          videoModelDirective =
+            `\n\nIMPORTANT: User wants a VIDEO using ${model}. ` +
+            `Call create_media with action:"generate" — the capability resolver will route to the correct video model automatically. ` +
+            `Do NOT use action:"animate" unless the user provides a source image. ` +
+            `Keep the prompt descriptive and under 40 words.`;
+          console.log(`[Gemini] Video model directive: user mentioned "${model}" + video intent`);
+        }
+      }
+
+      const finalSystem = system + sceneDirective + streamOverrideDirective + briefingDirective + videoModelDirective;
 
       console.log(`[Gemini] runStream: system=${finalSystem.length} chars, text="${text.slice(0, 80)}"`);
 
@@ -1346,8 +1365,15 @@ export const geminiPlugin: AgentPlugin = {
         console.warn("[Gemini] Auto-seed failed (non-fatal):", e);
       }
 
-      // Completion summary — if agent didn't say anything after finishing tools,
-      // generate a brief summary so the user knows what happened.
+      // Completion summary — always show token usage when available.
+      // When agent didn't say anything after tools, show a full summary
+      // with elapsed time + tool results. When agent gave text, still
+      // append a token line so the user always sees the cost.
+      const tokenTotal = promptTokens.input + promptTokens.output;
+      const tokenTag = tokenTotal > 0
+        ? `${tokenTotal.toLocaleString()} tokens (${promptTokens.input.toLocaleString()} in / ${promptTokens.output.toLocaleString()} out${promptTokens.cached > 0 ? `, ${promptTokens.cached.toLocaleString()} cached` : ""})`
+        : "";
+
       if (completedTools.length > 0 && !agentGaveText) {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         const ok = completedTools.filter(t => t.success).length;
@@ -1385,49 +1411,38 @@ export const geminiPlugin: AgentPlugin = {
           }
         }
 
-        const tokenTotal = promptTokens.input + promptTokens.output;
-        const tokenTag = tokenTotal > 0
-          ? ` — ${tokenTotal.toLocaleString()} tokens (${promptTokens.input.toLocaleString()} in / ${promptTokens.output.toLocaleString()} out${promptTokens.cached > 0 ? `, ${promptTokens.cached.toLocaleString()} cached` : ""})`
-          : "";
-
         const summaryText = fail === 0
-          ? `Done in ${elapsed}s${summaryParts.length ? " — " + summaryParts.join(", ") : ""}${tokenTag}`
-          : `${ok}/${completedTools.length} succeeded (${elapsed}s)${summaryParts.length ? " — " + summaryParts.join(", ") : ""}${tokenTag}`;
+          ? `Done in ${elapsed}s${summaryParts.length ? " — " + summaryParts.join(", ") : ""}${tokenTag ? " — " + tokenTag : ""}`
+          : `${ok}/${completedTools.length} succeeded (${elapsed}s)${summaryParts.length ? " — " + summaryParts.join(", ") : ""}${tokenTag ? " — " + tokenTag : ""}`;
 
         say(summaryText, "system");
         yield { type: "text", content: summaryText };
+      } else if (tokenTotal > 0) {
+        // Agent gave text (with or without tools), or pure chat reply.
+        // Always show token usage so the user sees the cost.
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        say(`${elapsed}s — ${tokenTag}`, "system");
+      }
 
-        // Attribute tokens to every project this run touched, then
-        // emit a per-project running total so the user sees what
-        // each project has cost across all its turns.
-        if (tokenTotal > 0 && touchedProjectIds.size > 0) {
-          const { useProjectStore } = await import("@/lib/projects/store");
-          const store = useProjectStore.getState();
-          for (const pid of touchedProjectIds) {
-            store.addProjectTokens(pid, promptTokens);
-          }
-          // Re-read after mutation so we report the latest totals
-          const refreshed = useProjectStore.getState();
-          for (const pid of touchedProjectIds) {
-            const proj = refreshed.getProject(pid);
-            if (!proj?.tokensUsed) continue;
-            const t = proj.tokensUsed;
-            const total = t.input + t.output;
-            const label = proj.brief.slice(0, 40) + (proj.brief.length > 40 ? "…" : "");
-            say(
-              `Project "${label}" — ${total.toLocaleString()} tokens across ${t.turns} turn${t.turns === 1 ? "" : "s"}`,
-              "system",
-            );
-          }
+      // Attribute tokens to every project this run touched
+      if (tokenTotal > 0 && touchedProjectIds.size > 0) {
+        const { useProjectStore } = await import("@/lib/projects/store");
+        const store = useProjectStore.getState();
+        for (const pid of touchedProjectIds) {
+          store.addProjectTokens(pid, promptTokens);
         }
-      } else if (promptTokens.input + promptTokens.output > 0) {
-        // No tools ran but we still consumed tokens (e.g., pure chat reply).
-        // Emit a standalone token line so the user always sees the cost.
-        const tokenTotal = promptTokens.input + promptTokens.output;
-        say(
-          `${tokenTotal.toLocaleString()} tokens (${promptTokens.input.toLocaleString()} in / ${promptTokens.output.toLocaleString()} out)`,
-          "system",
-        );
+        const refreshed = useProjectStore.getState();
+        for (const pid of touchedProjectIds) {
+          const proj = refreshed.getProject(pid);
+          if (!proj?.tokensUsed) continue;
+          const t = proj.tokensUsed;
+          const total = t.input + t.output;
+          const label = proj.brief.slice(0, 40) + (proj.brief.length > 40 ? "…" : "");
+          say(
+            `Project "${label}" — ${total.toLocaleString()} tokens across ${t.turns} turn${t.turns === 1 ? "" : "s"}`,
+            "system",
+          );
+        }
       }
 
       // If no tools were called and no text was given, ask the user for

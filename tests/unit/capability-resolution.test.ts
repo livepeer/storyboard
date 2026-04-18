@@ -27,8 +27,8 @@ describe("Capability Resolution (fallback mode — no cache)", () => {
   });
 
   // Keyword matching
-  it("resolves kling-i2v → ltx-i2v (keyword i2v)", () => {
-    expect(resolveCapability("kling-i2v")).toBe("ltx-i2v");
+  it("resolves kling-i2v → seedance-i2v (keyword i2v, seedance preferred)", () => {
+    expect(resolveCapability("kling-i2v")).toBe("seedance-i2v");
   });
 
   it("resolves lux-tts → chatterbox-tts (keyword tts)", () => {

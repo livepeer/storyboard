@@ -5,6 +5,7 @@ import { resolveCapability, isValidCapability, getCachedCapabilities } from "@/l
 import { useSkillStore } from "@/lib/skills/store";
 import { useChatStore } from "@/lib/chat/store";
 import { useSessionContext } from "@/lib/agents/session-context";
+import { useProjectStore } from "@/lib/projects/store";
 import type { CardType } from "@/lib/canvas/types";
 
 /**
@@ -40,20 +41,25 @@ export function setCurrentUserText(text: string): void {
  */
 export const FALLBACK_CHAINS: Record<string, string[]> = {
   // Image generation
-  "flux-dev": ["flux-schnell", "recraft-v4", "gemini-image", "nano-banana"],
+  "flux-dev": ["seedream-5-lite", "flux-schnell", "recraft-v4", "gemini-image", "nano-banana"],
   "flux-schnell": ["flux-dev", "recraft-v4"],
   "recraft-v4": ["flux-dev", "flux-schnell"],
   "gemini-image": ["flux-dev", "nano-banana"],
   "nano-banana": ["flux-dev", "gemini-image"],
+  "seedream-5-lite": ["flux-dev", "flux-schnell", "recraft-v4"],
 
   // Image edit
   "kontext-edit": ["flux-fill", "gemini-image"],
   "flux-fill": ["kontext-edit"],
 
   // Video image-to-video
-  "veo-i2v": ["ltx-i2v", "pixverse-i2v"],
-  "ltx-i2v": ["veo-i2v", "pixverse-i2v"],
-  "pixverse-i2v": ["veo-i2v", "ltx-i2v"],
+  "veo-i2v": ["seedance-i2v", "ltx-i2v", "pixverse-i2v"],
+  "seedance-i2v": ["seedance-i2v-fast", "veo-i2v", "ltx-i2v"],
+  "seedance-i2v-fast": ["seedance-i2v", "veo-i2v", "ltx-i2v"],
+  "ltx-i2v": ["seedance-i2v-fast", "veo-i2v", "pixverse-i2v"],
+  "pixverse-i2v": ["seedance-i2v-fast", "veo-i2v", "ltx-i2v"],
+  // Kling i2v (legacy entry)
+  "kling-i2v": ["seedance-i2v", "veo-i2v", "ltx-i2v"],
 
   // Video text-to-video
   "veo-t2v": ["ltx-t2v", "pixverse-t2v"],
@@ -180,6 +186,8 @@ interface MediaStep {
   model_override?: string;
   depends_on?: number;
   source_url?: string;
+  /** Video duration in seconds (for animate action). Passed to i2v models. */
+  duration?: number;
 }
 
 /**
@@ -199,7 +207,7 @@ function selectCapability(
     const resolved = resolveCapability(modelOverride, action);
     if (resolved) {
       const id = resolved.toLowerCase();
-      const isVideo = id.includes("i2v") || id.includes("t2v") || id.includes("transition") || id.includes("pixverse") || id.includes("inpaint");
+      const isVideo = id.includes("i2v") || id.includes("t2v") || id.includes("transition") || id.includes("pixverse") || id.includes("inpaint") || id.includes("seedance");
       const isAudio = id.includes("tts");
       const is3D = id.includes("3d");
       return {
@@ -212,9 +220,9 @@ function selectCapability(
   // Detect explicit model name in user text: "using pixverse", "with tripo",
   // "grok tts", etc. This lets users bypass the automatic routing.
   const userModelMention = (currentUserText || "").match(
-    /\b(?:using|with|via|use)\s+(pixverse|tripo|grok|inworld|gemini.tts|void)/i
+    /\b(?:using|with|via|use)\s+(pixverse|tripo|grok|inworld|gemini.tts|void|seedance|seedream)/i
   ) || (currentUserText || "").match(
-    /\b(pixverse|tripo|grok.tts|inworld.tts|void.inpaint)\b/i
+    /\b(pixverse|tripo|grok.tts|inworld.tts|void.inpaint|seedance|seedream)\b/i
   );
   if (userModelMention) {
     const mention = userModelMention[1].toLowerCase().replace(/[.\s]+/g, "-");
@@ -230,11 +238,18 @@ function selectCapability(
       "inworld-tts": { capability: "inworld-tts", type: "audio" },
       "gemini-tts": { capability: "gemini-tts", type: "audio" },
       "void-inpaint": { capability: "void-inpaint", type: "video" },
+      "seedance": { capability: hasSourceUrl ? "seedance-i2v" : "veo-t2v", type: "video" },
+      "seedream": { capability: "seedream-5-lite", type: "image" },
     };
     const match = mentionMap[mention];
     if (match) {
+      // Check live registry first, fall back to known capabilities if cache is cold.
+      // Without this fallback, a cold cache silently drops the user's model request.
       const live = getCachedCapabilities();
-      if (live && live.some((c) => c.name === match.capability)) {
+      const isLive = live
+        ? live.some((c) => c.name === match.capability)
+        : isValidCapability(match.capability);
+      if (isLive) {
         console.log(`[selectCapability] User requested "${mention}" → ${match.capability}`);
         return match;
       }
@@ -263,7 +278,7 @@ function selectCapability(
   const hasVideoNoun = /\b(video|clip|footage|animation)\b/.test(lowerUser);
   const hasDuration = /\b\d+[- ]second\b/.test(lowerUser);
   const explicitMakeVideo = /\b(make|generate|create|produce)\s+(a|an|me\s+a|me\s+an)?\s*\d*[- ]?\s*seconds?\s*(video|clip|animation|movie)\b/.test(lowerUser);
-  const mentionsVideoModel = /\b(pixverse|veo|ltx)\b/.test(lowerUser) && hasVideoNoun;
+  const mentionsVideoModel = /\b(pixverse|veo|ltx|seedance)\b/.test(lowerUser) && hasVideoNoun;
   const asksForVideo = (hasVideoNoun && hasDuration) || explicitMakeVideo || mentionsVideoModel;
 
   // Motion verbs that indicate the user wants an animation (image -> video).
@@ -326,9 +341,11 @@ function selectCapability(
         // not a video. kontext-edit is image-to-image refinement.
         return { capability: "kontext-edit", type: "image" };
       }
-      // Route to Veo 3.1 (via fal.ai) when available — dramatically
-      // better quality + audio than LTX. Falls back to ltx-i2v if the
-      // live capability registry doesn't include veo-i2v.
+      // Prefer Seedance 2.0 (ByteDance) for cinematic i2v — 15s
+      // duration, high motion fidelity, audio generation. Falls back
+      // through veo-i2v → ltx-i2v via FALLBACK_CHAINS.
+      const hasSeedance = !!valid && valid.some((c) => c.name === "seedance-i2v");
+      if (hasSeedance) return { capability: "seedance-i2v", type: "video" };
       if (hasVeoI2V) return { capability: "veo-i2v", type: "video" };
       return { capability: "ltx-i2v", type: "video" };
     }
@@ -502,15 +519,16 @@ export const createMediaTool: ToolDefinition = {
         effectivePrompt,
       );
 
-      // Friendly names: short, memorable, easy to reference in chat
-      // "img-1", "vid-2", "aud-3" — type prefix + sequential number
+      // Friendly names: project-prefixed, easy to reference in chat
+      // With project: "ev-bikes.img-1", "sunset.vid-2"
+      // Without: "img-1", "vid-2"
       const typePrefix: Record<string, string> = {
         image: "img", video: "vid", audio: "aud", stream: "str",
       };
-      // Read FRESH state each iteration — the snapshot from line 180 is stale
-      // after addCard() calls in previous loop iterations
       const cardNum = useCanvasStore.getState().cards.length + 1;
-      const refId = `${typePrefix[type] || "med"}-${cardNum}`;
+      const activeProj = useProjectStore?.getState?.()?.getActiveProject?.();
+      const projPrefix = activeProj ? `${activeProj.id.split("_")[0]}.` : "";
+      const refId = `${projPrefix}${typePrefix[type] || "med"}-${cardNum}`;
       // Title: use step.title if agent provided one, else extract 3-5 key words from prompt
       const title = step.title || extractShortTitle(step.prompt);
 
@@ -551,6 +569,11 @@ export const createMediaTool: ToolDefinition = {
       } else if (step.source_url) {
         // Source from existing canvas card (agent passes URL from canvas_get)
         params.image_url = step.source_url;
+      }
+
+      // Forward video duration for animate actions (Seedance supports 4-15s)
+      if (step.duration && step.action === "animate") {
+        params.duration = String(step.duration);
       }
 
       // Build the fallback chain for this step. The first attempt is

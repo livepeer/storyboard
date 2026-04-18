@@ -1,6 +1,17 @@
 import type { LayoutSkill, LayoutContext, CardPosition, LayoutPreset } from "./types";
 import type { Card } from "@/lib/canvas/types";
 import { BASE_CARD_W, BASE_CARD_H, HEADER_OFFSET } from "./types";
+// Lazy-loaded to avoid circular deps and test failures with @/ alias
+let _projectStore: typeof import("@/lib/projects/store").useProjectStore | null = null;
+function getProjectStore() {
+  if (!_projectStore) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      _projectStore = require("@/lib/projects/store").useProjectStore;
+    } catch { /* test env or SSR */ }
+  }
+  return _projectStore;
+}
 
 export function runLayout(ctx: LayoutContext, skill: LayoutSkill): CardPosition[] {
   if (ctx.cards.length === 0) return [];
@@ -51,6 +62,7 @@ function groupCards(
   groupBy: string
 ): Card[][] {
   if (groupBy === "episode" && ctx.episodes.length > 0) return groupByEpisode(ordered, ctx);
+  if (groupBy === "project") return groupByProject(ordered);
   if (groupBy === "batch") return groupByBatch(ordered);
   return [ordered];
 }
@@ -118,6 +130,53 @@ function groupByEpisode(ordered: LayoutContext["cards"], ctx: LayoutContext): Ca
   }
   if (ungrouped.length > 0) groups.push(ungrouped);
   return groups;
+}
+
+/**
+ * Group cards by project. Each project's cards form one group, ordered
+ * by scene index. Cards not belonging to any project go into a trailing
+ * "ungrouped" group. This keeps project artifacts together on the canvas.
+ */
+function groupByProject(ordered: LayoutContext["cards"]): Card[][] {
+  const projectStore = getProjectStore();
+  const projects = projectStore ? projectStore.getState().projects : [];
+  if (projects.length === 0) return groupByBatch(ordered); // fallback
+
+  // Build refId → projectIndex + sceneIndex map
+  const cardToProject = new Map<string, { projIdx: number; sceneIdx: number }>();
+  for (let pi = 0; pi < projects.length; pi++) {
+    const proj = projects[pi];
+    for (let si = 0; si < proj.scenes.length; si++) {
+      const refId = proj.scenes[si].cardRefId;
+      if (refId) cardToProject.set(refId, { projIdx: pi, sceneIdx: si });
+    }
+  }
+
+  const groups: Card[][] = Array.from({ length: projects.length }, () => []);
+  const ungrouped: Card[] = [];
+
+  for (const card of ordered) {
+    const mapping = cardToProject.get(card.refId);
+    if (mapping) {
+      groups[mapping.projIdx].push(card);
+    } else {
+      ungrouped.push(card);
+    }
+  }
+
+  // Sort cards within each project group by scene index
+  for (let pi = 0; pi < projects.length; pi++) {
+    groups[pi].sort((a, b) => {
+      const ai = cardToProject.get(a.refId)?.sceneIdx ?? 0;
+      const bi = cardToProject.get(b.refId)?.sceneIdx ?? 0;
+      return ai - bi;
+    });
+  }
+
+  // Return non-empty groups + ungrouped
+  const result = groups.filter((g) => g.length > 0);
+  if (ungrouped.length > 0) result.push(ungrouped);
+  return result;
 }
 
 function positionRows(

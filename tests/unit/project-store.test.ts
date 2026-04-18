@@ -17,7 +17,7 @@ describe("Project Store", () => {
         { index: 2, title: "Interior", description: "Cabin tech", prompt: "car interior tech", mediaType: "image", action: "generate" },
       ]
     );
-    expect(project.id).toMatch(/^proj_/);
+    expect(project.id).toMatch(/^\w+[-_]/); // friendly name prefix
     expect(project.scenes).toHaveLength(3);
     expect(project.scenes[0].status).toBe("pending");
     expect(project.status).toBe("planning");
@@ -140,7 +140,7 @@ describe("Project Tools — Execution", () => {
     expect(result.success).toBe(true);
     expect(result.data.total_scenes).toBe(3);
     expect(result.data.batches_needed).toBe(1); // 3 scenes, batch size 5
-    expect(result.data.project_id).toMatch(/^proj_/);
+    expect(result.data.project_id).toMatch(/^\w+[-_]/); // friendly name prefix
 
     const project = useProjectStore.getState().getProject(result.data.project_id);
     expect(project).toBeDefined();
