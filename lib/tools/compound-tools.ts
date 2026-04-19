@@ -590,10 +590,10 @@ export const createMediaTool: ToolDefinition = {
         params.image_url = step.source_url;
       }
 
-      // Forward video duration for animate actions (Seedance supports 4-15s)
-      if (step.duration && step.action === "animate") {
-        params.duration = String(step.duration);
-      }
+      // Store raw duration for per-model adaptation in the fallback loop.
+      // Each i2v model has different duration formats — seedance wants
+      // string "10", veo/ltx don't accept it at all.
+      const rawDuration = step.duration && step.action === "animate" ? step.duration : 0;
 
       // Build the fallback chain for this step. The first attempt is
       // the resolved capability; if it fails with a recoverable error
@@ -623,12 +623,23 @@ export const createMediaTool: ToolDefinition = {
           console.log(`[create_media] Fallback: ${prev} → ${currentCap} (step ${i})`);
         }
 
+        // Adapt params per model — each i2v model has different duration/param formats.
+        // Seedance: duration as string ("10"), generate_audio. Others: strip these.
+        const capParams = { ...params };
+        if (rawDuration && currentCap.startsWith("seedance")) {
+          capParams.duration = String(rawDuration);
+          capParams.generate_audio = true;
+        } else {
+          delete capParams.duration;
+          delete capParams.generate_audio;
+        }
+
         const t0 = performance.now();
         try {
           const result = await runInference({
             capability: currentCap,
             prompt: effectivePrompt,
-            params,
+            params: capParams,
           });
           const elapsed = performance.now() - t0;
 
