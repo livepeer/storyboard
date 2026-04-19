@@ -27,8 +27,8 @@ describe("pickStrategy", () => {
   it("returns narrative when many edges", () => {
     const cards = Array.from({ length: 5 }, (_, i) => makeCard(String(i), `img-${i}`));
     const edges = [
-      { fromRefId: "img-0", toRefId: "img-1" }, { fromRefId: "img-1", toRefId: "img-2" },
-      { fromRefId: "img-2", toRefId: "img-3" }, { fromRefId: "img-3", toRefId: "img-4" },
+      { id: "e0", fromRefId: "img-0", toRefId: "img-1" }, { id: "e1", fromRefId: "img-1", toRefId: "img-2" },
+      { id: "e2", fromRefId: "img-2", toRefId: "img-3" }, { id: "e3", fromRefId: "img-3", toRefId: "img-4" },
     ];
     const ctx: LayoutContext = { cards, edges, episodes: [], activeEpisodeId: null, canvasWidth: 1920 };
     expect(pickStrategy(ctx, null)).toBe("narrative");

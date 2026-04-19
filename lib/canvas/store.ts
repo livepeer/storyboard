@@ -232,7 +232,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           ),
         };
       }
-      return { edges: [...s.edges, { fromRefId, toRefId, meta }] };
+      return { edges: [...s.edges, { id: `${fromRefId}-->${toRefId}`, fromRefId, toRefId, meta }] };
     }),
 
   removeEdgesFor: (refId) =>
