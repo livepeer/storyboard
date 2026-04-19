@@ -5,6 +5,9 @@ export type {
 
 // Stores
 export { createArtifactStore, type ArtifactStoreOptions } from "./stores/create-artifact-store";
+export { createChatStore } from "./stores/create-chat-store";
+export { createProjectStore, type ProjectStoreOptions } from "./stores/create-project-store";
+export { createGroupManager } from "./stores/create-group-manager";
 export type {
   PipelineItem, Project, ProjectPipeline, ItemStatus, ProjectStatus,
 } from "./interfaces/project-pipeline";
