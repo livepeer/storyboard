@@ -654,6 +654,50 @@ Styles: modern, dark, light, colorful, corporate, scenic, vivid, isometric, iso,
 Requires Gmail MCP connection (local server at scripts/gmail-mcp-server.ts).
 Architecture: briefing fast path in gemini/index.ts → gmail_list via MCP → LLM summarization → analyzeEmail (urgency/action/date) → project_create + project_generate → canvas_organize → caption banners with CaptionBanner component (date=cyan, action=amber, expandable). Cover slide uses coverText field.
 
+### /talk — Talking Video with Voice Cloning
+```
+/talk <text> --face <card>                Generate talking video with default voice
+/talk <text> --face img-1 --voice aud-2   Clone voice from audio card
+```
+Pipeline: `chatterbox-tts` (text + optional `audio_url` for voice clone) → `talking-head` (image + audio → lip-synced video).
+Right-click image card → "Talking Video" for the UI version (multi-step dialog: text → voice picker).
+Import voice samples: right-click canvas → Import → select .wav/.mp3 file.
+Files: `lib/skills/commands.ts` (handleTalk), `components/canvas/ContextMenu.tsx` (talking-video action)
+
+### /project — Project Management
+```
+/project list              — show all projects (blue clickable names)
+/project show [name]       — details + scene list of active or named project
+/project switch <name>     — set as active (partial match works)
+/project add <brief>       — create empty project
+/project replay [name]     — regenerate all scenes from stored prompts
+/project clear             — remove all projects
+```
+Projects auto-created by agent. Friendly names from brief ("ev-bikes", "sunset-story"). Capped at 30 in localStorage.
+Cards get project-prefixed refIds: `ev-bikes.img-1` instead of bare `img-1`.
+ProjectListCard renders with blue names, switch buttons, active badge.
+Files: `lib/projects/commands.ts`, `components/chat/ProjectListCard.tsx`, `lib/projects/store.ts`
+
+### /analyze — Image/Video Analysis via Gemini Vision
+```
+/analyze <card-name>       — extract style, characters, setting, mood from image/video
+```
+Right-click card → "Analyze Media" for the UI version.
+Sends media to Gemini 2.5 Flash vision → extracts CreativeContext (style, palette, characters, setting, mood, description).
+Auto-applies as creative context if none exists. Supports images and short videos (<15MB).
+Files: `lib/tools/image-analysis.ts`, `lib/skills/commands.ts` (handleAnalyze)
+
+### /stream graphs — Scope Graph Management
+```
+/stream graphs              — list built-in + saved graph templates
+/stream graphs save <name>  — save last stream's graph for reuse
+/stream graphs remove <name> — delete a saved graph
+```
+6 built-in templates: simple-lv2v, depth-guided, scribble-guided, interpolated, text-only, multi-pipeline.
+User-saved graphs persisted in localStorage (max 20). Referenced by name in `/stream` plans.
+Skill reference: `skills/scope-graph-builder.md` — full pipeline/node/param reference.
+Files: `lib/stream-cmd/graph-store.ts`, `lib/stream-cmd/commands.ts`, `lib/stream/scope-graphs.ts`
+
 ### Creative Tools — context menu + slash commands
 | Tool | Context Menu | Slash Command | Capability |
 |---|---|---|---|
@@ -661,11 +705,14 @@ Architecture: briefing fast path in gemini/index.ts → gmail_list via MCP → L
 | Make Logo | 🎨 right-click card | `/logo <desc>` | kontext-edit / flux-dev |
 | Replace Object | 🔄 right-click card | — | kontext-edit |
 | Isometric | ◆ right-click card | `/iso <desc>` | kontext-edit / flux-dev |
-| Virtual Try-On | 👕 right-click card | — | fashn-tryon |
+| Virtual Try-On | 👕 right-click card | `/tryon <person> <garment>` | fashn-tryon |
+| Video Try-On | 🎥 right-click card | — | fashn-tryon → seedance/veo/ltx |
+| Talking Video | 🗣 right-click card | `/talk <text> --face <card>` | chatterbox-tts → talking-head |
 | Weather Effect | ⛅ right-click card | — | kontext-edit → kling-i2v |
 | Cinematic Video | 🎬 right-click card | — | seedance-i2v (up to 15s + audio) |
+| Analyze Media | 🔍 right-click card | `/analyze <card>` | Gemini Vision |
 | Convert to 3D | 🖥 right-click card | — | tripo-i3d |
-| Import Media | 📁/🔗 right-click canvas | — | — (GCS upload) |
+| Import Media | 📁/🔗 right-click canvas | — | image/video/audio (GCS upload) |
 
 ### Capabilities (40 on BYOC orch)
 Image: flux-dev, flux-schnell, recraft-v4, gemini-image, nano-banana, flux-flex, seedream-5-lite
