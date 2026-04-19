@@ -1,12 +1,16 @@
+import type { PipelineItem } from "@livepeer/creative-kit";
+
 export type SceneStatus = "pending" | "generating" | "done" | "rejected" | "regenerating";
 export type ProjectStatus = "planning" | "generating" | "reviewing" | "iterating" | "complete";
 export type SceneMediaType = "image" | "video" | "audio";
 
-export interface Scene {
-  index: number;
+/**
+ * Scene extends PipelineItem from creative-kit.
+ * cardRefId is the storyboard name for artifactRefId.
+ */
+export interface Scene extends Omit<PipelineItem, "status"> {
   description: string;
-  prompt: string;
-  title: string;
+  /** @deprecated Use artifactRefId. Kept for backwards compat. */
   cardRefId?: string;
   status: SceneStatus;
   dependsOn?: number[];
