@@ -3,6 +3,8 @@ import { generateStreamPlan } from "./generator";
 import type { StreamPlan } from "./types";
 import { createTracker } from "@/lib/utils/execution-tracker";
 import { useChatStore } from "@/lib/chat/store";
+import { useGraphStore } from "./graph-store";
+import { GRAPH_TEMPLATES, buildGraph } from "@/lib/stream/scope-graphs";
 
 export const STREAM_CARD_MARKER = "@@stream-plan@@";
 export const STREAM_CARD_END = "@@/stream-plan@@";
@@ -31,6 +33,7 @@ export async function handleStreamCommand(args: string): Promise<string> {
   if (lower === "show") return streamShow(rest.join(" ").trim());
   if (lower === "apply") return streamApply(rest.join(" ").trim());
   if (lower === "stop") return streamStop();
+  if (lower === "graphs") return streamGraphs(rest.join(" ").trim());
 
   return streamGenerate(trimmed);
 }
@@ -38,10 +41,13 @@ export async function handleStreamCommand(args: string): Promise<string> {
 function streamHelp(): string {
   return [
     "Usage:",
-    "  /stream <concept>       — plan a multi-scene live stream",
-    "  /stream list            — recent stream plans",
-    "  /stream apply [id]      — start the stream with prompt traveling",
-    "  /stream stop            — stop the active stream",
+    "  /stream <concept>             — plan a multi-scene live stream",
+    "  /stream list                  — recent stream plans",
+    "  /stream apply [id]            — start the stream with prompt traveling",
+    "  /stream stop                  — stop the active stream",
+    "  /stream graphs                — list all graph templates (built-in + saved)",
+    "  /stream graphs save <name>    — save the last-used graph with a name",
+    "  /stream graphs remove <name>  — delete a saved graph",
     "",
     "Scenes transition automatically — like prompt traveling through a story.",
   ].join("\n");
@@ -161,6 +167,59 @@ async function streamApply(idOrEmpty: string): Promise<string> {
   } catch (e) {
     return `Stream failed: ${e instanceof Error ? e.message : "unknown"}`;
   }
+}
+
+function streamGraphs(args: string): string {
+  const [sub, ...rest] = args.trim().split(/\s+/);
+  const lowerSub = sub?.toLowerCase() ?? "";
+
+  // /stream graphs save <name> [description]
+  if (lowerSub === "save") {
+    const name = rest[0];
+    if (!name) return "Usage: /stream graphs save <name> [description]";
+    // Find the most recent stream plan's graph
+    const recentPlan = useStreamStore.getState().listRecent(1)[0];
+    if (!recentPlan) return "No recent stream plan to save the graph from. Run /stream <concept> first.";
+    const template = GRAPH_TEMPLATES.find((t) => t.id === recentPlan.graphTemplate);
+    if (!template) return `Graph template "${recentPlan.graphTemplate}" not found.`;
+    const graph = template.build();
+    const desc = rest.slice(1).join(" ") || template.description;
+    const saved = useGraphStore.getState().saveGraph(name, desc, graph);
+    return `Saved graph "${saved.name}" — ${desc}`;
+  }
+
+  // /stream graphs remove <name>
+  if (lowerSub === "remove" || lowerSub === "delete") {
+    const name = rest.join(" ");
+    if (!name) return "Usage: /stream graphs remove <name>";
+    const found = useGraphStore.getState().getByName(name);
+    if (!found) return `No saved graph "${name}".`;
+    useGraphStore.getState().removeGraph(found.id);
+    return `Removed graph "${found.name}".`;
+  }
+
+  // /stream graphs — list all
+  const all = useGraphStore.getState().listAll();
+  if (all.length === 0) return "No graph templates available.";
+
+  const lines = ["Stream Graph Templates:"];
+  const builtIn = all.filter((g) => g.builtIn);
+  const user = all.filter((g) => !g.builtIn);
+
+  lines.push("\n── Built-in ──");
+  for (const g of builtIn) {
+    lines.push(`  ${g.name.padEnd(18)} ${g.description}`);
+  }
+  if (user.length > 0) {
+    lines.push("\n── Saved ──");
+    for (const g of user) {
+      lines.push(`  ${g.name.padEnd(18)} ${g.description}`);
+    }
+  }
+  lines.push("");
+  lines.push("  /stream graphs save <name>    — save from last stream plan");
+  lines.push("  /stream graphs remove <name>  — delete a saved graph");
+  return lines.join("\n");
 }
 
 async function streamStop(): Promise<string> {

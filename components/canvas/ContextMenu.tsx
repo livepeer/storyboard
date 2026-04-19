@@ -45,6 +45,7 @@ const ACTIONS: MenuAction[] = [
   { id: "make-logo", label: "Make Logo\u2026", icon: "\uD83C\uDFA8", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "replace-object", label: "Replace Object\u2026", icon: "\uD83D\uDD04", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "iso-style", label: "Isometric SVG Style", icon: "\u25C6", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "talking-video", label: "Talking Video\u2026", icon: "\uD83D\uDDE3", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "analyze", label: "Analyze Media", icon: "\uD83D\uDD0D", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
   { id: "transform-video", label: "Transform Video\u2026", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   // --- LV2V from card ---
@@ -526,6 +527,81 @@ export function ContextMenu() {
           addMessage(`LV2V stream started from "${targetCard.title}"`, "agent");
         } catch (e) {
           addMessage(`LV2V error: ${e instanceof Error ? e.message : "Unknown"}`, "system");
+        }
+        return;
+      }
+
+      // --- Talking Video: picture + text + optional voice clone → talking head video ---
+      if (action.id === "talking-video") {
+        if (!targetCard.url) { addMessage("Card has no image.", "system"); return; }
+
+        // Step 1: Get the speech text
+        const speechText = await styledPrompt("Talking Video", "What should they say?");
+        if (!speechText) return;
+
+        // Step 2: Get optional voice clone source
+        const allCards = useCanvasStore.getState().cards;
+        const audioCards = allCards.filter((c) => c.type === "audio" && c.url);
+        let voiceHint = "";
+        if (audioCards.length > 0) {
+          const cardList = audioCards.map((c) => c.refId).join(", ");
+          voiceHint = ` (audio cards: ${cardList})`;
+        }
+        const voiceRef = await styledPrompt("Voice Clone (optional)", `Card name to clone voice from${voiceHint}, or leave blank for default`);
+        const voiceCard = voiceRef ? allCards.find((c) => c.refId === voiceRef.trim()) : null;
+
+        addMessage(`Creating talking video: "${speechText.slice(0, 40)}…"${voiceCard ? ` (voice: ${voiceCard.refId})` : ""}`, "system");
+
+        try {
+          // Step A: Generate speech audio via chatterbox-tts (with optional voice clone)
+          addMessage("Step 1/2: Generating speech…", "system");
+          const ttsParams: Record<string, unknown> = { text: speechText };
+          if (voiceCard?.url) ttsParams.audio_url = voiceCard.url;
+
+          const ttsResult = await runInference({
+            capability: "chatterbox-tts",
+            prompt: speechText,
+            params: ttsParams,
+          });
+          const tr = ttsResult as Record<string, unknown>;
+          const td = (tr.data ?? tr) as Record<string, unknown>;
+          const audioUrl = (tr.audio_url as string)
+            ?? (td.audio as { url: string })?.url
+            ?? (td.audio_file as { url: string })?.url;
+          const ttsError = extractFalError(td);
+
+          if (!audioUrl) {
+            addMessage(`Speech generation failed: ${ttsError || "No audio returned"}`, "system");
+            return;
+          }
+
+          // Show the audio as an intermediate card
+          const audioCard = addCard({ type: "audio", title: `Speech: ${speechText.slice(0, 25)}`, refId: `aud-talk-${Date.now()}` });
+          updateCard(audioCard.id, { url: audioUrl, capability: "chatterbox-tts" });
+          addEdge(targetCard.refId, audioCard.refId, { capability: "chatterbox-tts", action: "tts" });
+
+          // Step B: Animate with talking-head (image + audio → video)
+          addMessage("Step 2/2: Animating talking head…", "system");
+          const thResult = await runInference({
+            capability: "talking-head",
+            prompt: "talking head animation",
+            params: { image_url: targetCard.url, audio_url: audioUrl },
+          });
+          const vr = thResult as Record<string, unknown>;
+          const vd = (vr.data ?? vr) as Record<string, unknown>;
+          const videoUrl = (vr.video_url as string) ?? (vd.video as { url: string })?.url;
+          const thError = extractFalError(vd);
+
+          if (videoUrl && !thError) {
+            const vidCard = addCard({ type: "video", title: `Talking: ${targetCard.title}`, refId: `vid-talk-${Date.now()}` });
+            updateCard(vidCard.id, { url: videoUrl, capability: "talking-head" });
+            addEdge(audioCard.refId, vidCard.refId, { capability: "talking-head", action: "animate" });
+            addMessage("Talking video complete!", "system");
+          } else {
+            addMessage(`Talking head failed: ${thError || "No video returned"}. Audio is on the canvas — try lipsync manually.`, "system");
+          }
+        } catch (e) {
+          addMessage(`Talking video failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
         }
         return;
       }

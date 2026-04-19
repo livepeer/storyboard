@@ -96,6 +96,8 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleStreamCommand(cmd.args);
     case "project":
       return handleProjectCommand(cmd.args);
+    case "stream/graphs":
+      return handleStreamCommand(`graphs ${cmd.args}`);
     case "lego":
       return handleQuickStyle("lego", cmd.args, "Convert to LEGO minifigure style, plastic bricks, yellow skin, brick studs, toy photography, vibrant");
     case "logo":
@@ -106,6 +108,8 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleTryonVideo(cmd.args);
     case "analyze":
       return handleAnalyze(cmd.args);
+    case "talk":
+      return handleTalk(cmd.args);
     default:
       return `Unknown command: /${cmd.command}. Type /help for all commands.`;
   }
@@ -127,6 +131,8 @@ function showHelp(): string {
     "  /stream <concept>           Plan a multi-scene live stream (prompt traveling)",
     "  /stream apply [id]          Start stream, scenes transition automatically",
     "  /stream stop                Stop active stream",
+    "  /stream graphs              List all graph templates (built-in + saved)",
+    "  /stream graphs save <name>  Save last stream's graph for reuse",
     "",
     "── PROJECT MANAGEMENT ──",
     "  /project list               Show all projects with status",
@@ -155,6 +161,10 @@ function showHelp(): string {
     "  /logo <description>         Generate logo design",
     "  /iso <description>          Generate isometric illustration",
     "  /tryon <person> <garment>   Virtual try-on → animate to runway video",
+    "",
+    "── TALKING VIDEO ──",
+    "  /talk <text> --face <card>  Generate talking video (TTS → lip-sync animation)",
+    "  /talk <text> --face img-1 --voice aud-2   Clone voice from audio card",
     "",
     "── ANALYSIS ──",
     "  /analyze <card-name>        Extract style, characters, setting from image/video",
@@ -705,4 +715,74 @@ async function handleAnalyze(args: string): Promise<string> {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * /talk <text> --face <card> [--voice <card>]
+ * Generate a talking video: TTS with optional voice clone → talking-head animation.
+ */
+async function handleTalk(args: string): Promise<string> {
+  if (!args.trim()) {
+    return [
+      "Usage: /talk <speech text> --face <card> [--voice <card>]",
+      "",
+      "Examples:",
+      '  /talk Hello, welcome to our demo --face img-1',
+      '  /talk "Amazing product" --face img-2 --voice aud-1',
+      "",
+      "Pipeline: text → chatterbox-tts (voice clone) → talking-head (lip-sync video)",
+      "Right-click an image card → 'Talking Video' for the UI version.",
+    ].join("\n");
+  }
+
+  // Parse --face and --voice flags
+  const faceMatch = args.match(/--face\s+(\S+)/i);
+  const voiceMatch = args.match(/--voice\s+(\S+)/i);
+  const speechText = args
+    .replace(/--face\s+\S+/i, "")
+    .replace(/--voice\s+\S+/i, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+
+  if (!speechText) return "No speech text provided. Usage: /talk <text> --face <card>";
+  if (!faceMatch) return "Missing --face <card>. Usage: /talk <text> --face img-1";
+
+  const cards = useCanvasStore.getState().cards;
+  const faceCard = cards.find((c) => c.refId === faceMatch[1]);
+  if (!faceCard?.url) return `Face card "${faceMatch[1]}" not found or has no image.`;
+
+  const voiceCard = voiceMatch ? cards.find((c) => c.refId === voiceMatch[1]) : null;
+  if (voiceMatch && !voiceCard?.url) return `Voice card "${voiceMatch[1]}" not found or has no audio.`;
+
+  const { runInference } = await import("@/lib/sdk/client");
+  const { extractFalError } = await import("@/lib/tools/compound-tools");
+  const canvas = useCanvasStore.getState();
+  const { useChatStore } = await import("@/lib/chat/store");
+  const say = (msg: string) => useChatStore.getState().addMessage(msg, "system");
+
+  say("Step 1/2: Generating speech…");
+  const ttsParams: Record<string, unknown> = { text: speechText };
+  if (voiceCard?.url) ttsParams.audio_url = voiceCard.url;
+
+  const ttsResult = await runInference({ capability: "chatterbox-tts", prompt: speechText, params: ttsParams });
+  const tr = ttsResult as Record<string, unknown>;
+  const td = (tr.data ?? tr) as Record<string, unknown>;
+  const audioUrl = (tr.audio_url as string) ?? (td.audio as { url: string })?.url ?? (td.audio_file as { url: string })?.url;
+  if (!audioUrl) return `Speech failed: ${extractFalError(td) || "No audio returned"}`;
+
+  const audioCard = canvas.addCard({ type: "audio", title: `Speech: ${speechText.slice(0, 25)}`, refId: `aud-talk-${Date.now()}` });
+  canvas.updateCard(audioCard.id, { url: audioUrl, capability: "chatterbox-tts" });
+
+  say("Step 2/2: Animating talking head…");
+  const thResult = await runInference({ capability: "talking-head", prompt: "talking head animation", params: { image_url: faceCard.url, audio_url: audioUrl } });
+  const vr = thResult as Record<string, unknown>;
+  const vd = (vr.data ?? vr) as Record<string, unknown>;
+  const videoUrl = (vr.video_url as string) ?? (vd.video as { url: string })?.url;
+
+  if (videoUrl) {
+    const vidCard = canvas.addCard({ type: "video", title: `Talking: ${faceCard.title}`, refId: `vid-talk-${Date.now()}` });
+    canvas.updateCard(vidCard.id, { url: videoUrl, capability: "talking-head" });
+    return "Talking video complete — check the canvas.";
+  }
+  return `Talking head failed: ${extractFalError(vd) || "No video returned"}. Audio is on the canvas.`;
 }
