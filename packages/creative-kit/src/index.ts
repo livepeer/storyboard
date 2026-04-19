@@ -2,6 +2,9 @@
 export type {
   Artifact, ArtifactEdge, Viewport, ArtifactStore,
 } from "./interfaces/artifact-store";
+
+// Stores
+export { createArtifactStore, type ArtifactStoreOptions } from "./stores/create-artifact-store";
 export type {
   PipelineItem, Project, ProjectPipeline, ItemStatus, ProjectStatus,
 } from "./interfaces/project-pipeline";
