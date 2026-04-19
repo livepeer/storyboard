@@ -34,6 +34,7 @@ export async function handleStreamCommand(args: string): Promise<string> {
   if (lower === "apply") return streamApply(rest.join(" ").trim());
   if (lower === "stop") return streamStop();
   if (lower === "graphs") return streamGraphs(rest.join(" ").trim());
+  if (lower === "ptravel") return streamPtravel(rest.join(" ").trim());
 
   return streamGenerate(trimmed);
 }
@@ -45,9 +46,14 @@ function streamHelp(): string {
     "  /stream list                  — recent stream plans",
     "  /stream apply [id]            — start the stream with prompt traveling",
     "  /stream stop                  — stop the active stream",
+    "  /stream ptravel <desc> #N,#Ds — prompt-travel on active stream (N scenes, D sec each)",
     "  /stream graphs                — list all graph templates (built-in + saved)",
     "  /stream graphs save <name>    — save the last-used graph with a name",
     "  /stream graphs remove <name>  — delete a saved graph",
+    "",
+    "Examples:",
+    '  /stream ptravel sunset over ocean morphing into aurora borealis #4,#15',
+    '  /stream ptravel cyberpunk city to forest #6,#10',
     "",
     "Scenes transition automatically — like prompt traveling through a story.",
   ].join("\n");
@@ -251,6 +257,135 @@ function streamGraphs(args: string): string {
   lines.push("  /stream graphs save <name>    — save from last stream plan");
   lines.push("  /stream graphs remove <name>  — delete a saved graph");
   return lines.join("\n");
+}
+
+/**
+ * /stream ptravel <description> #<scenes>,#<duration>
+ * Generate scenes from a description and apply as prompt traveling
+ * on the currently active stream. Drives the stream from the chat.
+ *
+ * Examples:
+ *   /stream ptravel sunset over ocean morphing into northern lights #4,#15
+ *   /stream ptravel a walk through Tokyo streets at night #6,#10
+ */
+async function streamPtravel(args: string): Promise<string> {
+  if (!args.trim()) {
+    return [
+      "Usage: /stream ptravel <description> #<scenes>,#<duration-per-scene>",
+      "",
+      "Examples:",
+      "  /stream ptravel sunset morphing into aurora #4,#15   (4 scenes, 15s each)",
+      "  /stream ptravel cyberpunk city to forest #6,#10      (6 scenes, 10s each)",
+      "",
+      "Requires an active stream — start one first with /stream <concept> then /stream apply",
+    ].join("\n");
+  }
+
+  // Parse #N,#D from the end of the args
+  const hashMatch = args.match(/#(\d+)\s*,\s*#(\d+)\s*$/);
+  const numScenes = hashMatch ? Math.max(2, Math.min(10, parseInt(hashMatch[1], 10))) : 4;
+  const sceneDuration = hashMatch ? Math.max(5, Math.min(60, parseInt(hashMatch[2], 10))) : 15;
+  const description = args.replace(/#\d+\s*,\s*#\d+\s*$/, "").trim();
+
+  if (description.length < 3) return "Give me a description for the prompt travel.";
+
+  // Check for active stream
+  const { getActiveSession } = await import("@/lib/stream/session");
+  const session = getActiveSession();
+  if (!session || session.stopped) {
+    return "No active stream. Start one first:\n  /stream <concept>\n  /stream apply";
+  }
+
+  const say = (text: string) => useChatStore.getState().addMessage(text, "system");
+  say(`Generating ${numScenes} prompt-travel scenes (${sceneDuration}s each)…`);
+
+  // Generate scene prompts via Gemini
+  const PTRAVEL_PROMPT = `Generate ${numScenes} scene prompts for a prompt-traveling live stream. The stream should smoothly evolve through these scenes over time.
+
+Concept: "${description}"
+
+Rules:
+- Exactly ${numScenes} scenes, each runs ${sceneDuration} seconds
+- Each prompt should flow naturally from the previous — smooth visual transitions
+- Prompts under 40 words each, vivid and visual
+- Pick a preset per scene: dreamy(0.7), cinematic(0.5), anime(0.6), abstract(0.95), faithful(0.2), painterly(0.65), psychedelic(0.9)
+
+Output STRICT JSON only. No code fences.
+{"scenes": [{"index": 1, "title": "short title", "prompt": "scene prompt", "preset": "cinematic", "noise_scale": 0.5}]}`;
+
+  try {
+    const resp = await fetch("/api/agent/gemini", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts: [{ text: PTRAVEL_PROMPT }] }],
+      }),
+    });
+    if (!resp.ok) return `Scene generation failed: ${resp.status}`;
+
+    const payload = await resp.json();
+    const text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
+      .candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
+
+    const { extractJsonObject } = await import("@/lib/story/generator");
+    const parsed = extractJsonObject(text) as Record<string, unknown> | null;
+    if (!parsed?.scenes || !Array.isArray(parsed.scenes)) return "Scene generation returned invalid JSON.";
+
+    const scenes = (parsed.scenes as Array<Record<string, unknown>>)
+      .filter((s) => typeof s.prompt === "string" && (s.prompt as string).length >= 5)
+      .map((s, i) => ({
+        title: (s.title as string) || `Scene ${i + 1}`,
+        prompt: (s.prompt as string).slice(0, 200),
+        preset: (s.preset as string) || "cinematic",
+        noiseScale: typeof s.noise_scale === "number" ? s.noise_scale : undefined,
+      }));
+
+    if (scenes.length === 0) return "No usable scenes generated.";
+
+    // Apply first scene immediately
+    const { listTools } = await import("@/lib/tools/registry");
+    const scopeControl = listTools().find((t) => t.name === "scope_control");
+    if (!scopeControl) return "scope_control tool not registered.";
+
+    say(`▶ Prompt travel: ${scenes.length} scenes × ${sceneDuration}s — starting now`);
+
+    await scopeControl.execute({
+      prompt: scenes[0].prompt,
+      preset: scenes[0].preset,
+      noise_scale: scenes[0].noiseScale,
+    });
+    say(`▶ Scene 1/${scenes.length}: ${scenes[0].title}`);
+
+    // Schedule remaining scenes
+    for (let i = 1; i < scenes.length; i++) {
+      const scene = scenes[i];
+      const delay = i * sceneDuration;
+      const sceneIdx = i;
+      setTimeout(async () => {
+        try {
+          say(`🔄 Scene ${sceneIdx + 1}/${scenes.length}: ${scene.title}`);
+          await scopeControl.execute({
+            prompt: scene.prompt,
+            preset: scene.preset,
+            noise_scale: scene.noiseScale,
+          });
+        } catch (e) {
+          say(`Scene ${sceneIdx + 1} failed: ${(e as Error).message}`);
+        }
+      }, delay * 1000);
+    }
+
+    const totalDuration = scenes.length * sceneDuration;
+    const timeline = scenes.map((s, i) => {
+      const start = i * sceneDuration;
+      return `  ${i + 1}. [${start}s] ${s.title} — ${s.preset}`;
+    }).join("\n");
+
+    return `🎬 Prompt traveling: "${description}"\n\n${timeline}\n\nTotal: ${totalDuration}s. Scenes transition every ${sceneDuration}s.`;
+  } catch (e) {
+    return `Prompt travel failed: ${e instanceof Error ? e.message : "unknown"}`;
+  }
 }
 
 async function streamStop(): Promise<string> {

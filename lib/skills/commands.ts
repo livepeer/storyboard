@@ -98,6 +98,8 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleProjectCommand(cmd.args);
     case "stream/graphs":
       return handleStreamCommand(`graphs ${cmd.args}`);
+    case "stream/ptravel":
+      return handleStreamCommand(`ptravel ${cmd.args}`);
     case "lego":
       return handleQuickStyle("lego", cmd.args, "Convert to LEGO minifigure style, plastic bricks, yellow skin, brick studs, toy photography, vibrant");
     case "logo":
@@ -131,6 +133,7 @@ function showHelp(): string {
     "  /stream <concept>           Plan a multi-scene live stream (prompt traveling)",
     "  /stream apply [id]          Start stream, scenes transition automatically",
     "  /stream stop                Stop active stream",
+    "  /stream ptravel <desc> #N,#Ds  Prompt-travel on active stream (N scenes, D sec each)",
     "  /stream graphs              List all graph templates (built-in + saved)",
     "  /stream graphs save <name>  Save last stream's graph for reuse",
     "",
