@@ -19,17 +19,6 @@ const DEFAULT_H = 280;
 const DEFAULT_GAP = 24;
 const DEFAULT_COLS = 5;
 
-let _idCounter = 0;
-let _refCounter = 0;
-
-function nextId(): string {
-  return String(++_idCounter);
-}
-
-function nextRefId(type: string): string {
-  return `${type}-${++_refCounter}`;
-}
-
 function gridPosition(
   index: number,
   w: number,
@@ -50,6 +39,12 @@ function edgeId(fromRefId: string, toRefId: string): string {
 }
 
 export function createArtifactStore(opts?: ArtifactStoreOptions) {
+  // Counters scoped to this store instance — no cross-contamination
+  let idCounter = 0;
+  let refCounter = 0;
+  const nextId = () => String(++idCounter);
+  const nextRefId = (type: string) => `${type}-${++refCounter}`;
+
   const cardW = opts?.cardW ?? DEFAULT_W;
   const cardH = opts?.cardH ?? DEFAULT_H;
   const gap = opts?.gap ?? DEFAULT_GAP;

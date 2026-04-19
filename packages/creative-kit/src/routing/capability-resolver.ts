@@ -5,7 +5,10 @@ export interface CapabilityResult {
 
 export interface CapabilityResolverConfig {
   fallbackChains: Record<string, string[]>;
+  /** Maps action → default capability name. Type is inferred from the action name. */
   actionDefaults: Record<string, string>;
+  /** Maps action → default result with explicit type (overrides actionDefaults). */
+  actionResults?: Record<string, CapabilityResult>;
   userMentionPatterns: Record<string, CapabilityResult>;
 }
 
@@ -54,14 +57,18 @@ export function createCapabilityResolver(
       }
     }
 
-    // 3. Action defaults
+    // 3. Action results (with explicit type)
+    const actionResult = config.actionResults?.[action];
+    if (actionResult) return actionResult;
+
+    // 4. Action defaults (type inferred from action name)
     const defaultCap = config.actionDefaults[action];
     if (defaultCap) {
-      return { capability: defaultCap, type: "default" };
+      return { capability: defaultCap, type: action };
     }
 
-    // 4. Fallback to action itself
-    return { capability: action, type: "direct" };
+    // 5. Fallback to action itself
+    return { capability: action, type: action };
   }
 
   function buildAttemptChain(
@@ -77,7 +84,9 @@ export function createCapabilityResolver(
     );
 
     if (liveFiltered.length === 0) {
-      return [];
+      // Nothing live — return initial so caller gets one attempt
+      // that fails with a proper error (rather than silent skip)
+      return [initial];
     }
 
     // If initial is dead but alternatives exist, skip it

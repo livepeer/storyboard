@@ -1,16 +1,15 @@
 import { createStore } from "zustand/vanilla";
 import type { ChatBus, ChatMessage, MessageRole } from "../interfaces/chat-bus";
 
-let _msgCounter = 0;
-
 export function createChatStore() {
+  let msgCounter = 0;
   return createStore<ChatBus>()((set) => ({
     messages: [],
     isProcessing: false,
 
     addMessage(text: string, role: MessageRole): ChatMessage {
       const msg: ChatMessage = {
-        id: String(++_msgCounter),
+        id: String(++msgCounter),
         role,
         text,
         timestamp: Date.now(),

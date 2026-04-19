@@ -15,6 +15,8 @@ export interface GroupManager {
   activeGroupId: string | null;
 
   createGroup(name: string, artifactIds: string[]): ArtifactGroup;
+  updateGroup(groupId: string, patch: Partial<Pick<ArtifactGroup, "name" | "color" | "metadata">>): void;
+  removeGroup(groupId: string): void;
   addToGroup(groupId: string, artifactIds: string[]): void;
   removeFromGroup(groupId: string, artifactIds: string[]): void;
   getGroupForArtifact(artifactId: string): ArtifactGroup | undefined;

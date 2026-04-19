@@ -145,7 +145,7 @@ describe("CapabilityResolver", () => {
     const resolver = createCapabilityResolver(baseConfig);
     const result = resolver.resolve("image");
     expect(result.capability).toBe("flux-dev");
-    expect(result.type).toBe("default");
+    expect(result.type).toBe("image"); // type inferred from action name
   });
 
   it("respects modelOverride", () => {
@@ -209,10 +209,10 @@ describe("CapabilityResolver", () => {
     expect(fluxDevCount).toBe(1);
   });
 
-  it("buildAttemptChain returns empty array if nothing is live", () => {
+  it("buildAttemptChain returns [initial] if nothing is live (so caller gets one attempt that fails properly)", () => {
     const resolver = createCapabilityResolver(baseConfig);
     const chain = resolver.buildAttemptChain("ltx-i2v", new Set());
-    expect(chain).toEqual([]);
+    expect(chain).toEqual(["ltx-i2v"]);
   });
 });
 

@@ -30,9 +30,8 @@ function toFriendlyName(brief: string): string {
   return words.length > 0 ? words.join("-") : "project";
 }
 
-let _projectCounter = 0;
-
 export function createProjectStore(opts?: ProjectStoreOptions) {
+  let projectCounter = 0;
   const maxProjects = opts?.maxProjects ?? 30;
 
   return createStore<ProjectPipeline>()((set, get) => ({
@@ -44,7 +43,7 @@ export function createProjectStore(opts?: ProjectStoreOptions) {
       items: Omit<PipelineItem, "status">[],
       meta?: Record<string, unknown>,
     ): Project {
-      const counter = ++_projectCounter;
+      const counter = ++projectCounter;
       const friendlyName = toFriendlyName(brief);
       const id = `${friendlyName}_${counter.toString(36)}`;
 

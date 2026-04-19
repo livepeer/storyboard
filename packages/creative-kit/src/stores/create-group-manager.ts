@@ -12,13 +12,9 @@ const CYCLING_COLORS = [
   "#f97316",
 ] as const;
 
-let _colorIndex = 0;
-
-function nextColor(): string {
-  return CYCLING_COLORS[_colorIndex++ % CYCLING_COLORS.length];
-}
-
 export function createGroupManager() {
+  let colorIndex = 0;
+  const nextColor = () => CYCLING_COLORS[colorIndex++ % CYCLING_COLORS.length];
   return createStore<GroupManager>()((set, get) => ({
     groups: [],
     activeGroupId: null,
@@ -32,6 +28,19 @@ export function createGroupManager() {
       };
       set((s) => ({ groups: [...s.groups, group] }));
       return group;
+    },
+
+    updateGroup(groupId: string, patch: Partial<Pick<ArtifactGroup, "name" | "color" | "metadata">>): void {
+      set((s) => ({
+        groups: s.groups.map((g) => g.id === groupId ? { ...g, ...patch } : g),
+      }));
+    },
+
+    removeGroup(groupId: string): void {
+      set((s) => ({
+        groups: s.groups.filter((g) => g.id !== groupId),
+        activeGroupId: s.activeGroupId === groupId ? null : s.activeGroupId,
+      }));
     },
 
     addToGroup(groupId: string, artifactIds: string[]): void {

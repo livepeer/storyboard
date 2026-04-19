@@ -54,15 +54,11 @@ export function ChatPanel({
   );
 
   const renderMessage = (msg: ChatMessage): ReactNode => {
-    // Check cardRenderers for any matching key in the text
+    // Check cardRenderers for any matching key — render directly (no bubble wrapper)
     if (cardRenderers) {
       for (const [key, renderer] of Object.entries(cardRenderers)) {
         if (msg.text.includes(key)) {
-          return (
-            <MessageBubble key={msg.id} message={msg}>
-              {renderer(msg.text)}
-            </MessageBubble>
-          );
+          return <React.Fragment key={msg.id}>{renderer(msg.text)}</React.Fragment>;
         }
       }
     }
