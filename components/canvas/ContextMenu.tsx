@@ -834,22 +834,25 @@ export function ContextMenu() {
       setVisible(false);
       const input = document.createElement("input");
       input.type = "file";
-      input.accept = "image/*,video/*";
+      input.accept = "image/*,video/*,audio/*,.wav,.mp3,.ogg,.m4a,.aac,.flac";
       input.onchange = () => {
         const file = input.files?.[0];
         if (!file) return;
         const isVideo = file.type.startsWith("video");
-        const type = isVideo ? "video" as const : "image" as const;
+        const isAudio = file.type.startsWith("audio") || /\.(wav|mp3|ogg|m4a|aac|flac)$/i.test(file.name);
+        const type = isAudio ? "audio" as const : isVideo ? "video" as const : "image" as const;
         const store = useCanvasStore.getState();
         const cardNum = store.cards.length + 1;
-        const refId = `${isVideo ? "vid" : "img"}-${cardNum}`;
+        const prefix = isAudio ? "aud" : isVideo ? "vid" : "img";
+        const refId = `${prefix}-${cardNum}`;
         const title = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
 
         // Show card immediately with blob URL for instant preview
         const blobUrl = URL.createObjectURL(file);
         const card = store.addCard({ type, title, refId });
         store.updateCard(card.id, { url: blobUrl });
-        addMessage(`Imported: ${refId} — "${title}". Uploading for inference…`, "system");
+        const hint = isAudio ? `Use as voice source: /talk <text> --face <card> --voice ${refId}` : "Uploading for inference…";
+        addMessage(`Imported: ${refId} — "${title}". ${hint}`, "system");
 
         // Upload to GCS (or fallback) in background so the card gets a
         // public HTTP URL that the BYOC orch can fetch for inference.
@@ -866,7 +869,10 @@ export function ContextMenu() {
               // Only replace blob URL if we got a real public URL (not localhost)
               if (publicUrl.startsWith("https://")) {
                 store.updateCard(card.id, { url: publicUrl });
-                addMessage(`${refId} ready — right-click for restyle, LEGO, animate, etc.`, "system");
+                const readyHint = isAudio
+                  ? `${refId} ready — use as voice: /talk <text> --face <card> --voice ${refId}`
+                  : `${refId} ready — right-click for restyle, LEGO, animate, etc.`;
+                addMessage(readyHint, "system");
               } else {
                 // Fallback: keep data URL (fal accepts it for small images)
                 store.updateCard(card.id, { url: reader.result as string });
@@ -888,17 +894,19 @@ export function ContextMenu() {
 
     const handleImportUrl = async () => {
       setVisible(false);
-      const url = await styledPrompt("Import from URL", "Paste image or video URL");
+      const url = await styledPrompt("Import from URL", "Paste image, video, or audio URL");
       if (!url?.trim()) return;
-      const isVideo = /\.(mp4|webm|mov|avi|mkv)(\?|$)/i.test(url);
-      const type = isVideo ? "video" as const : "image" as const;
+      const isAudio = /\.(wav|mp3|ogg|m4a|aac|flac)(\?|$)/i.test(url);
+      const isVideo = !isAudio && /\.(mp4|webm|mov|avi|mkv)(\?|$)/i.test(url);
+      const type = isAudio ? "audio" as const : isVideo ? "video" as const : "image" as const;
+      const prefix = isAudio ? "aud" : isVideo ? "vid" : "img";
       const store = useCanvasStore.getState();
       const cardNum = store.cards.length + 1;
-      const refId = `${isVideo ? "vid" : "img"}-${cardNum}`;
+      const refId = `${prefix}-${cardNum}`;
       const title = url.split("/").pop()?.split("?")[0]?.slice(0, 40) || "Imported";
       const card = store.addCard({ type, title, refId });
       store.updateCard(card.id, { url: url.trim() });
-      addMessage(`Imported from URL: ${refId} — "${title}". Right-click for actions.`, "system");
+      addMessage(`Imported from URL: ${refId} — "${title}". ${isAudio ? "Use as voice source with /talk --voice " + refId : "Right-click for actions."}`, "system");
     };
 
     return (
