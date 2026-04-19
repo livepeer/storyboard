@@ -190,8 +190,44 @@ export function Card({ card }: { card: CardData }) {
   );
 
   const onDragEnd = useCallback(() => {
+    if (!dragRef.current) return;
+    const wasDragged = dragRef.current.startX !== undefined;
     dragRef.current = null;
-  }, []);
+    if (!wasDragged) return;
+
+    // Check if the card landed inside an episode's bounding box.
+    // If so, offer to add it to that episode (unless it's already in one).
+    const epStore = useEpisodeStore.getState();
+    const currentEp = epStore.getEpisodeForCard(card.id);
+    if (currentEp) return; // already in an episode
+
+    const allCards = useCanvasStore.getState().cards;
+    const freshCard = allCards.find((c) => c.id === card.id);
+    if (!freshCard) return;
+    const cx = freshCard.x + freshCard.w / 2;
+    const cy = freshCard.y + freshCard.h / 2;
+
+    for (const ep of epStore.episodes) {
+      const epCards = allCards.filter((c) => ep.cardIds.includes(c.id));
+      if (epCards.length === 0) continue;
+      // Compute episode bounding box (matches EpisodeLabel.tsx logic)
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const c of epCards) {
+        minX = Math.min(minX, c.x);
+        minY = Math.min(minY, c.y);
+        maxX = Math.max(maxX, c.x + c.w);
+        maxY = Math.max(maxY, c.y + c.h);
+      }
+      const PAD = 20;
+      if (cx >= minX - PAD && cx <= maxX + PAD && cy >= minY - PAD - 32 && cy <= maxY + PAD) {
+        // Card center is inside this episode's area — dispatch event for the toast
+        window.dispatchEvent(new CustomEvent("episode-drop-offer", {
+          detail: { cardId: card.id, episodeId: ep.id, episodeName: ep.name },
+        }));
+        break;
+      }
+    }
+  }, [card.id]);
 
   // --- Resize ---
   const onResizeStart = useCallback(

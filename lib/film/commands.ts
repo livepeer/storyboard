@@ -189,7 +189,7 @@ async function filmApply(idOrEmpty: string): Promise<string> {
               action: "animate",
               source_url: card.url,
               prompt: `${shot.camera}, ${shot.description}, ${film.style}`.slice(0, 300),
-              duration: shot.duration || 6,
+              duration: shot.duration || 10,
             }],
           });
           animatedCount++;

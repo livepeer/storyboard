@@ -9,6 +9,8 @@ import { FilmCard } from "./FilmCard";
 import { isFilmEnvelope, parseFilmEnvelope } from "@/lib/film/commands";
 import { StreamPlanCard } from "./StreamPlanCard";
 import { isStreamPlanEnvelope, parseStreamPlanEnvelope } from "@/lib/stream-cmd/commands";
+import { ProjectListCard } from "./ProjectListCard";
+import { isProjectListEnvelope, parseProjectListEnvelope } from "@/lib/projects/commands";
 
 const roleStyles: Record<string, string> = {
   user: "self-end bg-white/[0.08] text-[var(--text)]",
@@ -96,6 +98,10 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
   if (isStreamPlanEnvelope(message.text)) {
     const plan = parseStreamPlanEnvelope(message.text);
     if (plan) return <StreamPlanCard plan={plan} />;
+  }
+  if (isProjectListEnvelope(message.text)) {
+    const listData = parseProjectListEnvelope(message.text);
+    if (listData) return <ProjectListCard data={listData} />;
   }
 
   const ratingMatch = message.role === "agent" ? RATING_RE.exec(message.text) : null;

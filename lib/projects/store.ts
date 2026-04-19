@@ -64,13 +64,27 @@ function loadProjects(): Project[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const all: Project[] = raw ? JSON.parse(raw) : [];
+    // Trim on load — previous sessions may have accumulated >MAX
+    if (all.length > MAX_PROJECTS) {
+      const trimmed = all.slice(all.length - MAX_PROJECTS);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+      return trimmed;
+    }
+    return all;
   } catch { return []; }
 }
 
+const MAX_PROJECTS = 30;
+
 function saveProjects(projects: Project[]) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+  // Cap to most recent N projects to prevent localStorage bloat.
+  // Keep the newest ones (end of array = most recent).
+  const capped = projects.length > MAX_PROJECTS
+    ? projects.slice(projects.length - MAX_PROJECTS)
+    : projects;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(capped));
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({

@@ -104,6 +104,25 @@ export function buildAttemptChain(initialCap: string, liveCapNames: Set<string>)
  * succeed. False for connectivity / auth errors, where retrying with
  * a different capability against the same SDK will also fail.
  */
+/**
+ * Extract error message from fal.ai's structured error format.
+ * fal returns errors as `data.detail: [{msg: "...", type: "..."}]`
+ * instead of flat `data.error`. This catches content_policy_violation,
+ * file_download_error, and other fal-specific errors.
+ */
+export function extractFalError(data: Record<string, unknown>): string | undefined {
+  const detail = data.detail;
+  if (!detail) return undefined;
+  // detail can be a string (simple error) or array of objects (structured)
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as Record<string, unknown>;
+    const msg = first.msg || first.message || first.error;
+    if (typeof msg === "string") return msg;
+  }
+  return undefined;
+}
+
 export function isRecoverableFailure(errorMsg: string | undefined): boolean {
   if (!errorMsg) return true; // empty-result case
   const lower = errorMsg.toLowerCase();
@@ -646,7 +665,8 @@ export const createMediaTool: ToolDefinition = {
 
           const topError = r.error as string | undefined;
           const dataError = data.error as string | undefined;
-          const effectiveError = topError || dataError;
+          const falError = extractFalError(data);
+          const effectiveError = topError || dataError || falError;
 
           if (url && !effectiveError) {
             // Success — commit and break out of the attempt loop

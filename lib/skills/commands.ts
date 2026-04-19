@@ -10,6 +10,7 @@ import { handleOrganize, handleLayoutCommand } from "@/lib/layout/commands";
 import { handleStoryCommand } from "@/lib/story/commands";
 import { handleFilmCommand } from "@/lib/film/commands";
 import { handleStreamCommand } from "@/lib/stream-cmd/commands";
+import { handleProjectCommand } from "@/lib/projects/commands";
 
 interface ParsedCommand {
   command: string;
@@ -54,6 +55,8 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
   if (!store.initialized) await store.initRegistry();
 
   switch (cmd.command) {
+    case "help":
+      return showHelp();
     case "skills":
       return listSkills();
     case "skills/load":
@@ -91,15 +94,81 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleFilmCommand(`load ${cmd.args}`);
     case "stream":
       return handleStreamCommand(cmd.args);
+    case "project":
+      return handleProjectCommand(cmd.args);
     case "lego":
       return handleQuickStyle("lego", cmd.args, "Convert to LEGO minifigure style, plastic bricks, yellow skin, brick studs, toy photography, vibrant");
     case "logo":
       return handleQuickStyle("logo", cmd.args, `Professional logo design: ${cmd.args}. Clean vector, centered, simple background, brand identity`);
     case "iso":
       return handleQuickStyle("iso", cmd.args, "Minimalist isometric illustration, clean black lines on white, geometric 3D, SVG-style vector, no shading");
+    case "tryon":
+      return handleTryonVideo(cmd.args);
+    case "analyze":
+      return handleAnalyze(cmd.args);
     default:
-      return `Unknown command: /${cmd.command}\nAvailable: /skills, /context, /story, /film, /stream, /capabilities, /organize, /layout, /save, /export`;
+      return `Unknown command: /${cmd.command}. Type /help for all commands.`;
   }
+}
+
+function showHelp(): string {
+  return [
+    "── CREATIVE COMMANDS ──",
+    "  /story <concept>            Generate a 6-scene story with style + characters",
+    "  /story list                 Show recent stories",
+    "  /story apply [id]           Create project + generate images from a story",
+    "  /story show <id>            Re-display a saved story",
+    "",
+    "  /film <concept>             Generate a 4-shot mini-film script with camera",
+    "  /film apply [id]            Generate key frames + animate each to video",
+    "  /film load <genre>          Load genre skill (animation, action, noir, scifi, documentary)",
+    "  /film skills                List available genre skills",
+    "",
+    "  /stream <concept>           Plan a multi-scene live stream (prompt traveling)",
+    "  /stream apply [id]          Start stream, scenes transition automatically",
+    "  /stream stop                Stop active stream",
+    "",
+    "── PROJECT MANAGEMENT ──",
+    "  /project list               Show all projects with status",
+    "  /project show [name]        Details of active or named project",
+    "  /project switch <name>      Set as active project",
+    "  /project add <brief>        Create a new project",
+    "  /project replay [name]      Regenerate all scenes from stored prompts",
+    "  /project clear              Remove all projects",
+    "",
+    "── CANVAS & LAYOUT ──",
+    "  /organize [style]           Auto-layout canvas (grid, narrative, episode, movie-board)",
+    "  /layout list                Show available layout presets",
+    "  /layout set <id>            Set default layout preset",
+    "  /save [refId]               Save card(s) to file",
+    "  /export                     Export entire canvas as JSON",
+    "",
+    "── STYLE & CONTEXT ──",
+    "  /context                    Show current creative context (style, characters, mood)",
+    "  /context gen <description>  Generate context from a description",
+    "  /context edit               Edit context interactively",
+    "  /context add <field> <val>  Add to a context field",
+    "  /context clear              Clear creative context",
+    "",
+    "── QUICK STYLES ──",
+    "  /lego <description>         Generate LEGO-style image",
+    "  /logo <description>         Generate logo design",
+    "  /iso <description>          Generate isometric illustration",
+    "  /tryon <person> <garment>   Virtual try-on → animate to runway video",
+    "",
+    "── ANALYSIS ──",
+    "  /analyze <card-name>        Extract style, characters, setting from image/video",
+    "",
+    "── SKILLS & MODELS ──",
+    "  /skills                     List available agent skills",
+    "  /skills load <name>         Load a skill into the agent",
+    "  /capabilities               Show available AI models on the network",
+    "",
+    "── OTHER ──",
+    "  /help                       This help message",
+    "",
+    "Tip: right-click any card for Animate, Restyle, Seedance, 3D, and more.",
+  ].join("\n");
 }
 
 function listSkills(): string {
@@ -530,4 +599,110 @@ async function saveCards(args: string): Promise<string> {
   }
 
   return `Usage: /save — selected or all | /save all | /save <refId> | /save episode <name>`;
+}
+
+async function handleTryonVideo(args: string): Promise<string> {
+  const parts = args.trim().split(/\s+/);
+  if (parts.length < 2) {
+    return "Usage: /tryon <person-card> <garment-card>\nExample: /tryon img-1 img-2\n\nCreates a virtual try-on image, then animates it to a runway video.";
+  }
+  const [personRef, garmentRef] = parts;
+  const cards = useCanvasStore.getState().cards;
+  const personCard = cards.find((c) => c.refId === personRef);
+  const garmentCard = cards.find((c) => c.refId === garmentRef);
+
+  if (!personCard?.url) return `Person card "${personRef}" not found or has no image.`;
+  if (!garmentCard?.url) return `Garment card "${garmentRef}" not found or has no image.`;
+
+  const { runInference } = await import("@/lib/sdk/client");
+  const { getCachedCapabilities } = await import("@/lib/sdk/capabilities");
+  const { buildAttemptChain, extractFalError, isRecoverableFailure } = await import("@/lib/tools/compound-tools");
+
+  // Step 1: fashn-tryon
+  const tryonResult = await runInference({
+    capability: "fashn-tryon",
+    prompt: "virtual try-on",
+    params: { model_image: personCard.url, garment_image: garmentCard.url, category: "auto" },
+  });
+  const tr = tryonResult as Record<string, unknown>;
+  const td = (tr.data ?? tr) as Record<string, unknown>;
+  const tImages = td.images as Array<{ url: string }> | undefined;
+  const tryonUrl = (tr.image_url as string) ?? tImages?.[0]?.url ?? (td.image as { url: string })?.url;
+  if (!tryonUrl) return `Try-on failed: ${extractFalError(td) || "No image returned"}`;
+
+  const canvas = useCanvasStore.getState();
+  const tryonCard = canvas.addCard({ type: "image", title: `Try-On: ${personCard.title}`, refId: `tryon-${Date.now()}` });
+  canvas.updateCard(tryonCard.id, { url: tryonUrl, capability: "fashn-tryon" });
+
+  // Step 2: animate → video
+  const liveCapNames = new Set((getCachedCapabilities() || []).map((c: { name: string }) => c.name));
+  const chain = buildAttemptChain("seedance-i2v", liveCapNames);
+
+  for (const cap of chain) {
+    try {
+      const capParams: Record<string, unknown> = {
+        image_url: tryonUrl,
+        ...(cap.startsWith("seedance") ? { duration: "10", generate_audio: true } : {}),
+      };
+      const vResult = await runInference({
+        capability: cap,
+        prompt: "Model walks confidently, slight turn showing outfit, natural movement, fashion runway",
+        params: capParams,
+      });
+      const vr = vResult as Record<string, unknown>;
+      const vd = (vr.data ?? vr) as Record<string, unknown>;
+      const videoUrl = (vr.video_url as string) ?? (vd.video as { url: string })?.url;
+      const vError = extractFalError(vd);
+      if (videoUrl && !vError) {
+        const vidCard = canvas.addCard({ type: "video", title: `Video Try-On`, refId: `vid-tryon-${Date.now()}` });
+        canvas.updateCard(vidCard.id, { url: videoUrl, capability: cap });
+        return `Video try-on complete — ${cap}. Check the canvas.`;
+      }
+      if (!isRecoverableFailure(vError || "")) break;
+    } catch (e) {
+      if (!isRecoverableFailure(e instanceof Error ? e.message : "")) break;
+    }
+  }
+  return "Try-on image created, but video animation failed. Right-click the try-on card to animate manually.";
+}
+
+async function handleAnalyze(args: string): Promise<string> {
+  const refId = args.trim();
+  if (!refId) return "Usage: /analyze <card-name>\nExample: /analyze img-1\n\nExtracts style, characters, setting, mood from an image or video frame.";
+
+  const cards = useCanvasStore.getState().cards;
+  const card = cards.find((c) => c.refId === refId);
+  if (!card) return `Card "${refId}" not found.`;
+  if (!card.url) return `Card "${refId}" has no media.`;
+
+  const { analyzeImage } = await import("@/lib/tools/image-analysis");
+  const result = await analyzeImage(card.url);
+  if (!result.ok) return `Analysis failed: ${result.error}`;
+
+  const a = result.analysis;
+  const lines = [
+    `${card.title} — Analysis`,
+    "",
+    `Style: ${a.style}`,
+    `Palette: ${a.palette}`,
+    `Characters: ${a.characters}`,
+    `Setting: ${a.setting}`,
+    `Mood: ${a.mood}`,
+    "",
+    a.description,
+    "",
+    `(${result.tokens.input + result.tokens.output} tokens)`,
+  ];
+
+  // Auto-apply as creative context if none exists
+  const { useSessionContext } = await import("@/lib/agents/session-context");
+  if (!useSessionContext.getState().context) {
+    useSessionContext.getState().setContext({
+      style: a.style, palette: a.palette, characters: a.characters,
+      setting: a.setting, mood: a.mood, rules: "",
+    });
+    lines.push("", "Applied as creative context — future generations will match this style.");
+  }
+
+  return lines.join("\n");
 }

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useChatStore } from "@/lib/chat/store";
 import { runInference } from "@/lib/sdk/client";
-import { resolveCapability } from "@/lib/sdk/capabilities";
+import { resolveCapability, getCachedCapabilities } from "@/lib/sdk/capabilities";
+import { buildAttemptChain, extractFalError, isRecoverableFailure } from "@/lib/tools/compound-tools";
 import {
   startStream,
   waitForReady,
@@ -38,11 +39,13 @@ const ACTIONS: MenuAction[] = [
   { id: "restyle", label: "Restyle\u2026", icon: "\u2728", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "to-3d", label: "Convert to 3D\u2026", icon: "\uD83D\uDDA5", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "virtual-tryon", label: "Virtual Try-On\u2026", icon: "\uD83D\uDC55", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "video-tryon", label: "Video Try-On\u2026", icon: "\uD83C\uDFA5", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "weather-effect", label: "Weather Effect\u2026", icon: "\u26C5", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "lego-style", label: "LEGO Style", icon: "\uD83E\uDDF1", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "make-logo", label: "Make Logo\u2026", icon: "\uD83C\uDFA8", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "replace-object", label: "Replace Object\u2026", icon: "\uD83D\uDD04", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "iso-style", label: "Isometric SVG Style", icon: "\u25C6", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "analyze", label: "Analyze Media", icon: "\uD83D\uDD0D", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
   { id: "transform-video", label: "Transform Video\u2026", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   // --- LV2V from card ---
   { id: "lv2v-from-card", label: "Start LV2V Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
@@ -292,6 +295,99 @@ export function ContextMenu() {
         return;
       }
 
+      // --- Video Try-On: person + garment → tryon image → animate to video ---
+      if (action.id === "video-tryon") {
+        const garmentRef = await styledPrompt("Video Try-On", "Enter garment card name (e.g. img-3)");
+        if (!garmentRef) return;
+        const allCards = useCanvasStore.getState().cards;
+        const garmentCard = allCards.find((c) => c.refId === garmentRef.trim());
+        if (!garmentCard?.url) {
+          addMessage(`Card "${garmentRef}" not found or has no image.`, "system");
+          return;
+        }
+
+        addMessage(`Video try-on: person="${targetCard.title}" + garment="${garmentCard.title}" → tryon → video`, "system");
+
+        try {
+          // Step 1: fashn-tryon (person + garment → still image)
+          addMessage("Step 1/2: Running virtual try-on…", "system");
+          const tryonResult = await runInference({
+            capability: "fashn-tryon",
+            prompt: "virtual try-on",
+            params: {
+              model_image: targetCard.url,
+              garment_image: garmentCard.url,
+              category: "auto",
+            },
+          });
+          const tr = tryonResult as Record<string, unknown>;
+          const td = (tr.data ?? tr) as Record<string, unknown>;
+          const tImages = td.images as Array<{ url: string }> | undefined;
+          const tryonUrl = (tr.image_url as string) ?? tImages?.[0]?.url ?? (td.image as { url: string })?.url ?? (td.output as string);
+          const tryonError = extractFalError(td);
+
+          if (!tryonUrl) {
+            addMessage(`Try-on failed: ${tryonError || "No image returned"}`, "system");
+            return;
+          }
+
+          // Show the tryon still as an intermediate card
+          const tryonCard = addCard({ type: "image", title: `Try-On: ${targetCard.title}`, refId: `tryon-${Date.now()}` });
+          updateCard(tryonCard.id, { url: tryonUrl, capability: "fashn-tryon" });
+          addEdge(targetCard.refId, tryonCard.refId, { capability: "fashn-tryon", action: "tryon" });
+
+          // Step 2: animate the tryon result → video (with fallback chain)
+          addMessage("Step 2/2: Animating to video…", "system");
+          const liveCapNames = new Set(
+            (getCachedCapabilities() || []).map((c: { name: string }) => c.name)
+          );
+          const videoChain = buildAttemptChain("seedance-i2v", liveCapNames);
+
+          let videoOk = false;
+          for (let ai = 0; ai < videoChain.length; ai++) {
+            const cap = videoChain[ai];
+            if (ai > 0) addMessage(`${videoChain[ai - 1]} rejected — trying ${cap}…`, "system");
+
+            try {
+              const vParams: Record<string, unknown> = { image_url: tryonUrl };
+              if (cap.startsWith("seedance")) {
+                vParams.duration = "10";
+                vParams.generate_audio = true;
+              }
+              const vResult = await runInference({
+                capability: cap,
+                prompt: "Model walks confidently, slight turn showing the outfit from different angles, natural movement, fashion runway style",
+                params: vParams,
+              });
+              const vr = vResult as Record<string, unknown>;
+              const vd = (vr.data ?? vr) as Record<string, unknown>;
+              const videoUrl = (vr.video_url as string) ?? (vd.video as { url: string })?.url;
+              const vError = extractFalError(vd);
+
+              if (videoUrl && !vError) {
+                const vidCard = addCard({ type: "video", title: `Video Try-On: ${targetCard.title}`, refId: `vid-tryon-${Date.now()}` });
+                updateCard(vidCard.id, { url: videoUrl, capability: cap });
+                addEdge(tryonCard.refId, vidCard.refId, { capability: cap, action: "animate" });
+                addMessage(`Video try-on complete — ${cap}`, "system");
+                videoOk = true;
+                break;
+              }
+              if (!isRecoverableFailure(vError || "")) break;
+            } catch (ve) {
+              const msg = ve instanceof Error ? ve.message : "";
+              if (!isRecoverableFailure(msg)) break;
+            }
+          }
+
+          if (!videoOk) {
+            addMessage("Video animation failed — the try-on image is on the canvas. Right-click it to animate manually.", "system");
+          }
+        } catch (e) {
+          addMessage(`Video try-on failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
+        }
+        return;
+      }
+
       // --- Weather Effect: image + weather text → modified image → animated video ---
       if (action.id === "weather-effect") {
         const weatherText = await styledPrompt("Weather Effect", "e.g. heavy rain, thunderstorm, snow falling");
@@ -434,13 +530,67 @@ export function ContextMenu() {
         return;
       }
 
+      // --- Analyze Media: extract style, characters, setting via Gemini Vision ---
+      if (action.id === "analyze") {
+        if (!targetCard.url) {
+          addMessage("Card has no media to analyze.", "system");
+          return;
+        }
+        addMessage(`Analyzing "${targetCard.title}"…`, "system");
+        try {
+          const { analyzeImage } = await import("@/lib/tools/image-analysis");
+          const result = await analyzeImage(targetCard.url);
+          if (!result.ok) {
+            addMessage(`Analysis failed: ${result.error}`, "system");
+            return;
+          }
+          const a = result.analysis;
+          const lines = [
+            `**${targetCard.title}** — Analysis`,
+            "",
+            `Style: ${a.style}`,
+            `Palette: ${a.palette}`,
+            `Characters: ${a.characters}`,
+            `Setting: ${a.setting}`,
+            `Mood: ${a.mood}`,
+            "",
+            a.description,
+            "",
+            `(${result.tokens.input + result.tokens.output} tokens)`,
+          ];
+          addMessage(lines.join("\n"), "system");
+
+          // Offer to apply as creative context
+          const { useSessionContext } = await import("@/lib/agents/session-context");
+          const existing = useSessionContext.getState().context;
+          if (!existing) {
+            useSessionContext.getState().setContext({
+              style: a.style,
+              palette: a.palette,
+              characters: a.characters,
+              setting: a.setting,
+              mood: a.mood,
+              rules: "",
+            });
+            addMessage("Applied as creative context — future generations will match this style.", "system");
+          }
+        } catch (e) {
+          addMessage(`Analysis error: ${e instanceof Error ? e.message : "unknown"}`, "system");
+        }
+        return;
+      }
+
       // --- Direct execution ---
       const config = DIRECT_CONFIG[action.id];
       if (!config) return;
 
       let prompt = config.defaultPrompt || null;
+      const isVideoAction = action.id === "seedance" || action.id === "animate";
       if (!prompt) {
-        prompt = await styledPrompt(action.label.replace("\u2026", ""), "Describe what you want…");
+        const placeholder = isVideoAction
+          ? "Describe motion… (add 5s/10s/15s for duration, default 10s)"
+          : "Describe what you want…";
+        prompt = await styledPrompt(action.label.replace("\u2026", ""), placeholder);
         if (!prompt) return;
       }
 
@@ -469,61 +619,94 @@ export function ContextMenu() {
             params.image_url = targetCard.url;
           }
         }
-        // Seedance i2v: default to 8s cinematic clip with audio
-        if (action.id === "seedance") {
-          params.duration = "8";
-          params.generate_audio = true;
+        // Video actions: parse duration from prompt (e.g. "15s", "10 seconds"),
+        // default 10s. Only set for seedance (other models don't accept it).
+        if (isVideoAction) {
+          const durMatch = prompt.match(/\b(\d{1,2})\s*s(?:ec(?:onds?)?)?\b/i);
+          const duration = durMatch ? Math.min(15, Math.max(4, parseInt(durMatch[1], 10))) : 10;
+          // Strip the duration token from the prompt sent to the model
+          prompt = prompt.replace(/\b\d{1,2}\s*s(?:ec(?:onds?)?)?\b/i, "").replace(/\s{2,}/g, " ").trim();
+          if (action.id === "seedance") {
+            params.duration = String(duration);
+            params.generate_audio = true;
+          }
         }
 
-        const t0 = performance.now();
-        const result = await runInference({ capability: resolved, prompt, params });
-        const elapsed = performance.now() - t0;
+        // Build fallback chain so content-policy rejections from one
+        // model automatically try the next (e.g., seedance → veo → ltx).
+        const liveCapNames = new Set(
+          (getCachedCapabilities() || []).map((c: { name: string }) => c.name)
+        );
+        const attemptChain = buildAttemptChain(resolved, liveCapNames);
 
-        const r = result as Record<string, unknown>;
-        const data = (r.data ?? r) as Record<string, unknown>;
-        const image = data.image as { url: string } | undefined;
-        const images = data.images as Array<{ url: string }> | undefined;
-        const video = data.video as { url: string } | undefined;
-        const audio = data.audio as { url: string } | undefined;
-        // 3D models return rendered_image.url (preview) + model_mesh.url (GLB)
-        const renderedImage = data.rendered_image as { url: string } | undefined;
-        const modelMesh = data.model_mesh as { url: string } | undefined;
-        const url =
-          (r.image_url as string) ??
-          images?.[0]?.url ??
-          image?.url ??
-          renderedImage?.url ??  // tripo 3D preview image
-          (r.video_url as string) ??
-          video?.url ??
-          (r.audio_url as string) ??
-          audio?.url ??
-          modelMesh?.url ??     // tripo 3D model (.glb)
-          (data.url as string);
+        let succeeded = false;
+        for (let ai = 0; ai < attemptChain.length; ai++) {
+          const currentCap = attemptChain[ai];
+          if (ai > 0) {
+            addMessage(`${attemptChain[ai - 1]} rejected — trying ${currentCap}…`, "system");
+          }
 
-        if (!url) {
-          console.warn(`[ContextMenu] ${action.id} (${resolved}): no URL extracted from response`, JSON.stringify(r).slice(0, 500));
+          // Adapt params per model — each i2v model has different duration format.
+          // Strip model-specific params when falling back to avoid validation errors.
+          const capParams = { ...params };
+          if (!currentCap.startsWith("seedance")) {
+            delete capParams.duration;
+            delete capParams.generate_audio;
+          }
+
+          const t0 = performance.now();
+          const result = await runInference({ capability: currentCap, prompt, params: capParams });
+          const elapsed = performance.now() - t0;
+
+          const r = result as Record<string, unknown>;
+          const data = (r.data ?? r) as Record<string, unknown>;
+          const image = data.image as { url: string } | undefined;
+          const images = data.images as Array<{ url: string }> | undefined;
+          const video = data.video as { url: string } | undefined;
+          const audio = data.audio as { url: string } | undefined;
+          const renderedImage = data.rendered_image as { url: string } | undefined;
+          const modelMesh = data.model_mesh as { url: string } | undefined;
+          const url =
+            (r.image_url as string) ??
+            images?.[0]?.url ??
+            image?.url ??
+            renderedImage?.url ??
+            (r.video_url as string) ??
+            video?.url ??
+            (r.audio_url as string) ??
+            audio?.url ??
+            modelMesh?.url ??
+            (data.url as string);
+
+          // Check for errors (including fal's data.detail format)
+          const effectiveError = (r.error as string) || (data.error as string) || extractFalError(data);
+
+          if (url && !effectiveError) {
+            updateCard(card.id, { url, capability: currentCap, elapsed });
+            const elapsedSec = (elapsed / 1000).toFixed(1);
+            const balance = r.balance as string | undefined;
+            const orchElapsed = r.elapsed_ms as number | undefined;
+            const costInfo = balance && balance !== "0" ? ` · balance: ${balance}` : "";
+            const orchInfo = orchElapsed ? ` · orch: ${(orchElapsed / 1000).toFixed(1)}s` : "";
+            const capLabel = ai > 0 ? `${currentCap} (fallback)` : currentCap;
+            addMessage(`${action.label.replace("\u2026", "")} — ${capLabel} (${elapsedSec}s${orchInfo}${costInfo})`, "system");
+            addEdge(targetCard.refId, newRefId, { capability: currentCap, prompt, action: action.id, elapsed });
+            succeeded = true;
+            break;
+          }
+
+          // Failed — check if recoverable (worth trying sibling)
+          const failMsg = effectiveError || "No output";
+          console.warn(`[ContextMenu] ${currentCap} failed: ${failMsg}`);
+          if (!isRecoverableFailure(failMsg)) break; // auth/network — cycling won't help
         }
 
-        const effectiveError = (r.error as string) || (data.error as string);
-        if (effectiveError) {
-          updateCard(card.id, { error: effectiveError });
-        } else if (url) {
-          updateCard(card.id, { url, capability: resolved, elapsed });
-          const elapsedSec = (elapsed / 1000).toFixed(1);
-          const balance = r.balance as string | undefined;
-          const orchElapsed = r.elapsed_ms as number | undefined;
-          const costInfo = balance && balance !== "0" ? ` · balance: ${balance}` : "";
-          const orchInfo = orchElapsed ? ` · orch: ${(orchElapsed / 1000).toFixed(1)}s` : "";
-          addMessage(`${action.label.replace("\u2026", "")} — ${resolved} (${elapsedSec}s${orchInfo}${costInfo})`, "system");
-        } else {
-          updateCard(card.id, { error: "No media returned" });
+        if (!succeeded) {
+          updateCard(card.id, { error: `All models rejected — try a different image or prompt` });
         }
-
-        addEdge(targetCard.refId, newRefId, { capability: resolved, prompt, action: action.id, elapsed });
       } catch (e) {
         const errMsg = e instanceof Error ? e.message : "Unknown error";
-        console.error(`[ContextMenu] ${action.id} (${resolved}) failed:`, errMsg);
-        // Extract a user-friendly message from SDK structured errors
+        console.error(`[ContextMenu] ${action.id} failed:`, errMsg);
         let friendly = errMsg;
         if (errMsg.includes("No orchestrator available") || errMsg.includes("No capacity")) {
           friendly = `${resolved} not available — try again or use a different model`;

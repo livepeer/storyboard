@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { useEpisodeStore } from "@/lib/episodes/store";
 import { Card } from "./Card";
 import { ArrowLayer } from "./ArrowEdge";
 import { GroupButton } from "./GroupButton";
@@ -185,6 +186,60 @@ export function InfiniteCanvas() {
       {/* Edge popup is inline in ArrowLayer */}
       <GroupButton />
 
+      {/* Episode drop-offer toast */}
+      <EpisodeDropToast />
+    </div>
+  );
+}
+
+/** Toast shown when a card is dragged into an episode's area. */
+function EpisodeDropToast() {
+  const [offer, setOffer] = useState<{
+    cardId: string;
+    episodeId: string;
+    episodeName: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        cardId: string;
+        episodeId: string;
+        episodeName: string;
+      };
+      setOffer(detail);
+    };
+    window.addEventListener("episode-drop-offer", handler);
+    return () => window.removeEventListener("episode-drop-offer", handler);
+  }, []);
+
+  const handleAdd = useCallback(() => {
+    if (!offer) return;
+    useEpisodeStore.getState().addCards(offer.episodeId, [offer.cardId]);
+    setOffer(null);
+  }, [offer]);
+
+  const handleDismiss = useCallback(() => setOffer(null), []);
+
+  if (!offer) return null;
+
+  return (
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-xl border border-white/20 bg-[rgba(22,22,22,0.95)] px-4 py-2.5 shadow-2xl backdrop-blur-xl">
+      <span className="text-xs text-[var(--text)]">
+        Add to <span className="font-semibold text-blue-400">{offer.episodeName}</span>?
+      </span>
+      <button
+        onClick={handleAdd}
+        className="rounded-lg bg-blue-500/20 px-3 py-1 text-xs font-semibold text-blue-300 hover:bg-blue-500/30"
+      >
+        Add
+      </button>
+      <button
+        onClick={handleDismiss}
+        className="rounded-lg px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-white/[0.06]"
+      >
+        No
+      </button>
     </div>
   );
 }
