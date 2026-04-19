@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { getMission } from "../../../lib/missions/catalog";
-import { safePrompt } from "../../../lib/missions/safety";
+import { safePrompt, friendlyError } from "../../../lib/missions/safety";
 import { startMission, getCurrentStep, advanceToNextStep } from "../../../lib/missions/engine";
 import { useProgressStore } from "../../../lib/stores/progress-store";
 import { StepGuide } from "../../../components/StepGuide";
@@ -98,23 +98,55 @@ export default function MissionPage() {
           input || lastPrompt,
           currentStep.autoPromptPrefix
         );
+        const capability = currentStep.capability || "flux-dev";
 
-        // Simulated generation delay
-        await new Promise<void>((r) => setTimeout(r, 1500));
+        try {
+          // Call the SDK inference endpoint (same API storyboard uses).
+          // Reads SDK URL + API key from localStorage (shared with storyboard).
+          const sdkUrl = (typeof window !== "undefined" && localStorage.getItem("sdk_service_url")) || "https://sdk.daydream.monster";
+          const apiKey = (typeof window !== "undefined" && localStorage.getItem("sdk_api_key")) || "";
 
-        // Create a placeholder artifact (real impl would call SDK here)
-        const artifact: Artifact = {
-          id: `artifact-${Date.now()}`,
-          url: `https://placehold.co/400x400/16213e/e8e8ff?text=${encodeURIComponent(mission?.icon || "🎨")}`,
-          prompt,
-        };
-        artifactStore.add(artifact);
-        addArtifact(id, artifact.id);
-        setArtifacts(artifactStore.getAll());
+          const resp = await fetch(`${sdkUrl}/inference`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+            },
+            body: JSON.stringify({ capability, prompt, params: {} }),
+          });
 
-        setIsLoading(false);
-        advanceToNextStep(id);
-        rerender();
+          if (!resp.ok) {
+            const errText = await resp.text().catch(() => "");
+            throw new Error(errText.slice(0, 200) || `HTTP ${resp.status}`);
+          }
+
+          const result = await resp.json();
+          const data = (result.data ?? result) as Record<string, unknown>;
+          const images = data.images as Array<{ url: string }> | undefined;
+          const image = data.image as { url: string } | undefined;
+          const url =
+            (result.image_url as string) ??
+            images?.[0]?.url ??
+            image?.url ??
+            (data.url as string);
+
+          if (!url) throw new Error("No image returned");
+
+          const artifact: Artifact = {
+            id: `artifact-${Date.now()}`,
+            url,
+            prompt,
+          };
+          artifactStore.add(artifact);
+          addArtifact(id, artifact.id);
+          setArtifacts(artifactStore.getAll());
+          advanceToNextStep(id);
+          rerender();
+        } catch (e) {
+          setError(friendlyError(e instanceof Error ? e.message : "unknown"));
+        } finally {
+          setIsLoading(false);
+        }
         return;
       }
 
