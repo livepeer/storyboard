@@ -23,3 +23,12 @@ export { createCommandRouter, type CommandHandler, type CommandRouter } from "./
 export { createCapabilityResolver, type CapabilityResult, type CapabilityResolverConfig, type CapabilityResolver } from "./routing/capability-resolver";
 export { extractFalError, isRecoverableFailure } from "./routing/fal-errors";
 export { createIntentClassifier, type IntentRule, type IntentClassifier, type IntentContext } from "./routing/intent-classifier";
+
+// UI Components
+export { InfiniteBoard } from "./ui/InfiniteBoard";
+export { ArtifactCard } from "./ui/ArtifactCard";
+export { EdgeLayer } from "./ui/EdgeLayer";
+export { ChatPanel } from "./ui/ChatPanel";
+export { MessageBubble } from "./ui/MessageBubble";
+export { ToolPill } from "./ui/ToolPill";
+export { useStyledPrompt } from "./ui/StyledPrompt";
