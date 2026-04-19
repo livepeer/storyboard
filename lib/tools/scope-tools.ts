@@ -197,7 +197,8 @@ export const scopeStartTool: ToolDefinition = {
       resolvedUrl = card.url;
 
       // Create edge from source card to stream card
-      const streamRefId = `scope_stream_${Date.now()}`;
+      const streamNum = useCanvasStore.getState().cards.filter((c) => c.type === "stream").length + 1;
+      const streamRefId = `stream-${streamNum}`;
       const streamCard = useCanvasStore.getState().addCard({
         type: "stream",
         title: `Stream: ${prompt.slice(0, 30)}`,

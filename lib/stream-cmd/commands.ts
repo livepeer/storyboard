@@ -62,10 +62,16 @@ function streamHelp(): string {
 function streamList(): string {
   const items = useStreamStore.getState().listRecent(10);
   if (items.length === 0) return "No stream plans yet. Try `/stream <your idea>`.";
-  return items.map((p) => {
+  const lines = ["Streams:"];
+  for (const p of items) {
     const icon = p.status === "streaming" ? "🔴" : p.status === "done" ? "✓" : "→";
-    return `  ${icon} ${p.id.slice(0, 18)}  ${p.title} (${p.scenes.length} scenes)`;
-  }).join("\n");
+    lines.push(`  ${icon} ${p.id}  ${p.title} (${p.scenes.length} scenes)`);
+  }
+  lines.push("");
+  lines.push("  /stream show <name>    — re-display");
+  lines.push("  /stream apply <name>   — start it");
+  lines.push("  /stream ptravel <desc> #N,#Ds — prompt-travel on active stream");
+  return lines.join("\n");
 }
 
 function streamShow(id: string): string {

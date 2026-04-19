@@ -3,8 +3,18 @@ import type { StreamPlan } from "./types";
 
 const STORAGE_KEY = "storyboard:streams";
 
-function shortId(): string {
-  return `stream_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+let nextStreamNum = 0;
+
+/** Generate a friendly stream name from the title or prompt. */
+function friendlyStreamId(title: string): string {
+  const stopWords = new Set(["a", "an", "the", "of", "for", "with", "in", "on", "at", "to", "and"]);
+  const words = title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !stopWords.has(w));
+  const slug = words.slice(0, 3).join("-") || "stream";
+  return `stream-${slug}-${nextStreamNum++}`;
 }
 
 function load(): StreamPlan[] {
@@ -36,7 +46,7 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
   pendingId: null,
 
   addPlan: (partial) => {
-    const plan: StreamPlan = { ...partial, id: shortId(), createdAt: Date.now(), status: "draft" };
+    const plan: StreamPlan = { ...partial, id: friendlyStreamId(partial.title || partial.originalPrompt), createdAt: Date.now(), status: "draft" };
     set((s) => { const next = [plan, ...s.plans]; save(next); return { plans: next, pendingId: plan.id }; });
     return plan;
   },
@@ -55,6 +65,11 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
 
   setPending: (id) => set({ pendingId: id }),
   getPending: () => { const { plans, pendingId } = get(); return pendingId ? plans.find((p) => p.id === pendingId) ?? null : null; },
-  getById: (id) => get().plans.find((p) => p.id === id),
+  getById: (id) => {
+    const lower = id.toLowerCase();
+    return get().plans.find((p) =>
+      p.id === id || p.id.toLowerCase().startsWith(lower) || p.title.toLowerCase().startsWith(lower)
+    );
+  },
   listRecent: (limit = 10) => get().plans.slice(0, limit),
 }));
