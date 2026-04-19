@@ -98,45 +98,11 @@ export function buildAttemptChain(initialCap: string, liveCapNames: Set<string>)
   return Array.from(new Set(attempts));
 }
 
-/**
- * True when an error string indicates the model couldn't produce
- * output for this specific prompt — fallback to a sibling model may
- * succeed. False for connectivity / auth errors, where retrying with
- * a different capability against the same SDK will also fail.
- */
-/**
- * Extract error message from fal.ai's structured error format.
- * fal returns errors as `data.detail: [{msg: "...", type: "..."}]`
- * instead of flat `data.error`. This catches content_policy_violation,
- * file_download_error, and other fal-specific errors.
- */
-export function extractFalError(data: Record<string, unknown>): string | undefined {
-  const detail = data.detail;
-  if (!detail) return undefined;
-  // detail can be a string (simple error) or array of objects (structured)
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail) && detail.length > 0) {
-    const first = detail[0] as Record<string, unknown>;
-    const msg = first.msg || first.message || first.error;
-    if (typeof msg === "string") return msg;
-  }
-  return undefined;
-}
-
-export function isRecoverableFailure(errorMsg: string | undefined): boolean {
-  if (!errorMsg) return true; // empty-result case
-  const lower = errorMsg.toLowerCase();
-  // Non-recoverable: same SDK, same outcome
-  if (lower.includes("failed to fetch")) return false;
-  if (lower.includes("err_connection")) return false;
-  if (lower.includes("networkerror")) return false;
-  if (lower.includes("cors")) return false;
-  if (lower.includes("401") || lower.includes("payment failed") || lower.includes("signer")) return false;
-  if (lower.includes("authentication failed")) return false;
-  if (lower.includes("api key")) return false;
-  // Everything else — upstream policy, empty output, 5xx, timeout, rate limit — worth trying a sibling.
-  return true;
-}
+// Re-export from creative-kit — these were originally defined here,
+// now extracted to the framework for reuse across apps.
+import { extractFalError as _extractFalError, isRecoverableFailure as _isRecoverableFailure } from "@livepeer/creative-kit";
+export const extractFalError = _extractFalError;
+export const isRecoverableFailure = _isRecoverableFailure;
 
 /** Convert raw technical errors into short, user-friendly messages */
 function humanizeError(raw: string): string {
