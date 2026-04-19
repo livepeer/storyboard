@@ -17,3 +17,9 @@ export type {
 export type {
   ArtifactGroup, GroupManager,
 } from "./interfaces/group-manager";
+
+// Routing
+export { createCommandRouter, type CommandHandler, type CommandRouter } from "./routing/command-router";
+export { createCapabilityResolver, type CapabilityResult, type CapabilityResolverConfig, type CapabilityResolver } from "./routing/capability-resolver";
+export { extractFalError, isRecoverableFailure } from "./routing/fal-errors";
+export { createIntentClassifier, type IntentRule, type IntentClassifier, type IntentContext } from "./routing/intent-classifier";
