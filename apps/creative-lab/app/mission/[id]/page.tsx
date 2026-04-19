@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { getMission } from "../../../lib/missions/catalog";
 import { safePrompt, friendlyError } from "../../../lib/missions/safety";
@@ -14,60 +14,76 @@ interface Artifact {
   id: string;
   url: string;
   prompt: string;
+  type: "image" | "video" | "audio";
 }
 
-// Simple in-component artifact store (no external dependency needed)
-function createArtifactStore() {
-  const items: Artifact[] = [];
-  return {
-    add(artifact: Artifact) {
-      items.push(artifact);
+/** Call the SDK inference endpoint. Shared by all generation steps. */
+async function callSDK(capability: string, prompt: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  const sdkUrl = (typeof window !== "undefined" && localStorage.getItem("sdk_service_url")) || "https://sdk.daydream.monster";
+  const apiKey = (typeof window !== "undefined" && localStorage.getItem("sdk_api_key")) || "";
+
+  const resp = await fetch(`${sdkUrl}/inference`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     },
-    getAll() {
-      return [...items];
-    },
-  };
+    body: JSON.stringify({ capability, prompt, params }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    throw new Error(errText.slice(0, 200) || `HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+/** Extract media URL from SDK response */
+function extractUrl(result: Record<string, unknown>): string | undefined {
+  const data = (result.data ?? result) as Record<string, unknown>;
+  const images = data.images as Array<{ url: string }> | undefined;
+  const image = data.image as { url: string } | undefined;
+  const video = data.video as { url: string } | undefined;
+  const audio = data.audio as { url: string } | undefined;
+  return (result.image_url as string)
+    ?? images?.[0]?.url
+    ?? image?.url
+    ?? (result.video_url as string)
+    ?? video?.url
+    ?? (result.audio_url as string)
+    ?? audio?.url
+    ?? (data.url as string);
 }
 
 export default function MissionPage() {
   const params = useParams();
   const router = useRouter();
-  const id = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? params.id[0] : "";
-
+  const id = params.id as string;
   const mission = getMission(id);
-  const { getProgress, addArtifact, completeMission } = useProgressStore();
+
+  const { getProgress, completeMission, addArtifact } = useProgressStore();
+  const [, setTick] = useState(0);
+  const rerender = () => setTick((t) => t + 1);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
+
+  // Creative state built up across steps
   const [lastPrompt, setLastPrompt] = useState("");
+  const [stylePrefix, setStylePrefix] = useState("");
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
-  const [artifactStore] = useState(() => createArtifactStore());
 
-  // Force re-render on progress change
-  const [, setTick] = useState(0);
-  const rerender = () => setTick((t) => t + 1);
-
-  // Auto-start mission on first visit
+  // Auto-start mission
   useEffect(() => {
-    if (!mission) return;
-    try {
-      startMission(id);
-      rerender();
-    } catch {
-      // Already started or locked — ignore
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+    if (mission && !getProgress(id)) startMission(id);
+  }, [id, mission, getProgress]);
 
   if (!mission) {
     return (
-      <div style={{ padding: "40px", textAlign: "center" }}>
+      <div style={{ padding: 40, textAlign: "center" }}>
         <p style={{ color: "var(--text-muted)" }}>Mission not found.</p>
-        <button
-          onClick={() => router.push("/")}
-          style={{ marginTop: "16px", color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 700 }}
-        >
+        <button onClick={() => router.push("/")} style={{ marginTop: 16, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 700 }}>
           ← Back to missions
         </button>
       </div>
@@ -76,213 +92,264 @@ export default function MissionPage() {
 
   const progress = getProgress(id);
   const currentStep = getCurrentStep(id);
-  const stepNumber = (progress?.currentStep ?? 0) + 1;
-  const totalSteps = mission.steps.length;
-  const missionComplete = progress?.completed ?? false;
+  const stepNumber = progress?.currentStep ?? 0;
 
-  async function handleStepSubmit(input: string) {
+  const lastArtifactUrl = artifacts.length > 0 ? artifacts[artifacts.length - 1].url : undefined;
+
+  const addArt = (url: string, prompt: string, type: "image" | "video" | "audio" = "image") => {
+    const a: Artifact = { id: `art-${Date.now()}`, url, prompt, type };
+    setArtifacts((prev) => [...prev, a]);
+    addArtifact(id, a.id);
+    return a;
+  };
+
+  const handleStepSubmit = useCallback(async (input: string) => {
     if (!currentStep) return;
     setError(null);
 
     try {
-      if (currentStep.type === "text_input") {
-        setLastPrompt(input);
-        advanceToNextStep(id);
-        rerender();
-        return;
-      }
-
-      if (currentStep.type === "generate" || currentStep.type === "transform") {
-        setIsLoading(true);
-        const prompt = safePrompt(
-          input || lastPrompt,
-          currentStep.autoPromptPrefix
-        );
-        const capability = currentStep.capability || "flux-dev";
-
-        try {
-          // Call the SDK inference endpoint (same API storyboard uses).
-          // Reads SDK URL + API key from localStorage (shared with storyboard).
-          const sdkUrl = (typeof window !== "undefined" && localStorage.getItem("sdk_service_url")) || "https://sdk.daydream.monster";
-          const apiKey = (typeof window !== "undefined" && localStorage.getItem("sdk_api_key")) || "";
-
-          const resp = await fetch(`${sdkUrl}/inference`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-            },
-            body: JSON.stringify({ capability, prompt, params: {} }),
-          });
-
-          if (!resp.ok) {
-            const errText = await resp.text().catch(() => "");
-            throw new Error(errText.slice(0, 200) || `HTTP ${resp.status}`);
-          }
-
-          const result = await resp.json();
-          const data = (result.data ?? result) as Record<string, unknown>;
-          const images = data.images as Array<{ url: string }> | undefined;
-          const image = data.image as { url: string } | undefined;
-          const url =
-            (result.image_url as string) ??
-            images?.[0]?.url ??
-            image?.url ??
-            (data.url as string);
-
-          if (!url) throw new Error("No image returned");
-
-          const artifact: Artifact = {
-            id: `artifact-${Date.now()}`,
-            url,
-            prompt,
-          };
-          artifactStore.add(artifact);
-          addArtifact(id, artifact.id);
-          setArtifacts(artifactStore.getAll());
+      switch (currentStep.type) {
+        // ── SPARK PICK — save the prompt, advance ──
+        case "spark_pick":
+        case "text_input": {
+          setLastPrompt(input);
           advanceToNextStep(id);
           rerender();
-        } catch (e) {
-          setError(friendlyError(e instanceof Error ? e.message : "unknown"));
-        } finally {
-          setIsLoading(false);
+          return;
         }
-        return;
-      }
 
-      if (currentStep.type === "review") {
-        advanceToNextStep(id);
-        rerender();
-        return;
-      }
+        // ── STYLE PICK — save the style prefix, advance ──
+        case "style_pick": {
+          setStylePrefix(input); // input is the style promptPrefix
+          advanceToNextStep(id);
+          rerender();
+          return;
+        }
 
-      if (currentStep.type === "celebrate") {
-        setShowCelebration(true);
-        return;
+        // ── GENERATE — create an image ──
+        case "generate": {
+          setIsLoading(true);
+          const prompt = safePrompt(lastPrompt, (stylePrefix || "") + (currentStep.autoPromptPrefix || ""));
+          const result = await callSDK(currentStep.capability || "flux-dev", prompt);
+          const url = extractUrl(result);
+          if (!url) throw new Error("No image returned");
+          addArt(url, prompt);
+          advanceToNextStep(id);
+          rerender();
+          return;
+        }
+
+        // ── TRANSFORM — modify existing image ──
+        case "transform": {
+          setIsLoading(true);
+          const prompt = safePrompt(input, currentStep.autoPromptPrefix || "");
+          const result = await callSDK(currentStep.capability || "kontext-edit", prompt, {
+            image_url: lastArtifactUrl,
+          });
+          const url = extractUrl(result);
+          if (!url) throw new Error("No image returned");
+          addArt(url, prompt);
+          advanceToNextStep(id);
+          rerender();
+          return;
+        }
+
+        // ── REMIX — generate a variation ──
+        case "remix": {
+          if (input === "skip-remix") {
+            advanceToNextStep(id);
+            rerender();
+            return;
+          }
+          setIsLoading(true);
+          // Remix = same prompt + style, different seed (SDK handles randomness)
+          const prompt = safePrompt(lastPrompt, stylePrefix + (currentStep.autoPromptPrefix || ""));
+          const result = await callSDK(currentStep.capability || "flux-dev", prompt);
+          const url = extractUrl(result);
+          if (!url) throw new Error("No image returned");
+          addArt(url, prompt);
+          // Don't advance — let the kid remix more or skip
+          rerender();
+          return;
+        }
+
+        // ── ANIMATE — image → video ──
+        case "animate": {
+          setIsLoading(true);
+          if (!lastArtifactUrl) throw new Error("No image to animate");
+          const prompt = safePrompt(lastPrompt, currentStep.autoPromptPrefix || "");
+          const cap = currentStep.capability || "seedance-i2v";
+          const params: Record<string, unknown> = { image_url: lastArtifactUrl };
+          if (cap.startsWith("seedance")) {
+            params.duration = "8";
+            params.generate_audio = true;
+          }
+          const result = await callSDK(cap, prompt, params);
+          const url = extractUrl(result);
+          if (!url) throw new Error("No video returned");
+          addArt(url, prompt, "video");
+          advanceToNextStep(id);
+          rerender();
+          return;
+        }
+
+        // ── NARRATE — text → speech → talking head ──
+        case "narrate": {
+          setIsLoading(true);
+          if (!lastArtifactUrl) throw new Error("No image for talking head");
+          // Step A: TTS
+          const ttsResult = await callSDK("chatterbox-tts", input, { text: input });
+          const audioUrl = extractUrl(ttsResult);
+          if (!audioUrl) throw new Error("No audio returned");
+          addArt(audioUrl, input, "audio");
+          // Step B: Talking head
+          const thResult = await callSDK("talking-head", "talking head animation", {
+            image_url: lastArtifactUrl,
+            audio_url: audioUrl,
+          });
+          const videoUrl = extractUrl(thResult);
+          if (!videoUrl) throw new Error("No video returned");
+          addArt(videoUrl, input, "video");
+          advanceToNextStep(id);
+          rerender();
+          return;
+        }
+
+        // ── STORY_GEN — generate multi-scene story ──
+        case "story_gen": {
+          setIsLoading(true);
+          const storyPrompt = safePrompt(lastPrompt, stylePrefix);
+          // Generate 4 scenes via the SDK (same pattern as /story)
+          for (let i = 0; i < 4; i++) {
+            const scenePrompt = `Scene ${i + 1} of 4: ${storyPrompt}, sequential storytelling, scene ${i + 1}`;
+            const result = await callSDK(currentStep.capability || "flux-dev", scenePrompt);
+            const url = extractUrl(result);
+            if (url) addArt(url, scenePrompt);
+          }
+          advanceToNextStep(id);
+          rerender();
+          return;
+        }
+
+        // ── FILM_GEN — generate 4-shot film ──
+        case "film_gen": {
+          setIsLoading(true);
+          const filmPrompt = safePrompt(lastPrompt, stylePrefix);
+          const cameras = ["wide establishing shot", "medium tracking shot", "close-up detail", "pull-back reveal"];
+          for (let i = 0; i < 4; i++) {
+            const shotPrompt = `${cameras[i]}, ${filmPrompt}, cinematic, shot ${i + 1} of 4`;
+            const result = await callSDK(currentStep.capability || "flux-dev", shotPrompt);
+            const url = extractUrl(result);
+            if (url) addArt(url, shotPrompt);
+          }
+          advanceToNextStep(id);
+          rerender();
+          return;
+        }
+
+        // ── REVIEW — just advance ──
+        case "review": {
+          advanceToNextStep(id);
+          rerender();
+          return;
+        }
+
+        // ── CELEBRATE ──
+        case "celebrate": {
+          setShowCelebration(true);
+          return;
+        }
       }
     } catch (err) {
+      setError(friendlyError(err instanceof Error ? err.message : "Something went wrong!"));
+    } finally {
       setIsLoading(false);
-      setError(err instanceof Error ? err.message : "Something went wrong!");
     }
-  }
+  }, [currentStep, id, lastPrompt, stylePrefix, lastArtifactUrl, addArtifact]);
 
-  // Auto-trigger celebrate step
+  // Auto-trigger celebrate
   useEffect(() => {
-    if (currentStep?.type === "celebrate") {
-      setShowCelebration(true);
-    }
+    if (currentStep?.type === "celebrate") setShowCelebration(true);
   }, [currentStep?.type]);
 
-  function handleCelebrationDone() {
-    setShowCelebration(false);
-    completeMission(id, mission?.maxStars ?? 3);
-    router.push("/");
-  }
-
   return (
-    <div style={{ maxWidth: "640px", margin: "0 auto", padding: "32px 16px" }}>
-      {/* Back button */}
-      <button
-        onClick={() => router.push("/")}
-        style={{
-          background: "none",
-          border: "none",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          fontWeight: 700,
-          fontSize: "0.9rem",
-          marginBottom: "24px",
-          padding: 0,
-        }}
-      >
-        ← Back
-      </button>
+    <div style={{ maxWidth: 720, margin: "0 auto", padding: "32px 16px" }}>
+      {/* Back */}
+      <button onClick={() => router.push("/")} style={{
+        background: "none", border: "none", color: "var(--text-muted)",
+        cursor: "pointer", fontWeight: 700, fontSize: 14, marginBottom: 24, padding: 0,
+      }}>← Back</button>
 
       {/* Mission header */}
-      <div style={{ textAlign: "center", marginBottom: "32px" }}>
-        <div style={{ fontSize: "3rem", marginBottom: "8px" }}>{mission.icon}</div>
-        <h1 style={{ fontSize: "1.6rem", fontWeight: 800, color: "var(--text)", margin: 0 }}>
-          {mission.title}
-        </h1>
+      <div style={{ textAlign: "center", marginBottom: 32 }}>
+        <div style={{ fontSize: 56, marginBottom: 8 }}>{mission.icon}</div>
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: "var(--text)", margin: 0 }}>{mission.title}</h1>
+        <p style={{ color: "var(--text-muted)", margin: "8px 0 0", fontSize: 15 }}>{mission.description}</p>
       </div>
 
-      {/* Error display */}
-      {error && (
-        <div style={{ marginBottom: "24px" }}>
-          <SafeErrorMessage message={error} onRetry={() => setError(null)} />
-        </div>
-      )}
+      {/* Error */}
+      {error && <div style={{ marginBottom: 24 }}><SafeErrorMessage message={error} onRetry={() => setError(null)} /></div>}
 
       {/* Mission complete */}
-      {missionComplete && !showCelebration ? (
+      {progress?.completed && !showCelebration ? (
         <div style={{ textAlign: "center", padding: "40px 0" }}>
-          <div style={{ fontSize: "3rem", marginBottom: "12px" }}>🏆</div>
-          <h2 style={{ color: "var(--text)", fontWeight: 800, marginBottom: "8px" }}>Mission Complete!</h2>
-          <p style={{ color: "var(--text-muted)", marginBottom: "24px" }}>
-            You earned {mission.maxStars} star{mission.maxStars !== 1 ? "s" : ""}!
-          </p>
-          <button
-            onClick={() => router.push("/")}
-            style={{
-              background: "var(--accent)",
-              color: "#fff",
-              border: "none",
-              borderRadius: "10px",
-              padding: "12px 28px",
-              fontWeight: 700,
-              cursor: "pointer",
-              fontSize: "1rem",
-            }}
-          >
-            Pick Another Mission →
-          </button>
+          <div style={{ fontSize: 56 }}>🏆</div>
+          <h2 style={{ color: "var(--text)", fontWeight: 800, marginBottom: 8 }}>Mission Complete!</h2>
+          <button onClick={() => router.push("/")} style={{
+            background: "var(--accent)", color: "#fff", border: "none",
+            borderRadius: 12, padding: "14px 32px", fontWeight: 700, cursor: "pointer", fontSize: 16, marginTop: 16,
+          }}>Pick Another Mission →</button>
         </div>
       ) : currentStep && currentStep.type !== "celebrate" ? (
         <StepGuide
           step={currentStep}
           stepNumber={stepNumber}
-          totalSteps={totalSteps}
+          totalSteps={mission.steps.length}
           onSubmit={handleStepSubmit}
           isLoading={isLoading}
+          lastArtifactUrl={lastArtifactUrl}
         />
       ) : null}
 
-      {/* Artifacts grid */}
+      {/* Creations — BIG filmstrip */}
       {artifacts.length > 0 && (
-        <div style={{ marginTop: "40px" }}>
-          <h3 style={{ color: "var(--text-muted)", fontWeight: 700, marginBottom: "12px", fontSize: "0.9rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Your Creations
+        <div style={{ marginTop: 40 }}>
+          <h3 style={{ color: "var(--text-muted)", fontWeight: 700, marginBottom: 16, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Your Creations ({artifacts.length})
           </h3>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-              gap: "12px",
-            }}
-          >
+          <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 12 }}>
             {artifacts.map((a) => (
-              <div
-                key={a.id}
-                style={{
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "10px",
-                  overflow: "hidden",
-                }}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={a.url} alt="creation" style={{ width: "100%", aspectRatio: "1", objectFit: "cover", display: "block" }} />
+              <div key={a.id} style={{
+                flexShrink: 0, width: 320, borderRadius: 16,
+                overflow: "hidden", border: "2px solid rgba(255,255,255,0.1)",
+                background: "var(--bg-card)",
+                boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+              }}>
+                {a.type === "video" ? (
+                  <video src={a.url} controls autoPlay loop muted playsInline style={{ width: "100%", display: "block", aspectRatio: "1" }} />
+                ) : a.type === "audio" ? (
+                  <div style={{ padding: 24, textAlign: "center" }}>
+                    <div style={{ fontSize: 48, marginBottom: 12 }}>🎵</div>
+                    <audio src={a.url} controls style={{ width: "100%" }} />
+                  </div>
+                ) : (
+                  <img src={a.url} alt="creation" style={{ width: "100%", display: "block", aspectRatio: "1", objectFit: "cover" }} />
+                )}
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Celebration overlay */}
+      {/* Celebration */}
       {showCelebration && (
         <CelebrationOverlay
           stars={mission.maxStars}
-          onDone={handleCelebrationDone}
+          onDone={() => {
+            setShowCelebration(false);
+            completeMission(id, mission.maxStars);
+            router.push("/");
+          }}
         />
       )}
     </div>
