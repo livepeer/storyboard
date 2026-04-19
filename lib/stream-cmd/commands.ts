@@ -115,14 +115,45 @@ async function streamApply(idOrEmpty: string): Promise<string> {
     const streamId = (streamData?.stream_id || streamData?.message?.toString().match(/template=([^,]+)/)?.[1] || "") as string;
 
     store.markStreaming(plan.id, streamId);
-    say(`🔴 Stream live — Scene 1: ${firstScene.title} (${firstScene.duration}s)`);
+    say(`⏳ Stream starting — waiting for first frame (cold start can take 1-2 min)…`);
 
-    // 2. Schedule prompt transitions (prompt traveling)
-    // Each scene transitions after its duration by calling scope_control
-    let elapsed = 0;
+    // 2. Wait for actual playback to begin before scheduling transitions.
+    // The fal Scope runner cold-starts in 1-2 minutes — scheduling
+    // scene transitions immediately would fire them before the first
+    // frame arrives, wasting all the prompt traveling.
+    const { getActiveSession } = await import("@/lib/stream/session");
+    const POLL_INTERVAL = 2000;
+    const MAX_WAIT = 300_000; // 5 min max wait
+    const waitStart = Date.now();
+
+    await new Promise<void>((resolve) => {
+      const poll = setInterval(() => {
+        const session = getActiveSession();
+        const elapsed = Date.now() - waitStart;
+        if (session && session.totalRecv > 0) {
+          clearInterval(poll);
+          resolve();
+        } else if (elapsed > MAX_WAIT || !session || session.stopped) {
+          clearInterval(poll);
+          resolve(); // proceed anyway — timers will fire but stream may be dead
+        }
+      }, POLL_INTERVAL);
+    });
+
+    // Check if stream is still alive
+    const sessionCheck = getActiveSession();
+    if (!sessionCheck || sessionCheck.stopped) {
+      store.markDone(plan.id);
+      return "Stream failed to start — no frames received. Check your webcam/source.";
+    }
+
+    say(`🔴 Playback started! Scene 1: ${firstScene.title} (${firstScene.duration}s)`);
+
+    // 3. NOW schedule prompt transitions — clock starts from first frame
+    let sceneElapsed = 0;
     for (let i = 1; i < plan.scenes.length; i++) {
       const prevDuration = plan.scenes[i - 1].duration;
-      elapsed += prevDuration;
+      sceneElapsed += prevDuration;
       const scene = plan.scenes[i];
       const sceneIdx = i;
 
@@ -142,10 +173,10 @@ async function streamApply(idOrEmpty: string): Promise<string> {
         } catch (e) {
           say(`Scene ${sceneIdx + 1} transition failed: ${(e as Error).message}`);
         }
-      }, elapsed * 1000);
+      }, sceneElapsed * 1000);
     }
 
-    // 3. Schedule stream end
+    // 4. Schedule stream end
     const totalDuration = plan.scenes.reduce((sum, s) => sum + s.duration, 0);
     setTimeout(async () => {
       try {
