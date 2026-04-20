@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { MISSIONS } from "../lib/missions/catalog";
 import { useProgressStore } from "../lib/stores/progress-store";
@@ -8,6 +9,8 @@ import { MissionCard } from "./MissionCard";
 export function MissionPicker() {
   const router = useRouter();
   const { totalStars, getProgress, isMissionUnlocked } = useProgressStore();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   function handleStart(id: string) {
     router.push(`/mission/${id}`);
@@ -37,9 +40,9 @@ export function MissionPicker() {
         }}
       >
         {MISSIONS.map((mission) => {
-          const progress = getProgress(mission.id);
+          const progress = mounted ? getProgress(mission.id) : undefined;
           const stars = progress?.stars ?? 0;
-          const locked = !isMissionUnlocked(mission.id, mission.unlockAfter);
+          const locked = mounted ? !isMissionUnlocked(mission.id, mission.unlockAfter) : false;
           return (
             <MissionCard
               key={mission.id}

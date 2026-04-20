@@ -62,8 +62,12 @@ export default function MissionPage() {
   const mission = getMission(id);
 
   const { getProgress, completeMission, addArtifact } = useProgressStore();
+  const [mounted, setMounted] = useState(false);
   const [, setTick] = useState(0);
   const rerender = () => setTick((t) => t + 1);
+
+  // Defer rendering until hydration is complete (progress store reads localStorage)
+  useEffect(() => setMounted(true), []);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +90,16 @@ export default function MissionPage() {
         <button onClick={() => router.push("/")} style={{ marginTop: 16, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 700 }}>
           ← Back to missions
         </button>
+      </div>
+    );
+  }
+
+  // Wait for client hydration (localStorage-backed store causes SSR mismatch)
+  if (!mounted) {
+    return (
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: "32px 16px", textAlign: "center" }}>
+        <div style={{ fontSize: 56, marginBottom: 8 }}>{mission.icon}</div>
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: "var(--text)" }}>{mission.title}</h1>
       </div>
     );
   }
@@ -325,6 +339,7 @@ export default function MissionPage() {
           stepNumber={stepNumber}
           totalSteps={mission.steps.length}
           onSubmit={handleStepSubmit}
+          onSkip={() => { advanceToNextStep(id); rerender(); }}
           isLoading={isLoading}
           lastArtifactUrl={lastArtifactUrl}
         />

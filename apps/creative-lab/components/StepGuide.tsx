@@ -8,14 +8,22 @@ interface Props {
   stepNumber: number;
   totalSteps: number;
   onSubmit: (input: string) => void;
+  onSkip?: () => void;
   isLoading?: boolean;
   lastArtifactUrl?: string;
 }
 
-export function StepGuide({ step, stepNumber, totalSteps, onSubmit, isLoading, lastArtifactUrl }: Props) {
+export function StepGuide({ step, stepNumber, totalSteps, onSubmit, onSkip, isLoading, lastArtifactUrl }: Props) {
   const [input, setInput] = useState("");
   const [showHint, setShowHint] = useState(false);
   const [selectedStyle, setSelectedStyle] = useState<StyleOption | null>(null);
+
+  const skipBtn = onSkip && (
+    <button onClick={onSkip} style={{
+      background: "none", border: "none", color: "var(--text-dim)",
+      cursor: "pointer", fontSize: 13, marginTop: 12, display: "block",
+    }}>Skip this step →</button>
+  );
 
   const dots = (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
@@ -218,6 +226,7 @@ export function StepGuide({ step, stepNumber, totalSteps, onSubmit, isLoading, l
       <div>
         {dots}{title}{hintBlock}{preview}
         {bigButton("Bring it to Life! 🎬", "Animating… 🎬", "linear-gradient(135deg, #6366f1, #8b5cf6)", "0 4px 24px rgba(99,102,241,0.4)")}
+        {skipBtn}
       </div>
     );
   }
@@ -246,6 +255,7 @@ export function StepGuide({ step, stepNumber, totalSteps, onSubmit, isLoading, l
             boxShadow: input.trim() ? "0 4px 24px rgba(245,158,11,0.3)" : "none",
           }}
         >{isLoading ? "Recording… 🎤" : "Make Them Talk! 🗣️"}</button>
+        {skipBtn}
       </div>
     );
   }
