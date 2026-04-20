@@ -710,30 +710,50 @@ export function ContextMenu() {
         }
 
         // Ensure image_url is a public HTTP URL that fal.ai can download.
-        // blob: URLs get revoked after import; data: URLs aren't fetchable by fal.
-        // For these cases: grab the rendered <img> from the DOM, draw to canvas, upload.
+        // blob: URLs get revoked; data: URLs can't be fetched by fal.
+        // Fix: capture from the card's rendered <img> DOM element → canvas → upload.
         if (params.image_url && typeof params.image_url === "string") {
           const imgUrl = params.image_url as string;
-          const needsUpload = imgUrl.startsWith("blob:") || imgUrl.startsWith("data:");
-          const needsResize = isVideoAction;
+          const isHttp = imgUrl.startsWith("http://") || imgUrl.startsWith("https://");
 
-          if (needsUpload || needsResize) {
+          if (!isHttp || isVideoAction) {
             try {
-              // Try to load from the DOM-rendered <img> first (works even if blob is revoked)
-              let sourceUrl = imgUrl;
-              if (needsUpload) {
-                const imgEl = document.querySelector(`img[src="${imgUrl}"]`) as HTMLImageElement | null;
-                if (imgEl && imgEl.naturalWidth > 0) {
-                  const c = document.createElement("canvas");
-                  c.width = imgEl.naturalWidth;
-                  c.height = imgEl.naturalHeight;
-                  c.getContext("2d")!.drawImage(imgEl, 0, 0);
-                  sourceUrl = c.toDataURL("image/jpeg", 0.9);
+              let dataUrl: string | null = null;
+
+              // Step 1: If not HTTP, grab pixels from the card's <img> in the DOM
+              if (!isHttp && targetCard) {
+                // Find the card's img by searching all card images for one with content
+                const allImgs = document.querySelectorAll("[data-card] img") as NodeListOf<HTMLImageElement>;
+                for (const el of allImgs) {
+                  if (el.naturalWidth > 0) {
+                    const c = document.createElement("canvas");
+                    c.width = Math.min(el.naturalWidth, 1024);
+                    c.height = Math.min(el.naturalHeight, 1024);
+                    c.getContext("2d")!.drawImage(el, 0, 0, c.width, c.height);
+                    dataUrl = c.toDataURL("image/jpeg", 0.85);
+                    break;
+                  }
                 }
               }
-              params.image_url = await resizeImageForModel(sourceUrl);
-            } catch {
-              // Last resort: keep original URL
+
+              // Step 2: Resize + upload to get public HTTPS URL
+              const sourceForResize = dataUrl || imgUrl;
+              if (sourceForResize.startsWith("http") || sourceForResize.startsWith("data:")) {
+                params.image_url = await resizeImageForModel(sourceForResize);
+              } else if (dataUrl) {
+                // data URL from canvas — upload directly
+                const resp = await fetch("/api/upload", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ dataUrl, fileName: `card-${Date.now()}.jpg` }),
+                });
+                if (resp.ok) {
+                  const { url } = (await resp.json()) as { url: string };
+                  if (url?.startsWith("http")) params.image_url = url;
+                }
+              }
+            } catch (e) {
+              console.warn("[ContextMenu] Image prep failed:", (e as Error).message);
             }
           }
         }
