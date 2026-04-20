@@ -262,10 +262,12 @@ export default function MissionPage() {
     }
   }, [currentStep, mission, id, lastPrompt, stylePrefix, lastArtifactUrl, addArtifact]);
 
-  // Auto-trigger celebrate
+  // Auto-trigger celebrate — but NOT if already completed (revisiting a done mission)
   useEffect(() => {
-    if (currentStep?.type === "celebrate") setShowCelebration(true);
-  }, [currentStep?.type]);
+    if (currentStep?.type === "celebrate" && !progress?.completed) {
+      setShowCelebration(true);
+    }
+  }, [currentStep?.type, progress?.completed]);
 
   // Early returns AFTER all hooks (React Rules of Hooks)
   if (!mission) {
