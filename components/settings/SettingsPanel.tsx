@@ -103,12 +103,12 @@ export function SettingsPanel() {
       {/* Overlay */}
       {open && (
         <div
-          style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)" }}
+          style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)" }}
           onClick={(e) => {
             if (e.target === e.currentTarget) setOpen(false);
           }}
         >
-          <div style={{ width: 420, maxHeight: "90vh", overflowY: "auto", background: "#1a1a1e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+          <div style={{ width: 420, background: "#1a1a1e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
             <h2 className="mb-1 text-base font-semibold text-[var(--text)]">
               Connect to Daydream
             </h2>
@@ -117,42 +117,24 @@ export function SettingsPanel() {
               video-to-video, and orchestrator discovery.
             </p>
 
-            {/* Agent marketplace */}
-            <label className="mb-2 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
+            {/* Agent selector */}
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
               Agent
             </label>
-            <div className="mb-4 flex flex-col gap-2">
+            <select
+              value={activeAgent}
+              onChange={(e) => handleAgentChange(e.target.value)}
+              className="mb-4 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs text-[var(--text)] outline-none"
+            >
               {(plugins.length > 0
                 ? plugins
-                : [{ id: "built-in", name: "Built-in Agent", description: "Local DAG executor" }]
+                : [{ id: "built-in", name: "Built-in Agent" }]
               ).map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => handleAgentChange(p.id)}
-                  className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-all ${
-                    activeAgent === p.id
-                      ? "border-white/20 bg-white/[0.06]"
-                      : "border-[var(--border)] bg-transparent hover:border-[var(--border-hover)] hover:bg-white/[0.03]"
-                  }`}
-                >
-                  <span
-                    className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                      activeAgent === p.id ? "bg-emerald-400" : "bg-[var(--text-dim)]"
-                    }`}
-                  />
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-[var(--text)]">
-                      {p.name}
-                    </div>
-                    {"description" in p && (
-                      <div className="mt-0.5 text-[10px] text-[var(--text-dim)] line-clamp-2">
-                        {p.description}
-                      </div>
-                    )}
-                  </div>
-                </button>
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
               ))}
-            </div>
+            </select>
 
             <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
               SDK Service URL
