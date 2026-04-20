@@ -6,6 +6,7 @@ import { useChatStore } from "@/lib/chat/store";
 import { runInference } from "@/lib/sdk/client";
 import { resolveCapability, getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { buildAttemptChain, extractFalError, isRecoverableFailure } from "@/lib/tools/compound-tools";
+import { resizeImageForModel } from "@livepeer/creative-kit";
 import {
   startStream,
   waitForReady,
@@ -706,6 +707,13 @@ export function ContextMenu() {
             params.duration = String(duration);
             params.generate_audio = true;
           }
+        }
+
+        // Resize source image for video models (prevents "file too large" / "dimensions too large")
+        if (isVideoAction && params.image_url && typeof params.image_url === "string") {
+          try {
+            params.image_url = await resizeImageForModel(params.image_url as string, 1024, 1024, 5_000_000);
+          } catch { /* keep original */ }
         }
 
         // Build fallback chain so content-policy rejections from one

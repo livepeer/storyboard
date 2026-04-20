@@ -9,6 +9,7 @@ import { useProgressStore } from "../../../lib/stores/progress-store";
 import { StepGuide } from "../../../components/StepGuide";
 import { CelebrationOverlay } from "../../../components/CelebrationOverlay";
 import { SafeErrorMessage } from "../../../components/SafeErrorMessage";
+import { resizeImageForModel } from "@livepeer/creative-kit";
 
 interface Artifact {
   id: string;
@@ -121,13 +122,11 @@ export default function MissionPage() {
           return;
         }
 
-        // ── GENERATE — create an image (capped at 1024x1024 for video compatibility) ──
+        // ── GENERATE — create an image ──
         case "generate": {
           setIsLoading(true);
           const prompt = safePrompt(lastPrompt, (stylePrefix || "") + (currentStep.autoPromptPrefix || ""));
-          const result = await callSDK(currentStep.capability || "flux-dev", prompt, {
-            image_size: { width: 1024, height: 1024 },
-          });
+          const result = await callSDK(currentStep.capability || "flux-dev", prompt);
           const url = extractUrl(result);
           if (!url) throw new Error("No image returned");
           addArt(url, prompt);
@@ -161,9 +160,7 @@ export default function MissionPage() {
           setIsLoading(true);
           // Remix = same prompt + style, different seed (SDK handles randomness)
           const prompt = safePrompt(lastPrompt, stylePrefix + (currentStep.autoPromptPrefix || ""));
-          const result = await callSDK(currentStep.capability || "flux-dev", prompt, {
-            image_size: { width: 1024, height: 1024 },
-          });
+          const result = await callSDK(currentStep.capability || "flux-dev", prompt);
           const url = extractUrl(result);
           if (!url) throw new Error("No image returned");
           addArt(url, prompt);
@@ -172,17 +169,25 @@ export default function MissionPage() {
           return;
         }
 
-        // ── ANIMATE — image → video (with fallback chain) ──
+        // ── ANIMATE — image → video (resize + fallback chain) ──
         case "animate": {
           setIsLoading(true);
           if (!lastArtifactUrl) throw new Error("No image to animate");
+
+          // Resize source image to fit video model limits (1024x1024, <5MB)
+          let resizedUrl: string;
+          try {
+            resizedUrl = await resizeImageForModel(lastArtifactUrl, 1024, 1024, 5_000_000);
+          } catch {
+            resizedUrl = lastArtifactUrl; // fallback to original
+          }
+
           const animPrompt = safePrompt(lastPrompt, currentStep.autoPromptPrefix || "");
-          // Try seedance first, fall back to ltx-i2v if rejected
           const caps = [currentStep.capability || "seedance-i2v", "ltx-i2v", "veo-i2v"];
           let animUrl: string | undefined;
           for (const cap of caps) {
             try {
-              const params: Record<string, unknown> = { image_url: lastArtifactUrl };
+              const params: Record<string, unknown> = { image_url: resizedUrl };
               if (cap.startsWith("seedance")) {
                 params.duration = "8";
                 params.generate_audio = true;
@@ -206,6 +211,10 @@ export default function MissionPage() {
         case "narrate": {
           setIsLoading(true);
           if (!lastArtifactUrl) throw new Error("No image for talking head");
+          // Resize for talking-head model
+          let narrateImg: string;
+          try { narrateImg = await resizeImageForModel(lastArtifactUrl, 1024, 1024, 5_000_000); }
+          catch { narrateImg = lastArtifactUrl; }
           // Step A: TTS
           const ttsResult = await callSDK("chatterbox-tts", input, { text: input });
           const audioUrl = extractUrl(ttsResult);
@@ -213,7 +222,7 @@ export default function MissionPage() {
           addArt(audioUrl, input, "audio");
           // Step B: Talking head
           const thResult = await callSDK("talking-head", "talking head animation", {
-            image_url: lastArtifactUrl,
+            image_url: narrateImg,
             audio_url: audioUrl,
           });
           const videoUrl = extractUrl(thResult);

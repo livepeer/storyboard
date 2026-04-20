@@ -25,6 +25,10 @@ export { extractFalError, isRecoverableFailure } from "./routing/fal-errors";
 export { createIntentClassifier, type IntentRule, type IntentClassifier, type IntentContext } from "./routing/intent-classifier";
 
 // UI Components
+// Utils
+export { resizeImageForModel } from "./utils/resize-image";
+
+// UI Components
 export { InfiniteBoard } from "./ui/InfiniteBoard";
 export { ArtifactCard } from "./ui/ArtifactCard";
 export { EdgeLayer } from "./ui/EdgeLayer";
