@@ -709,11 +709,33 @@ export function ContextMenu() {
           }
         }
 
-        // Resize source image for video models (prevents "file too large" / "dimensions too large")
-        if (isVideoAction && params.image_url && typeof params.image_url === "string") {
-          try {
-            params.image_url = await resizeImageForModel(params.image_url as string);
-          } catch { /* keep original */ }
+        // Ensure image_url is a public HTTP URL that fal.ai can download.
+        // blob: URLs get revoked after import; data: URLs aren't fetchable by fal.
+        // For these cases: grab the rendered <img> from the DOM, draw to canvas, upload.
+        if (params.image_url && typeof params.image_url === "string") {
+          const imgUrl = params.image_url as string;
+          const needsUpload = imgUrl.startsWith("blob:") || imgUrl.startsWith("data:");
+          const needsResize = isVideoAction;
+
+          if (needsUpload || needsResize) {
+            try {
+              // Try to load from the DOM-rendered <img> first (works even if blob is revoked)
+              let sourceUrl = imgUrl;
+              if (needsUpload) {
+                const imgEl = document.querySelector(`img[src="${imgUrl}"]`) as HTMLImageElement | null;
+                if (imgEl && imgEl.naturalWidth > 0) {
+                  const c = document.createElement("canvas");
+                  c.width = imgEl.naturalWidth;
+                  c.height = imgEl.naturalHeight;
+                  c.getContext("2d")!.drawImage(imgEl, 0, 0);
+                  sourceUrl = c.toDataURL("image/jpeg", 0.9);
+                }
+              }
+              params.image_url = await resizeImageForModel(sourceUrl);
+            } catch {
+              // Last resort: keep original URL
+            }
+          }
         }
 
         // Build fallback chain so content-policy rejections from one
