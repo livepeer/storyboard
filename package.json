@@ -2,7 +2,7 @@
   "name": "storyboard-a3",
   "version": "0.1.0",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": ["packages/*", "apps/*"],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -17,6 +17,7 @@
     "@livepeer/agent": "workspace:*",
     "@livepeer/agent-pack-projects": "workspace:*",
     "@livepeer/agent-pack-canvas": "workspace:*",
+    "@livepeer/creative-kit": "workspace:*",
     "next": "16.2.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",

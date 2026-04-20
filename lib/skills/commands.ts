@@ -1,4 +1,6 @@
 import { useSkillStore } from "./store";
+// creative-kit routing — CommandRouter available for future full migration
+import type { CommandRouter } from "@livepeer/creative-kit";
 import { getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { useCanvasStore } from "@/lib/canvas/store";
 import {

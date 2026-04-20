@@ -6,6 +6,7 @@ import { useChatStore } from "@/lib/chat/store";
 import { runInference } from "@/lib/sdk/client";
 import { resolveCapability, getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { buildAttemptChain, extractFalError, isRecoverableFailure } from "@/lib/tools/compound-tools";
+import { resizeImageForModel } from "@livepeer/creative-kit";
 import {
   startStream,
   waitForReady,
@@ -708,6 +709,23 @@ export function ContextMenu() {
           }
         }
 
+        // Ensure image_url is a fetchable HTTP URL for fal.ai.
+        // HTTP fal CDN URLs (https://v3b.fal.media/...) → pass through (fal can download its own CDN)
+        // blob:/data: URLs → resize + upload to GCS to get a public HTTPS URL
+        if (isVideoAction && params.image_url && typeof params.image_url === "string") {
+          const imgUrl = params.image_url as string;
+          const isHttp = imgUrl.startsWith("http://") || imgUrl.startsWith("https://");
+          if (!isHttp) {
+            // Non-HTTP URL (blob: or data:) — must convert to public HTTPS
+            try {
+              params.image_url = await resizeImageForModel(imgUrl);
+            } catch (e) {
+              console.warn("[ContextMenu] Image prep failed:", (e as Error).message);
+            }
+          }
+          // HTTP URLs pass through — fal.ai fetches them directly
+        }
+
         // Build fallback chain so content-policy rejections from one
         // model automatically try the next (e.g., seedance → veo → ltx).
         const liveCapNames = new Set(
@@ -885,7 +903,8 @@ export function ContextMenu() {
           } catch {
             store.updateCard(card.id, { url: reader.result as string });
           }
-          URL.revokeObjectURL(blobUrl);
+          // Don't revoke blob URL — it's still needed if the user right-clicks
+          // before GCS upload finishes. Browser GC handles cleanup on page unload.
         };
         reader.readAsDataURL(file);
       };

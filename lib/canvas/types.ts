@@ -1,17 +1,15 @@
+import type { Artifact, ArtifactEdge, Viewport } from "@livepeer/creative-kit";
+
 export type CardType = "image" | "video" | "audio" | "stream" | "camera";
 
-export interface Card {
-  id: string;
-  refId: string;
+/**
+ * Card extends the creative-kit Artifact with storyboard-specific fields.
+ * All Artifact fields (id, refId, type, title, url, error, x, y, w, h, metadata)
+ * are inherited. Storyboard adds visual/media-specific properties.
+ */
+export interface Card extends Artifact {
   type: CardType;
-  title: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
   minimized: boolean;
-  url?: string;
-  error?: string;
   /** Cards from the same create_media call share a batchId */
   batchId?: string;
   /** The capability/model used to generate this card */
@@ -20,25 +18,25 @@ export interface Card {
   prompt?: string;
   /** Floating bottom caption — shown as an overlay banner on the card */
   caption?: string;
-  /** Full-card text overlay — renders as a slide cover (title, subtitle, stats).
-   *  When set, the card displays this text over the image as a centered overlay
-   *  instead of the bottom-only caption banner. Used by briefing title slides. */
+  /** Full-card text overlay — renders as a slide cover (title, subtitle, stats). */
   coverText?: { title: string; subtitle?: string; stats?: string };
-
   /** Generation time in ms */
   elapsed?: number;
   /** Pinned cards stay fixed on screen when panning/zooming */
   pinned?: boolean;
-  /** Screen-space position captured at pin time — used when pinned is true */
+  /** Screen-space position captured at pin time */
   pinX?: number;
   pinY?: number;
-  /** Viewport scale at pin time — used to size the pinned card 1:1 with how it looked when pinned */
+  /** Viewport scale at pin time */
   pinScale?: number;
 }
 
-export interface ArrowEdge {
-  fromRefId: string;
-  toRefId: string;
+/**
+ * ArrowEdge extends ArtifactEdge with storyboard's meta shape.
+ * The `meta` field is storyboard-specific; ArtifactEdge's `metadata`
+ * is the generic equivalent. Both are available.
+ */
+export interface ArrowEdge extends ArtifactEdge {
   meta?: {
     capability?: string;
     prompt?: string;
@@ -48,8 +46,21 @@ export interface ArrowEdge {
   };
 }
 
+/**
+ * CanvasViewport — storyboard uses panX/panY naming for historical reasons.
+ * Maps to creative-kit's Viewport (x, y, scale).
+ */
 export interface CanvasViewport {
   panX: number;
   panY: number;
   scale: number;
+}
+
+/** Convert between CanvasViewport (panX/panY) and Viewport (x/y) */
+export function toViewport(cv: CanvasViewport): Viewport {
+  return { x: cv.panX, y: cv.panY, scale: cv.scale };
+}
+
+export function toCanvasViewport(v: Viewport): CanvasViewport {
+  return { panX: v.x, panY: v.y, scale: v.scale };
 }

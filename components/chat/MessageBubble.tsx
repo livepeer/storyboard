@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from "react";
 import type { ChatMessage } from "@/lib/chat/store";
+// ChatMessage conforms to creative-kit's ChatMessage interface.
+// Storyboard's MessageBubble extends the kit's with card envelope detection.
 import { RatingWidget } from "./RatingWidget";
 import { StoryCard } from "./StoryCard";
 import { isStoryEnvelope, parseStoryEnvelope } from "@/lib/story/commands";

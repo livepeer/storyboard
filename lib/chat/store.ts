@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ChatBus } from "@livepeer/creative-kit";
 
 export type MessageRole = "user" | "agent" | "system";
 

@@ -7,7 +7,7 @@ function makeCard(id: string, refId: string, batchId?: string) {
   return { id, refId, type: "image" as const, title: `Card ${id}`, x: 0, y: 0, w: 320, h: 280, minimized: false, batchId };
 }
 
-function makeCtx(cards: ReturnType<typeof makeCard>[], edges: Array<{ fromRefId: string; toRefId: string }> = []): LayoutContext {
+function makeCtx(cards: ReturnType<typeof makeCard>[], edges: Array<{ id: string; fromRefId: string; toRefId: string }> = []): LayoutContext {
   return { cards, edges, episodes: [], activeEpisodeId: null, canvasWidth: 1920 };
 }
 
@@ -106,7 +106,7 @@ describe("Layout Engine", () => {
 
   it("edge ordering respects direction", () => {
     const cards = [makeCard("0", "img-1"), makeCard("1", "img-2"), makeCard("2", "img-3")];
-    const edges = [{ fromRefId: "img-3", toRefId: "img-1" }];
+    const edges = [{ id: "e0", fromRefId: "img-3", toRefId: "img-1" }];
     const pos = runLayout(makeCtx(cards, edges), getBuiltInSkill("basic")!);
     const idx3 = pos.findIndex((p) => p.cardId === "2");
     const idx1 = pos.findIndex((p) => p.cardId === "0");
