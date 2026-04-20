@@ -28,10 +28,10 @@ export const useProgressStore = create<ProgressStore>()(
           const existing = state.progress.find((p) => p.missionId === missionId);
           let newProgress: MissionProgress[];
           if (existing) {
-            // Reset progress for this mission
+            // Reset progress for redo — keep best stars and saved creations
             newProgress = state.progress.map((p) =>
               p.missionId === missionId
-                ? { ...p, currentStep: 0, completed: false, stars: 0, artifacts: [], startedAt: now, completedAt: undefined }
+                ? { ...p, currentStep: 0, completed: false, artifacts: [], startedAt: now, completedAt: undefined }
                 : p
             );
           } else {

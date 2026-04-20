@@ -61,7 +61,9 @@ export default function MissionPage() {
   const id = params.id as string;
   const mission = getMission(id);
 
-  const { getProgress, completeMission, addArtifact } = useProgressStore();
+  // Subscribe reactively to the progress array so re-renders happen on store changes
+  const allProgress = useProgressStore((s) => s.progress);
+  const { completeMission, addArtifact } = useProgressStore();
   const [mounted, setMounted] = useState(false);
   const [, setTick] = useState(0);
   const rerender = () => setTick((t) => t + 1);
@@ -79,11 +81,12 @@ export default function MissionPage() {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
 
   // Auto-start mission
-  useEffect(() => {
-    if (mounted && mission && !getProgress(id)) startMission(id);
-  }, [id, mission, mounted, getProgress]);
+  const progress = mounted ? allProgress.find((p) => p.missionId === id) : undefined;
 
-  const progress = mounted ? getProgress(id) : undefined;
+  useEffect(() => {
+    if (mounted && mission && !progress) startMission(id);
+  }, [id, mission, mounted, progress]);
+
   const currentStep = mounted ? getCurrentStep(id) : null;
   const stepNumber = progress?.currentStep ?? 0;
   const lastArtifactUrl = artifacts.length > 0 ? artifacts[artifacts.length - 1].url : undefined;
