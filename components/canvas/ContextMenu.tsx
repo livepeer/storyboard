@@ -913,7 +913,8 @@ export function ContextMenu() {
           } catch {
             store.updateCard(card.id, { url: reader.result as string });
           }
-          URL.revokeObjectURL(blobUrl);
+          // Don't revoke blob URL — it's still needed if the user right-clicks
+          // before GCS upload finishes. Browser GC handles cleanup on page unload.
         };
         reader.readAsDataURL(file);
       };
