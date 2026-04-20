@@ -58,9 +58,14 @@ const MISSIONS: Mission[] = [
         id: "animate",
         type: "animate",
         instruction: "Now let's make your pet MOVE! 🎬",
-        hint: "The AI will animate your pet — watch it come to life!",
+        hint: "The AI will animate your pet — watch it come to life! This can take 30-60 seconds.",
         capability: "seedance-i2v",
         autoPromptPrefix: "gentle movement, cute animation, the character moves naturally, ",
+      },
+      {
+        id: "review-video",
+        type: "review",
+        instruction: "Watch your pet come to life! How does it look? 🎬",
       },
       {
         id: "celebrate",

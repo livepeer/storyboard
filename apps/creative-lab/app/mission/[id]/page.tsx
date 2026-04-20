@@ -168,21 +168,31 @@ export default function MissionPage() {
           return;
         }
 
-        // ── ANIMATE — image → video ──
+        // ── ANIMATE — image → video (with fallback chain) ──
         case "animate": {
           setIsLoading(true);
           if (!lastArtifactUrl) throw new Error("No image to animate");
-          const prompt = safePrompt(lastPrompt, currentStep.autoPromptPrefix || "");
-          const cap = currentStep.capability || "seedance-i2v";
-          const params: Record<string, unknown> = { image_url: lastArtifactUrl };
-          if (cap.startsWith("seedance")) {
-            params.duration = "8";
-            params.generate_audio = true;
+          const animPrompt = safePrompt(lastPrompt, currentStep.autoPromptPrefix || "");
+          // Try seedance first, fall back to ltx-i2v if rejected
+          const caps = [currentStep.capability || "seedance-i2v", "ltx-i2v", "veo-i2v"];
+          let animUrl: string | undefined;
+          for (const cap of caps) {
+            try {
+              const params: Record<string, unknown> = { image_url: lastArtifactUrl };
+              if (cap.startsWith("seedance")) {
+                params.duration = "8";
+                params.generate_audio = true;
+              }
+              const result = await callSDK(cap, animPrompt, params);
+              animUrl = extractUrl(result);
+              if (animUrl) break;
+            } catch (e) {
+              console.warn(`[CreativeLab] ${cap} failed, trying next:`, (e as Error).message?.slice(0, 100));
+              continue;
+            }
           }
-          const result = await callSDK(cap, prompt, params);
-          const url = extractUrl(result);
-          if (!url) throw new Error("No video returned");
-          addArt(url, prompt, "video");
+          if (!animUrl) throw new Error("Video creation didn't work — try skipping this step");
+          addArt(animUrl, animPrompt, "video");
           advanceToNextStep(id);
           rerender();
           return;
@@ -256,7 +266,9 @@ export default function MissionPage() {
         }
       }
     } catch (err) {
-      setError(friendlyError(err instanceof Error ? err.message : "Something went wrong!"));
+      const raw = err instanceof Error ? err.message : "Something went wrong!";
+      console.error(`[CreativeLab] Step "${currentStep.type}" failed:`, raw);
+      setError(friendlyError(raw));
     } finally {
       setIsLoading(false);
     }
