@@ -121,11 +121,13 @@ export default function MissionPage() {
           return;
         }
 
-        // ── GENERATE — create an image ──
+        // ── GENERATE — create an image (capped at 1024x1024 for video compatibility) ──
         case "generate": {
           setIsLoading(true);
           const prompt = safePrompt(lastPrompt, (stylePrefix || "") + (currentStep.autoPromptPrefix || ""));
-          const result = await callSDK(currentStep.capability || "flux-dev", prompt);
+          const result = await callSDK(currentStep.capability || "flux-dev", prompt, {
+            image_size: { width: 1024, height: 1024 },
+          });
           const url = extractUrl(result);
           if (!url) throw new Error("No image returned");
           addArt(url, prompt);
@@ -159,7 +161,9 @@ export default function MissionPage() {
           setIsLoading(true);
           // Remix = same prompt + style, different seed (SDK handles randomness)
           const prompt = safePrompt(lastPrompt, stylePrefix + (currentStep.autoPromptPrefix || ""));
-          const result = await callSDK(currentStep.capability || "flux-dev", prompt);
+          const result = await callSDK(currentStep.capability || "flux-dev", prompt, {
+            image_size: { width: 1024, height: 1024 },
+          });
           const url = extractUrl(result);
           if (!url) throw new Error("No image returned");
           addArt(url, prompt);
