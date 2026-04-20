@@ -261,10 +261,12 @@ export function SettingsPanel() {
 }
 
 function UsageStats() {
-  // Re-render every 3s to pick up token usage changes
+  // Re-render on every chat message (token usage updates after each agent turn)
+  const messageCount = useChatStore((s) => s.messages.length);
+  // Also poll every 5s as a fallback for non-chat token changes
   const [, setTick] = useState(0);
   useEffect(() => {
-    const interval = setInterval(() => setTick((t) => t + 1), 3000);
+    const interval = setInterval(() => setTick((t) => t + 1), 5000);
     return () => clearInterval(interval);
   }, []);
 

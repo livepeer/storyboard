@@ -9,6 +9,44 @@ import { EpisodeBadge } from "./EpisodeBadge";
 import { useEpisodeStore } from "@/lib/episodes/store";
 import { StreamCockpit } from "./StreamCockpit";
 
+/** Editable card title — click to copy, double-click to rename. */
+function EditableTitle({ title, onRename, onCopy }: { title: string; onRename: (t: string) => void; onCopy: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="card-controls min-w-0 flex-1 rounded border border-white/20 bg-white/10 px-1 text-[11px] font-medium text-[var(--text)] outline-none"
+        value={value}
+        autoFocus
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => { if (value.trim() && value !== title) onRename(value.trim()); setEditing(false); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { if (value.trim() && value !== title) onRename(value.trim()); setEditing(false); }
+          if (e.key === "Escape") { setValue(title); setEditing(false); }
+          e.stopPropagation();
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      />
+    );
+  }
+
+  return (
+    <span
+      className="card-controls min-w-0 flex-1 cursor-pointer truncate text-[11px] font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+      title="Click to copy · Double-click to rename"
+      onClick={(e) => { e.stopPropagation(); onCopy(); }}
+      onDoubleClick={(e) => { e.stopPropagation(); setValue(title); setEditing(true); }}
+    >
+      {title}
+    </span>
+  );
+}
+
 /** Caption banner with date + action highlighting and expand-on-click. */
 function CaptionBanner({ caption }: { caption: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -310,16 +348,11 @@ export function Card({ card }: { card: CardData }) {
         >
           {card.type}
         </span>
-        <span
-          className="card-controls min-w-0 flex-1 cursor-pointer truncate text-[11px] font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
-          title={`Click to copy "${card.title}" to chat`}
-          onClick={(e) => {
-            e.stopPropagation();
-            window.dispatchEvent(new CustomEvent("chat-prefill", { detail: { text: card.title } }));
-          }}
-        >
-          {card.title}
-        </span>
+        <EditableTitle
+          title={card.title}
+          onRename={(newTitle) => updateCard(card.id, { title: newTitle })}
+          onCopy={() => window.dispatchEvent(new CustomEvent("chat-prefill", { detail: { text: card.title } }))}
+        />
         <span
           className="card-controls shrink-0 cursor-pointer truncate rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[10px] text-[#aaa] transition-colors hover:bg-white/[0.15] hover:text-white"
           title={`Click to copy "${card.refId}" to chat`}
