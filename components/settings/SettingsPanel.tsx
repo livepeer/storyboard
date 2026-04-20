@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { loadConfig, saveConfig, checkHealth } from "@/lib/sdk/client";
 import { useChatStore } from "@/lib/chat/store";
 import {
@@ -89,6 +89,34 @@ export function SettingsPanel() {
 
   const plugins = typeof window !== "undefined" ? getPluginList() : [];
 
+  // Draggable dialog
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [initialized, setInitialized] = useState(false);
+  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+
+  // Center on first open
+  useEffect(() => {
+    if (open && !initialized) {
+      setPos({ x: Math.max(0, (window.innerWidth - 420) / 2), y: Math.max(20, (window.innerHeight - 500) / 2) });
+      setInitialized(true);
+    }
+  }, [open, initialized]);
+
+  const onDragStart = useCallback((e: React.PointerEvent) => {
+    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }, [pos]);
+
+  const onDragMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    setPos({
+      x: dragRef.current.origX + (e.clientX - dragRef.current.startX),
+      y: dragRef.current.origY + (e.clientY - dragRef.current.startY),
+    });
+  }, []);
+
+  const onDragEnd = useCallback(() => { dragRef.current = null; }, []);
+
   return (
     <>
       {/* Gear button in top bar */}
@@ -102,20 +130,37 @@ export function SettingsPanel() {
 
       {/* Overlay */}
       {open && (
+        <>
+        {/* Backdrop */}
         <div
-          style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)" }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setOpen(false);
-          }}
-        >
-          <div style={{ width: 420, background: "#1a1a1e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
-            <h2 className="mb-1 text-base font-semibold text-[var(--text)]">
-              Connect to Daydream
-            </h2>
-            <p className="mb-6 text-xs text-[var(--text-muted)]">
-              The SDK Service handles inference, AI enrichment, live
-              video-to-video, and orchestrator discovery.
+          style={{ position: "fixed", inset: 0, zIndex: 9998, background: "rgba(0,0,0,0.5)" }}
+          onClick={() => setOpen(false)}
+        />
+        {/* Draggable dialog */}
+        <div style={{
+          position: "fixed", left: pos.x, top: pos.y, zIndex: 9999,
+          width: 420, background: "#1a1a1e",
+          border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+          padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+        }}>
+          {/* Drag handle (title bar) */}
+          <div
+            style={{ cursor: "grab", userSelect: "none", marginBottom: 12 }}
+            onPointerDown={onDragStart}
+            onPointerMove={onDragMove}
+            onPointerUp={onDragEnd}
+            onPointerCancel={onDragEnd}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <h2 className="text-base font-semibold text-[var(--text)]">
+                Settings
+              </h2>
+              <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 18 }}>✕</button>
+            </div>
+            <p className="text-xs text-[var(--text-muted)]" style={{ margin: 0 }}>
+              Drag title bar to move
             </p>
+          </div>
 
             {/* Agent selector */}
             <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
@@ -208,8 +253,8 @@ export function SettingsPanel() {
                     ? "Retry"
                     : "Connect"}
             </button>
-          </div>
         </div>
+        </>
       )}
     </>
   );
