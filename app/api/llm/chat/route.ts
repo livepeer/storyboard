@@ -16,9 +16,33 @@ export async function POST(req: Request) {
   const body = await req.json();
   const model = (body.model as string) || "gemini-2.5-flash";
 
-  // Try SDK /llm/chat first (future endpoint)
   const sdkUrl = process.env.SDK_URL || "https://sdk.daydream.monster";
   const daydreamKey = process.env.DAYDREAM_API_KEY || "";
+
+  // Try SDK /llm/chat first — routes through Livepeer infrastructure
+  if (daydreamKey) {
+    try {
+      const sdkResp = await fetch(`${sdkUrl}/llm/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${daydreamKey}`,
+        },
+        body: JSON.stringify(body),
+      });
+      if (sdkResp.ok) {
+        return new Response(sdkResp.body, {
+          status: sdkResp.status,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      // SDK /llm/chat not available or error — fall through to direct API
+      console.log(`[llm/chat] SDK /llm/chat returned ${sdkResp.status}, falling back to direct API`);
+    } catch {
+      // SDK unreachable — fall through
+      console.log("[llm/chat] SDK /llm/chat unreachable, falling back to direct API");
+    }
+  }
 
   // Fallback: route based on model name to the appropriate direct API
   if (model.startsWith("gemini")) {

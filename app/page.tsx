@@ -12,6 +12,7 @@ import { builtInPlugin } from "@/lib/agents/built-in";
 import { claudePlugin } from "@/lib/agents/claude";
 import { openaiPlugin } from "@/lib/agents/openai";
 import { geminiPlugin } from "@/lib/agents/gemini";
+import { livepeerPlugin } from "@/lib/agents/livepeer";
 import { initializeTools } from "@/lib/tools";
 import { fetchCapabilities } from "@/lib/sdk/capabilities";
 import { useSkillStore } from "@/lib/skills/store";
@@ -30,6 +31,7 @@ export default function Home() {
     registerPlugin(claudePlugin);
     registerPlugin(openaiPlugin);
     registerPlugin(geminiPlugin);
+    registerPlugin(livepeerPlugin);
 
     // Restore saved agent preference or default to gemini
     const saved = localStorage.getItem("storyboard_active_agent");
