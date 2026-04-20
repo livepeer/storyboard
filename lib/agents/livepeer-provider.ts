@@ -1,24 +1,17 @@
 /**
  * LivepeerProvider — routes LLM calls through Livepeer's BYOC infrastructure.
  *
- * Instead of calling Gemini/Claude APIs directly, this provider sends
- * requests through the SDK /inference endpoint with capability "gemini-text".
- * The BYOC orch routes to the Gemini API via its serverless adapter.
+ * Uses the OpenAI chat completions format as the wire protocol.
+ * The server-side proxy (/api/llm/chat) forwards to the SDK service,
+ * which translates to the backend-specific format (Gemini, Claude, etc.)
  *
  * Benefits:
- * - No separate Gemini API key needed — uses the Daydream API key
- * - Livepeer can add more LLM providers (OpenRouter, Claude, Llama)
- *   as BYOC capabilities — this provider picks them up automatically
- * - All AI calls go through one billing/auth path
- *
- * Limitation: currently only supports simple text completion (no tool calling)
- * because the BYOC gemini-text capability only accepts {prompt} payloads.
- * Tool calling requires the full Gemini generateContent API format which
- * the BYOC adapter doesn't support yet. When it does, this provider
- * will support full agent tool use.
+ * - One API key (Daydream) for all LLM + media generation
+ * - Livepeer can add new LLM backends without client changes
+ * - Same LLMProvider interface as GeminiProvider/ClaudeProvider
  */
 
-// LLMProvider types (structural compatibility with @livepeer/agent)
+// Structural compatibility with @livepeer/agent — no import needed
 type Tier = 0 | 1 | 2 | 3;
 
 interface TokenUsage {
@@ -64,130 +57,190 @@ interface LLMProvider {
   call(req: LLMRequest, signal?: AbortSignal): AsyncIterable<LLMChunk>;
 }
 
+// ── OpenAI wire format types ──
+
+interface OaiMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>;
+  tool_call_id?: string;
+  name?: string;
+}
+
+interface OaiTool {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+interface OaiResponse {
+  choices?: Array<{
+    message: OaiMessage;
+    finish_reason?: string;
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+  };
+  error?: { message: string };
+}
+
+// ── Translation helpers ──
+
+function translateMessages(messages: Message[]): OaiMessage[] {
+  const out: OaiMessage[] = [];
+  for (const m of messages) {
+    if (m.role === "tool") {
+      out.push({
+        role: "tool",
+        content: m.content,
+        tool_call_id: m.tool_call_id ?? "",
+      });
+    } else if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+      out.push({
+        role: "assistant",
+        content: m.content || null,
+        tool_calls: m.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: "function" as const,
+          function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+        })),
+      });
+    } else {
+      out.push({ role: m.role, content: m.content });
+    }
+  }
+  return out;
+}
+
+function translateTools(tools: ToolSchema[]): OaiTool[] {
+  return tools.map((t) => ({
+    type: "function" as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    },
+  }));
+}
+
+// ── Provider ──
+
+const DEFAULT_MODELS: Record<Tier, string> = {
+  0: "gemini-2.5-flash",
+  1: "gemini-2.5-flash",
+  2: "gemini-2.5-pro",
+  3: "gemini-2.5-pro",
+};
+
 export interface LivepeerProviderConfig {
-  /** SDK service URL. Default: reads from localStorage or "https://sdk.daydream.monster" */
-  sdkUrl?: string;
-  /** Daydream API key. Default: reads from localStorage */
-  apiKey?: string;
-  /** LLM capability name on the BYOC orch. Default: "gemini-text" */
-  capability?: string;
+  /** Proxy endpoint URL. Default: "/api/llm/chat" */
+  proxyUrl?: string;
+  /** Default model. Default: "gemini-2.5-flash" */
+  model?: string;
+  /** Per-tier model overrides */
+  models?: Partial<Record<Tier, string>>;
 }
 
 export class LivepeerProvider implements LLMProvider {
   readonly name = "livepeer";
   readonly tiers: Tier[] = [0, 1, 2, 3];
 
-  private sdkUrl: string;
-  private apiKey: string;
-  private capability: string;
-
-  constructor(config: LivepeerProviderConfig = {}) {
-    this.sdkUrl = config.sdkUrl
-      || (typeof window !== "undefined" && localStorage.getItem("sdk_service_url"))
-      || "https://sdk.daydream.monster";
-    this.apiKey = config.apiKey
-      || (typeof window !== "undefined" && localStorage.getItem("sdk_api_key"))
-      || "";
-    this.capability = config.capability || "gemini-text";
-  }
+  constructor(private config: LivepeerProviderConfig = {}) {}
 
   async *call(req: LLMRequest, signal?: AbortSignal): AsyncIterable<LLMChunk> {
-    // Build the prompt from messages (simple concatenation for text completion)
-    // The BYOC gemini-text capability accepts {prompt, max_output_tokens}
-    const systemMsg = req.messages.find((m) => m.role === "system");
-    const userMsgs = req.messages.filter((m) => m.role === "user" || m.role === "assistant");
+    const model = this.config.models?.[req.tier]
+      ?? this.config.model
+      ?? DEFAULT_MODELS[req.tier];
 
-    let prompt = "";
-    if (systemMsg) prompt += `System: ${systemMsg.content}\n\n`;
-    for (const m of userMsgs) {
-      prompt += `${m.role === "user" ? "User" : "Assistant"}: ${m.content}\n`;
-    }
-
-    // If tools are provided, include their schemas in the prompt
-    // (workaround until BYOC supports native tool calling)
-    if (req.tools.length > 0) {
-      prompt += "\n\nAvailable tools (respond with JSON function calls if needed):\n";
-      for (const tool of req.tools) {
-        prompt += `- ${tool.name}: ${tool.description}\n`;
-      }
-      prompt += "\nRespond with text. If you need to call a tool, respond with:\n";
-      prompt += '{"tool_call": {"name": "tool_name", "args": {...}}}\n';
-      prompt += "\nAssistant:";
-    }
-
-    const payload: Record<string, unknown> = {
-      capability: this.capability,
-      prompt,
+    const body: Record<string, unknown> = {
+      model,
+      messages: translateMessages(req.messages),
     };
-    if (req.max_tokens) {
-      payload.params = { max_output_tokens: req.max_tokens };
+    if (req.tools.length > 0) {
+      body.tools = translateTools(req.tools);
     }
+    if (req.temperature !== undefined) body.temperature = req.temperature;
+    if (req.max_tokens !== undefined) body.max_tokens = req.max_tokens;
 
+    let resp: Response;
     try {
-      const resp = await fetch(`${this.sdkUrl}/inference`, {
+      resp = await fetch(this.config.proxyUrl ?? "/api/llm/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
-        },
-        body: JSON.stringify(payload),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
         signal,
       });
-
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => "");
-        yield { kind: "error", error: `Livepeer LLM ${resp.status}: ${errText.slice(0, 200)}` };
-        return;
-      }
-
-      const result = await resp.json();
-      const data = (result.data ?? result) as Record<string, unknown>;
-
-      // Extract text from various response formats
-      const text = (data.text as string)
-        || (data.output as string)
-        || (result.text as string)
-        || "";
-
-      if (!text) {
-        yield { kind: "error", error: "Livepeer LLM returned no text" };
-        return;
-      }
-
-      // Check if the response contains a tool call (JSON format)
-      const toolCallMatch = text.match(/\{"tool_call":\s*\{/);
-      if (toolCallMatch) {
-        try {
-          const jsonStart = text.indexOf('{"tool_call"');
-          const parsed = JSON.parse(text.slice(jsonStart));
-          const tc = parsed.tool_call;
-          if (tc?.name) {
-            const callId = `call_${Math.random().toString(36).slice(2, 10)}`;
-            yield { kind: "tool_call_start", id: callId, name: tc.name };
-            yield { kind: "tool_call_args", id: callId, args_delta: JSON.stringify(tc.args || {}) };
-            yield { kind: "tool_call_end", id: callId };
-          }
-          // Also yield any text before the tool call
-          const textBefore = text.slice(0, jsonStart).trim();
-          if (textBefore) yield { kind: "text", text: textBefore };
-        } catch {
-          // Not valid JSON — just yield as text
-          yield { kind: "text", text };
-        }
-      } else {
-        yield { kind: "text", text };
-      }
-
-      // Token usage estimate (BYOC doesn't return exact counts)
-      yield {
-        kind: "usage",
-        usage: {
-          input: Math.ceil(prompt.length / 4),
-          output: Math.ceil(text.length / 4),
-        },
-      };
     } catch (e) {
-      yield { kind: "error", error: `Livepeer LLM: ${e instanceof Error ? e.message : "unknown"}` };
+      yield { kind: "error", error: `Livepeer LLM fetch failed: ${e instanceof Error ? e.message : String(e)}` };
+      return;
+    }
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      if (resp.status === 429) {
+        yield { kind: "error", error: "Rate limited — please wait a moment and try again." };
+        return;
+      }
+      yield { kind: "error", error: `Livepeer LLM ${resp.status}: ${text.slice(0, 200)}` };
+      return;
+    }
+
+    let data: OaiResponse;
+    try {
+      data = await resp.json();
+    } catch (e) {
+      yield { kind: "error", error: `Response not JSON: ${e instanceof Error ? e.message : "parse error"}` };
+      return;
+    }
+
+    if (data.error) {
+      yield { kind: "error", error: data.error.message };
+      return;
+    }
+
+    const choice = data.choices?.[0];
+    if (!choice) {
+      // Empty response — yield usage + done
+      if (data.usage) {
+        yield { kind: "usage", usage: {
+          input: data.usage.prompt_tokens ?? 0,
+          output: data.usage.completion_tokens ?? 0,
+        }};
+      }
+      yield { kind: "done" };
+      return;
+    }
+
+    const msg = choice.message;
+
+    // Yield text content
+    if (typeof msg.content === "string" && msg.content.length > 0) {
+      yield { kind: "text", text: msg.content };
+    }
+
+    // Yield tool calls
+    if (msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        yield { kind: "tool_call_start", id: tc.id, name: tc.function.name };
+        yield { kind: "tool_call_args", id: tc.id, args_delta: tc.function.arguments };
+        yield { kind: "tool_call_end", id: tc.id };
+      }
+    }
+
+    // Yield usage
+    if (data.usage) {
+      yield { kind: "usage", usage: {
+        input: data.usage.prompt_tokens ?? 0,
+        output: data.usage.completion_tokens ?? 0,
+      }};
     }
 
     yield { kind: "done" };
