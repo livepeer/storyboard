@@ -14,7 +14,7 @@ export function Header() {
         background: "var(--bg-card)",
       }}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+      <a href="/" style={{ display: "flex", flexDirection: "column", gap: "2px", textDecoration: "none" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <span style={{ fontSize: "1.75rem" }}>🎨</span>
           <span
@@ -38,7 +38,7 @@ export function Header() {
         >
           Make Amazing Things with AI
         </p>
-      </div>
+      </a>
       <nav style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
         <a
           href="/gallery"

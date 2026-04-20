@@ -12,6 +12,10 @@ export default function GalleryPage() {
         padding: "2rem 1.5rem",
       }}
     >
+      <a href="/" style={{
+        color: "var(--text-muted)", textDecoration: "none", fontSize: 14,
+        fontWeight: 700, display: "inline-block", marginBottom: 16,
+      }}>← Back to Missions</a>
       <h1
         style={{
           fontSize: "2rem",
