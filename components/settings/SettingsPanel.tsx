@@ -103,7 +103,7 @@ export function SettingsPanel() {
       {/* Overlay */}
       {open && (
         <div
-          className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          className="fixed inset-0 z-[2000] flex items-start justify-center overflow-y-auto bg-black/70 backdrop-blur-sm py-8"
           onClick={(e) => {
             if (e.target === e.currentTarget) setOpen(false);
           }}
