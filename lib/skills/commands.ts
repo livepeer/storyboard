@@ -971,44 +971,74 @@ async function handlePodcast(args: string): Promise<string> {
     return `Script failed: ${(e as Error).message}`;
   }
 
-  // Step 2: Generate audio for each segment
+  // Step 2: Merge script into one text per host, generate combined audio
+  // This produces 1 card (solo) or 2 cards (duo/interview) instead of N per-segment cards.
   const voiceA = "chatterbox-tts";
   const voiceB = "gemini-tts";
-  const audioCards: string[] = [];
 
-  for (let i = 0; i < script.length; i++) {
-    const seg = script[i];
-    const isHostA = seg.host === "A" || seg.host === "Host" || seg.host === "Interviewer";
-    const capability = style === "solo" ? voiceB : isHostA ? voiceA : voiceB;
-    const label = style === "solo" ? "Narrator" : isHostA ? "Host A" : "Host B";
-
-    say(`${label} (${i + 1}/${script.length}): "${seg.text.slice(0, 40)}…"`);
-
+  if (style === "solo") {
+    // Solo: one combined narration
+    const fullText = script.map((s) => s.text).join(" \n\n ");
+    say(`Generating narration (${fullText.split(/\s+/).length} words)…`);
     try {
-      const params: Record<string, unknown> = { text: seg.text };
-      const result = await runInference({ capability, prompt: seg.text, params });
+      const result = await runInference({ capability: voiceB, prompt: fullText, params: { text: fullText } });
       const r = result as Record<string, unknown>;
       const data = (r.data ?? r) as Record<string, unknown>;
-      const audioUrl = (r.audio_url as string)
-        ?? (data.audio as { url: string })?.url
-        ?? (data.audio_file as { url: string })?.url;
-
+      const audioUrl = (r.audio_url as string) ?? (data.audio as { url: string })?.url ?? (data.audio_file as { url: string })?.url;
       if (audioUrl) {
-        const refId = `podcast-${i + 1}-${Date.now()}`;
-        const card = canvas.addCard({ type: "audio", title: `${label}: ${seg.text.slice(0, 25)}`, refId });
-        canvas.updateCard(card.id, { url: audioUrl, capability });
-        if (audioCards.length > 0) {
-          canvas.addEdge(audioCards[audioCards.length - 1], refId, { action: "podcast-sequence" });
-        }
+        const refId = `podcast-${Date.now()}`;
+        canvas.addCard({ type: "audio", title: `Podcast: ${topic.slice(0, 30)}`, refId });
+        canvas.updateCard(canvas.cards[canvas.cards.length - 1].id, { url: audioUrl, capability: voiceB });
+        return `Podcast ready: ${refId}. One audio track on the canvas.`;
+      }
+    } catch (e) { return `Narration failed: ${(e as Error).message}`; }
+    return "Podcast generation failed.";
+  }
+
+  // Duo/interview: merge all lines into a conversation script, generate per-host
+  const hostALines = script.filter((s) => s.host === "A" || s.host === "Host" || s.host === "Interviewer").map((s) => s.text);
+  const hostBLines = script.filter((s) => s.host === "B" || s.host === "Guest").map((s) => s.text);
+  const audioCards: string[] = [];
+
+  // Generate full conversation as interleaved segments — 2-3 combined chunks
+  // Each chunk contains multiple exchanges to keep it natural
+  const chunkSize = Math.ceil(script.length / 3);
+  for (let chunk = 0; chunk < 3; chunk++) {
+    const start = chunk * chunkSize;
+    const end = Math.min(start + chunkSize, script.length);
+    const chunkSegments = script.slice(start, end);
+    if (chunkSegments.length === 0) continue;
+
+    // Combine into conversation text for one TTS call
+    const combinedText = chunkSegments.map((s) => {
+      const label = s.host === "A" ? "" : ""; // No labels — just natural speech flow
+      return `${label}${s.text}`;
+    }).join(" ... ");
+
+    // Alternate voices per chunk for variety
+    const cap = chunk % 2 === 0 ? voiceA : voiceB;
+    const chunkLabel = `Part ${chunk + 1}`;
+    say(`Generating ${chunkLabel} (${combinedText.split(/\s+/).length} words)…`);
+
+    try {
+      const result = await runInference({ capability: cap, prompt: combinedText, params: { text: combinedText } });
+      const r = result as Record<string, unknown>;
+      const data = (r.data ?? r) as Record<string, unknown>;
+      const audioUrl = (r.audio_url as string) ?? (data.audio as { url: string })?.url ?? (data.audio_file as { url: string })?.url;
+      if (audioUrl) {
+        const refId = `podcast-${chunk + 1}-${Date.now()}`;
+        const card = canvas.addCard({ type: "audio", title: `Podcast ${chunkLabel}: ${topic.slice(0, 20)}`, refId });
+        canvas.updateCard(card.id, { url: audioUrl, capability: cap });
+        if (audioCards.length > 0) canvas.addEdge(audioCards[audioCards.length - 1], refId, { action: "podcast" });
         audioCards.push(refId);
       }
     } catch (e) {
-      say(`Segment ${i + 1} failed: ${(e as Error).message?.slice(0, 80)}`);
+      say(`${chunkLabel} failed: ${(e as Error).message?.slice(0, 80)}`);
     }
   }
 
-  if (audioCards.length === 0) return "Podcast generation failed — no audio segments created.";
-  return `Podcast complete! ${audioCards.length} audio segments on the canvas. Play them in order.`;
+  if (audioCards.length === 0) return "Podcast generation failed — no audio created.";
+  return `Podcast complete! ${audioCards.length} audio track${audioCards.length > 1 ? "s" : ""} on the canvas.`;
 }
 
 function buildScriptPrompt(topic: string, style: "solo" | "duo" | "interview", briefingContext: string): string {
