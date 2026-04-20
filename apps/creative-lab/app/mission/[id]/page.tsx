@@ -295,10 +295,29 @@ export default function MissionPage() {
         <div style={{ textAlign: "center", padding: "40px 0" }}>
           <div style={{ fontSize: 56 }}>🏆</div>
           <h2 style={{ color: "var(--text)", fontWeight: 800, marginBottom: 8 }}>Mission Complete!</h2>
-          <button onClick={() => router.push("/")} style={{
-            background: "var(--accent)", color: "#fff", border: "none",
-            borderRadius: 12, padding: "14px 32px", fontWeight: 700, cursor: "pointer", fontSize: 16, marginTop: 16,
-          }}>Pick Another Mission →</button>
+          <div style={{ display: "flex", gap: 2, justifyContent: "center", margin: "12px 0" }}>
+            {Array.from({ length: progress.stars }).map((_, i) => (
+              <span key={i} style={{ fontSize: 28 }}>⭐</span>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 20, flexWrap: "wrap" }}>
+            <button onClick={() => {
+              // Reset mission for redo
+              startMission(id);
+              setLastPrompt("");
+              setStylePrefix("");
+              setArtifacts([]);
+              setError(null);
+              rerender();
+            }} style={{
+              background: "rgba(255,255,255,0.08)", color: "var(--text)", border: "2px solid rgba(255,255,255,0.15)",
+              borderRadius: 12, padding: "14px 28px", fontWeight: 700, cursor: "pointer", fontSize: 15,
+            }}>🔄 Play Again</button>
+            <button onClick={() => router.push("/")} style={{
+              background: "var(--accent)", color: "#fff", border: "none",
+              borderRadius: 12, padding: "14px 28px", fontWeight: 700, cursor: "pointer", fontSize: 15,
+            }}>Pick Another Mission →</button>
+          </div>
         </div>
       ) : currentStep && currentStep.type !== "celebrate" ? (
         <StepGuide

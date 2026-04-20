@@ -46,6 +46,7 @@ export function MissionPicker() {
               mission={mission}
               stars={stars}
               locked={locked}
+              completed={!!progress?.completed}
               onStart={handleStart}
             />
           );

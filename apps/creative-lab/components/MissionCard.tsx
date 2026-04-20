@@ -13,10 +13,11 @@ interface MissionCardProps {
   mission: Mission;
   stars: number;
   locked: boolean;
+  completed: boolean;
   onStart: (id: string) => void;
 }
 
-export function MissionCard({ mission, stars, locked, onStart }: MissionCardProps) {
+export function MissionCard({ mission, stars, locked, completed, onStart }: MissionCardProps) {
   const diff = DIFFICULTY_STYLES[mission.difficulty] ?? DIFFICULTY_STYLES.starter;
 
   return (
@@ -45,9 +46,10 @@ export function MissionCard({ mission, stars, locked, onStart }: MissionCardProp
         (e.currentTarget as HTMLButtonElement).style.boxShadow = "none";
       }}
     >
-      {/* Icon */}
-      <div style={{ fontSize: "2.5rem", marginBottom: "8px" }}>
+      {/* Icon + completed badge */}
+      <div style={{ fontSize: "2.5rem", marginBottom: "8px", position: "relative", display: "inline-block" }}>
         {locked ? "🔒" : mission.icon}
+        {completed && <span style={{ position: "absolute", top: -4, right: -12, fontSize: 16 }}>✅</span>}
       </div>
 
       {/* Title */}
