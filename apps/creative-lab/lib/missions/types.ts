@@ -56,12 +56,22 @@ export interface Mission {
   maxStars: number;
 }
 
+export interface SavedCreation {
+  id: string;
+  url: string;
+  type: "image" | "video" | "audio";
+  prompt: string;
+  savedAt: number;
+}
+
 export interface MissionProgress {
   missionId: string;
   currentStep: number;
   completed: boolean;
   stars: number;
   artifacts: string[];
+  /** Persisted creations the user explicitly saved or that were auto-saved on completion */
+  savedCreations?: SavedCreation[];
   startedAt: number;
   completedAt?: number;
 }

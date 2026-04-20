@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { MissionProgress } from "../missions/types";
+import type { MissionProgress, SavedCreation } from "../missions/types";
 
 interface ProgressStore {
   progress: MissionProgress[];
@@ -10,6 +10,8 @@ interface ProgressStore {
   advanceStep: (missionId: string) => void;
   completeMission: (missionId: string, stars: number) => void;
   addArtifact: (missionId: string, artifactRefId: string) => void;
+  saveCreation: (missionId: string, creation: SavedCreation) => void;
+  getAllSavedCreations: () => Array<SavedCreation & { missionId: string }>;
   getProgress: (missionId: string) => MissionProgress | undefined;
   isMissionUnlocked: (missionId: string, unlockAfter?: string[]) => boolean;
 }
@@ -81,6 +83,22 @@ export const useProgressStore = create<ProgressStore>()(
               : p
           ),
         }));
+      },
+
+      saveCreation: (missionId, creation) => {
+        set((state) => ({
+          progress: state.progress.map((p) =>
+            p.missionId === missionId
+              ? { ...p, savedCreations: [...(p.savedCreations || []), creation] }
+              : p
+          ),
+        }));
+      },
+
+      getAllSavedCreations: () => {
+        return get().progress.flatMap((p) =>
+          (p.savedCreations || []).map((c) => ({ ...c, missionId: p.missionId }))
+        );
       },
 
       getProgress: (missionId) => {

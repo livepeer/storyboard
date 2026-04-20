@@ -330,31 +330,15 @@ export default function MissionPage() {
         />
       ) : null}
 
-      {/* Creations — BIG filmstrip */}
+      {/* Creations — BIG filmstrip with save buttons */}
       {artifacts.length > 0 && (
         <div style={{ marginTop: 40 }}>
           <h3 style={{ color: "var(--text-muted)", fontWeight: 700, marginBottom: 16, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Your Creations ({artifacts.length})
+            Your Creations ({artifacts.length}) — tap ❤️ to save favorites
           </h3>
           <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 12 }}>
             {artifacts.map((a) => (
-              <div key={a.id} style={{
-                flexShrink: 0, width: 320, borderRadius: 16,
-                overflow: "hidden", border: "2px solid rgba(255,255,255,0.1)",
-                background: "var(--bg-card)",
-                boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
-              }}>
-                {a.type === "video" ? (
-                  <video src={a.url} controls autoPlay loop muted playsInline style={{ width: "100%", display: "block", aspectRatio: "1" }} />
-                ) : a.type === "audio" ? (
-                  <div style={{ padding: 24, textAlign: "center" }}>
-                    <div style={{ fontSize: 48, marginBottom: 12 }}>🎵</div>
-                    <audio src={a.url} controls style={{ width: "100%" }} />
-                  </div>
-                ) : (
-                  <img src={a.url} alt="creation" style={{ width: "100%", display: "block", aspectRatio: "1", objectFit: "cover" }} />
-                )}
-              </div>
+              <ArtifactPreview key={a.id} artifact={a} missionId={id} />
             ))}
           </div>
         </div>
@@ -371,6 +355,58 @@ export default function MissionPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** Individual artifact card with save-to-gallery button */
+function ArtifactPreview({ artifact, missionId }: { artifact: Artifact; missionId: string }) {
+  const [saved, setSaved] = useState(false);
+  const { saveCreation } = useProgressStore();
+
+  const handleSave = () => {
+    saveCreation(missionId, {
+      id: artifact.id,
+      url: artifact.url,
+      type: artifact.type,
+      prompt: artifact.prompt,
+      savedAt: Date.now(),
+    });
+    setSaved(true);
+  };
+
+  return (
+    <div style={{
+      flexShrink: 0, width: 320, borderRadius: 16,
+      overflow: "hidden", border: "2px solid rgba(255,255,255,0.1)",
+      background: "var(--bg-card)", boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+      position: "relative",
+    }}>
+      {artifact.type === "video" ? (
+        <video src={artifact.url} controls autoPlay loop muted playsInline style={{ width: "100%", display: "block", aspectRatio: "1" }} />
+      ) : artifact.type === "audio" ? (
+        <div style={{ padding: 24, textAlign: "center" }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🎵</div>
+          <audio src={artifact.url} controls style={{ width: "100%" }} />
+        </div>
+      ) : (
+        <img src={artifact.url} alt="creation" style={{ width: "100%", display: "block", aspectRatio: "1", objectFit: "cover" }} />
+      )}
+      {/* Save button */}
+      <button
+        onClick={handleSave}
+        disabled={saved}
+        style={{
+          position: "absolute", top: 8, right: 8,
+          background: saved ? "rgba(78,204,163,0.9)" : "rgba(0,0,0,0.6)",
+          border: "none", borderRadius: 20,
+          padding: "6px 12px", cursor: saved ? "default" : "pointer",
+          fontSize: 14, color: "#fff", fontWeight: 600,
+          backdropFilter: "blur(8px)",
+        }}
+      >
+        {saved ? "✅ Saved" : "❤️ Save"}
+      </button>
     </div>
   );
 }

@@ -4,148 +4,92 @@ import { useProgressStore } from "../lib/stores/progress-store";
 import { getMission } from "../lib/missions/catalog";
 
 export default function PortfolioGallery() {
-  const { progress } = useProgressStore();
+  const { getAllSavedCreations, progress } = useProgressStore();
+  const saved = getAllSavedCreations();
 
-  const completed = progress.filter((p) => p.completed);
-
-  if (completed.length === 0) {
+  if (saved.length === 0) {
     return (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "4rem 2rem",
-          gap: "1rem",
-          color: "var(--text-muted)",
-          textAlign: "center",
-        }}
-      >
+      <div style={{
+        display: "flex", flexDirection: "column", alignItems: "center",
+        justifyContent: "center", padding: "4rem 2rem", gap: "1rem",
+        color: "var(--text-muted)", textAlign: "center",
+      }}>
         <span style={{ fontSize: "3.5rem" }}>🖼️</span>
-        <p
-          style={{
-            fontSize: "1.25rem",
-            fontWeight: 700,
-            color: "var(--text-muted)",
-            margin: 0,
-          }}
-        >
-          Your Gallery is Empty
-        </p>
+        <p style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>Your Gallery is Empty</p>
         <p style={{ margin: 0, fontSize: "0.9rem" }}>
-          Complete a mission to see your creations here!
+          Complete missions and tap ❤️ Save on your favorite creations!
         </p>
-        <a
-          href="/"
-          style={{
-            marginTop: "0.5rem",
-            padding: "0.6rem 1.4rem",
-            borderRadius: "0.75rem",
-            background: "var(--accent)",
-            color: "#fff",
-            fontWeight: 700,
-            textDecoration: "none",
-            fontSize: "0.95rem",
-          }}
-        >
-          Start a Mission →
-        </a>
+        <a href="/" style={{
+          marginTop: "0.5rem", padding: "0.6rem 1.4rem", borderRadius: "0.75rem",
+          background: "var(--accent)", color: "#fff", fontWeight: 700, textDecoration: "none",
+        }}>Start a Mission →</a>
       </div>
     );
   }
 
   return (
-    <div
-      style={{
+    <div>
+      {/* Saved creations grid — BIG cards */}
+      <div style={{
         display: "grid",
-        gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-        gap: "1rem",
-      }}
-    >
-      {completed.map((p) => {
-        const mission = getMission(p.missionId);
-        if (!mission) return null;
-        return (
-          <GalleryCard
-            key={p.missionId}
-            icon={mission.icon}
-            title={mission.title}
-            stars={p.stars}
-            maxStars={mission.maxStars}
-            artifactCount={p.artifacts.length}
-          />
-        );
-      })}
-    </div>
-  );
-}
+        gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+        gap: 16,
+      }}>
+        {saved.map((c) => {
+          const mission = getMission(c.missionId);
+          return (
+            <div key={c.id} style={{
+              borderRadius: 16, overflow: "hidden",
+              border: "2px solid rgba(255,255,255,0.1)",
+              background: "var(--bg-card)",
+              boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+            }}>
+              {c.type === "video" ? (
+                <video src={c.url} controls loop muted playsInline style={{ width: "100%", display: "block", aspectRatio: "1", objectFit: "cover" }} />
+              ) : c.type === "audio" ? (
+                <div style={{ padding: 24, textAlign: "center", aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                  <div style={{ fontSize: 56, marginBottom: 12 }}>🎵</div>
+                  <audio src={c.url} controls style={{ width: "100%" }} />
+                </div>
+              ) : (
+                <img src={c.url} alt="creation" style={{ width: "100%", display: "block", aspectRatio: "1", objectFit: "cover" }} />
+              )}
+              <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 20 }}>{mission?.icon || "🎨"}</span>
+                <span style={{ fontSize: 12, color: "var(--text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {mission?.title || "Creation"}
+                </span>
+                <span style={{ fontSize: 11, color: "var(--text-dim)" }}>❤️</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
-function GalleryCard({
-  icon,
-  title,
-  stars,
-  maxStars,
-  artifactCount,
-}: {
-  icon: string;
-  title: string;
-  stars: number;
-  maxStars: number;
-  artifactCount: number;
-}) {
-  return (
-    <div
-      style={{
-        background: "var(--bg-card)",
-        border: "1px solid var(--border)",
-        borderRadius: "1.1rem",
-        padding: "1.25rem 1rem",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: "0.6rem",
-        cursor: "default",
-        transition: "transform 0.15s, box-shadow 0.15s",
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.transform = "translateY(-3px)";
-        (e.currentTarget as HTMLDivElement).style.boxShadow =
-          "0 6px 24px rgba(0,0,0,0.18)";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLDivElement).style.transform = "none";
-        (e.currentTarget as HTMLDivElement).style.boxShadow = "none";
-      }}
-    >
-      <span style={{ fontSize: "2.5rem" }}>{icon}</span>
-      <span
-        style={{
-          fontWeight: 700,
-          fontSize: "0.95rem",
-          textAlign: "center",
-          lineHeight: 1.3,
-        }}
-      >
-        {title}
-      </span>
-      <span style={{ fontSize: "1rem", letterSpacing: "0.05em" }}>
-        {Array.from({ length: maxStars }, (_, i) => (
-          <span key={i} style={{ opacity: i < stars ? 1 : 0.25 }}>
-            ⭐
-          </span>
-        ))}
-      </span>
-      {artifactCount > 0 && (
-        <span
-          style={{
-            fontSize: "0.78rem",
-            color: "var(--text-muted)",
-          }}
-        >
-          {artifactCount} creation{artifactCount !== 1 ? "s" : ""}
-        </span>
-      )}
+      {/* Mission summary below */}
+      <div style={{ marginTop: 32 }}>
+        <h4 style={{ color: "var(--text-dim)", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>
+          Completed Missions
+        </h4>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {progress.filter((p) => p.completed).map((p) => {
+            const m = getMission(p.missionId);
+            if (!m) return null;
+            return (
+              <a key={p.missionId} href={`/mission/${p.missionId}`} style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "8px 14px", borderRadius: 12,
+                background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)",
+                color: "var(--text)", textDecoration: "none", fontSize: 14,
+              }}>
+                <span>{m.icon}</span>
+                <span style={{ fontWeight: 600 }}>{m.title}</span>
+                <span>{"⭐".repeat(p.stars)}</span>
+              </a>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
