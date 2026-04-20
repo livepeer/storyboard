@@ -714,14 +714,14 @@ Files: `lib/stream-cmd/graph-store.ts`, `lib/stream-cmd/commands.ts`, `lib/strea
 | Convert to 3D | 🖥 right-click card | — | tripo-i3d |
 | Import Media | 📁/🔗 right-click canvas | — | image/video/audio (GCS upload) |
 
-### Capabilities (40 on BYOC orch)
+### Capabilities (41 on BYOC orch)
 Image: flux-dev, flux-schnell, recraft-v4, gemini-image, nano-banana, flux-flex, seedream-5-lite
 Edit: kontext-edit, flux-fill
 Video T2V: veo-t2v, ltx-t2v, pixverse-t2v
 Video I2V: veo-i2v, ltx-i2v, pixverse-i2v, kling-i2v, seedance-i2v, seedance-i2v-fast
 Video misc: veo-transition, pixverse-transition, pixverse-ref2v, void-inpaint
 TTS: chatterbox-tts, gemini-tts, inworld-tts, grok-tts
-3D: tripo-t3d, tripo-i3d, tripo-mv3d, tripo-p1-t3d
+3D: tripo-t3d, tripo-i3d, tripo-mv3d, tripo-p1-t3d, tripo-p1-i3d
 Other: bg-remove, topaz-upscale, lipsync, music, sfx, face-swap, sam3, talking-head, fashn-tryon
 Fallback chains: all video/image/TTS models have 2-4 siblings for automatic retry on failure.
 Seedance 2.0: primary i2v model for /film and context menu animate. Up to 15s cinematic video with audio.

@@ -110,6 +110,8 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleQuickStyle("iso", cmd.args, "Minimalist isometric illustration, clean black lines on white, geometric 3D, SVG-style vector, no shading");
     case "tryon":
       return handleTryonVideo(cmd.args);
+    case "3d":
+      return handle3D(cmd.args);
     case "analyze":
       return handleAnalyze(cmd.args);
     case "talk":
@@ -166,6 +168,7 @@ function showHelp(): string {
     "  /logo <description>         Generate logo design",
     "  /iso <description>          Generate isometric illustration",
     "  /tryon <person> <garment>   Virtual try-on → animate to runway video",
+    "  /3d <description>          Generate 3D model from text (or /3d <card> for image→3D)",
     "",
     "── TALKING VIDEO ──",
     "  /talk <text> --face <card>  Generate talking video (TTS → lip-sync animation)",
@@ -790,4 +793,88 @@ async function handleTalk(args: string): Promise<string> {
     return "Talking video complete — check the canvas.";
   }
   return `Talking head failed: ${extractFalError(vd) || "No video returned"}. Audio is on the canvas.`;
+}
+
+/**
+ * /3d <text> — text-to-3D
+ * /3d <card-ref> — image-to-3D from a canvas card
+ * /3d <card-ref> fast — use P1 (fast/low-poly) instead of H3.1
+ */
+async function handle3D(args: string): Promise<string> {
+  if (!args.trim()) {
+    return [
+      "Usage:",
+      "  /3d <description>           Text → 3D model (H3.1 high quality)",
+      "  /3d <description> fast      Text → 3D model (P1 fast, ~2s)",
+      "  /3d <card-name>             Image → 3D model from canvas card",
+      "  /3d <card-name> fast        Image → 3D (P1 fast)",
+      "",
+      "Examples:",
+      "  /3d a red sports car with shiny paint",
+      "  /3d img-1",
+      "  /3d img-3 fast",
+    ].join("\n");
+  }
+
+  const parts = args.trim().split(/\s+/);
+  const isFast = parts[parts.length - 1].toLowerCase() === "fast";
+  const query = isFast ? parts.slice(0, -1).join(" ") : args.trim();
+
+  // Check if query is a card reference
+  const cards = useCanvasStore.getState().cards;
+  const sourceCard = cards.find((c) => c.refId === query.trim());
+
+  const { runInference } = await import("@/lib/sdk/client");
+  const { extractFalError } = await import("@/lib/tools/compound-tools");
+  const canvas = useCanvasStore.getState();
+  const { useChatStore } = await import("@/lib/chat/store");
+  const say = (msg: string) => useChatStore.getState().addMessage(msg, "system");
+
+  let capability: string;
+  const params: Record<string, unknown> = { texture: true };
+
+  if (sourceCard?.url) {
+    // Image → 3D
+    capability = isFast ? "tripo-p1-i3d" : "tripo-i3d";
+    params.image_url = sourceCard.url;
+    say(`Creating 3D model from "${sourceCard.title}"${isFast ? " (fast mode)" : ""}…`);
+  } else {
+    // Text → 3D
+    capability = isFast ? "tripo-p1-t3d" : "tripo-t3d";
+    say(`Creating 3D model: "${query.slice(0, 40)}"${isFast ? " (fast mode)" : ""}…`);
+  }
+
+  try {
+    const result = await runInference({ capability, prompt: query, params });
+    const r = result as Record<string, unknown>;
+    const data = (r.data ?? r) as Record<string, unknown>;
+    const renderedImage = data.rendered_image as { url: string } | undefined;
+    const modelMesh = data.model_mesh as { url: string } | undefined;
+    const modelUrls = data.model_urls as { glb?: string; pbr_model?: string } | undefined;
+    const previewUrl = renderedImage?.url;
+    const glbUrl = modelMesh?.url || modelUrls?.glb;
+    const falError = extractFalError(data);
+
+    if (falError) return `3D generation failed: ${falError}`;
+    if (!previewUrl && !glbUrl) return "3D generation returned no output.";
+
+    // Create a card with the preview image
+    const refId = `3d-${Date.now()}`;
+    const card = canvas.addCard({ type: "image", title: `3D: ${query.slice(0, 30)}`, refId });
+    canvas.updateCard(card.id, {
+      url: previewUrl || glbUrl || "",
+      capability,
+      metadata: { glbUrl, pbrUrl: modelUrls?.pbr_model },
+    });
+
+    if (sourceCard) {
+      canvas.addEdge(sourceCard.refId, refId, { capability, action: "3d" });
+    }
+
+    const lines = [`3D model created: ${refId} (${capability})`];
+    if (glbUrl) lines.push(`GLB: ${glbUrl}`);
+    return lines.join("\n");
+  } catch (e) {
+    return `3D failed: ${e instanceof Error ? e.message : "unknown"}`;
+  }
 }

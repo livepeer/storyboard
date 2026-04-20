@@ -72,6 +72,7 @@ const FALLBACK_CAPABILITIES = new Set([
   "ltx-i2v", "ltx-t2v", "kontext-edit",
   "topaz-upscale", "bg-remove", "chatterbox-tts", "nano-banana",
   "seedream-5-lite", "seedance-i2v", "seedance-i2v-fast",
+  "tripo-i3d", "tripo-t3d", "tripo-p1-i3d", "tripo-p1-t3d", "tripo-mv3d",
 ]);
 
 export function resolveCapability(

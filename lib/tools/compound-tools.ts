@@ -75,6 +75,11 @@ export const FALLBACK_CHAINS: Record<string, string[]> = {
   "gemini-tts": ["chatterbox-tts", "inworld-tts", "grok-tts"],
   "inworld-tts": ["gemini-tts", "chatterbox-tts"],
   "grok-tts": ["gemini-tts", "chatterbox-tts"],
+  // 3D models
+  "tripo-i3d": ["tripo-p1-i3d"],
+  "tripo-t3d": ["tripo-p1-t3d"],
+  "tripo-p1-i3d": ["tripo-i3d"],
+  "tripo-p1-t3d": ["tripo-t3d"],
   // bg-remove, topaz-upscale, chatterbox-tts, lipsync, music, sfx,
   // face-swap, sam3, talking-head, veo-transition → single model,
   // no fallback chain.
