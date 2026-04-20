@@ -103,12 +103,12 @@ export function SettingsPanel() {
       {/* Overlay */}
       {open && (
         <div
-          className="fixed inset-0 z-[2000] flex items-start justify-center overflow-y-auto bg-black/70 backdrop-blur-sm py-8"
+          style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)" }}
           onClick={(e) => {
             if (e.target === e.currentTarget) setOpen(false);
           }}
         >
-          <div className="w-[420px] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-8 shadow-[var(--shadow-lg)]">
+          <div style={{ width: 420, maxHeight: "90vh", overflowY: "auto", background: "#1a1a1e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
             <h2 className="mb-1 text-base font-semibold text-[var(--text)]">
               Connect to Daydream
             </h2>
