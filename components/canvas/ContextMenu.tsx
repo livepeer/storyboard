@@ -710,30 +710,20 @@ export function ContextMenu() {
         }
 
         // Ensure image_url is a fetchable HTTP URL for fal.ai.
-        // Problems: blob: URLs get revoked, cross-origin images taint canvas,
-        // large images exceed video model limits.
-        // Solution: for video actions, always re-fetch via our proxy, resize, upload.
+        // HTTP fal CDN URLs (https://v3b.fal.media/...) → pass through (fal can download its own CDN)
+        // blob:/data: URLs → resize + upload to GCS to get a public HTTPS URL
         if (isVideoAction && params.image_url && typeof params.image_url === "string") {
           const imgUrl = params.image_url as string;
-          try {
-            if (imgUrl.startsWith("http")) {
-              // HTTP URL — just resize+upload (resizeImageForModel handles it)
+          const isHttp = imgUrl.startsWith("http://") || imgUrl.startsWith("https://");
+          if (!isHttp) {
+            // Non-HTTP URL (blob: or data:) — must convert to public HTTPS
+            try {
               params.image_url = await resizeImageForModel(imgUrl);
-            } else {
-              // blob:/data: URL — fetch the blob, convert to data URL, resize+upload
-              const resp = await fetch(imgUrl);
-              const blob = await resp.blob();
-              const reader = new FileReader();
-              const dataUrl = await new Promise<string>((resolve) => {
-                reader.onload = () => resolve(reader.result as string);
-                reader.readAsDataURL(blob);
-              });
-              params.image_url = await resizeImageForModel(dataUrl);
+            } catch (e) {
+              console.warn("[ContextMenu] Image prep failed:", (e as Error).message);
             }
-          } catch (e) {
-            console.warn("[ContextMenu] Image prep failed:", (e as Error).message);
-            // Keep original — will likely fail at fal but at least we tried
           }
+          // HTTP URLs pass through — fal.ai fetches them directly
         }
 
         // Build fallback chain so content-policy rejections from one
