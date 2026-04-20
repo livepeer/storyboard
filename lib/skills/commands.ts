@@ -112,6 +112,8 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleTryonVideo(cmd.args);
     case "3d":
       return handle3D(cmd.args);
+    case "podcast":
+      return handlePodcast(cmd.args);
     case "analyze":
       return handleAnalyze(cmd.args);
     case "talk":
@@ -169,6 +171,8 @@ function showHelp(): string {
     "  /iso <description>          Generate isometric illustration",
     "  /tryon <person> <garment>   Virtual try-on → animate to runway video",
     "  /3d <description>          Generate 3D model from text (or /3d <card> for image→3D)",
+    "  /podcast <topic>           Generate conversational podcast audio",
+    "  /podcast daily briefing    Podcast from today's email summary",
     "",
     "── TALKING VIDEO ──",
     "  /talk <text> --face <card>  Generate talking video (TTS → lip-sync animation)",
@@ -877,4 +881,224 @@ async function handle3D(args: string): Promise<string> {
   } catch (e) {
     return `3D failed: ${e instanceof Error ? e.message : "unknown"}`;
   }
+}
+
+/**
+ * /podcast <topic> [--style solo|duo|interview]
+ * /podcast daily briefing — fetch emails, summarize, then generate podcast
+ */
+async function handlePodcast(args: string): Promise<string> {
+  if (!args.trim()) {
+    return [
+      "Usage:",
+      "  /podcast <topic>                 Two-host podcast about a topic",
+      "  /podcast <topic> --style solo    Single narrator",
+      "  /podcast <topic> --style interview  Interview format",
+      "  /podcast daily briefing          Podcast from today's emails",
+      "",
+      "Examples:",
+      "  /podcast the future of AI in creative tools",
+      "  /podcast daily briefing --style duo",
+    ].join("\n");
+  }
+
+  const { useChatStore } = await import("@/lib/chat/store");
+  const { runInference } = await import("@/lib/sdk/client");
+  const { extractFalError } = await import("@/lib/tools/compound-tools");
+  const canvas = useCanvasStore.getState();
+  const say = (msg: string) => useChatStore.getState().addMessage(msg, "system");
+
+  // Parse --style flag
+  const styleMatch = args.match(/--style\s+(solo|duo|interview)/i);
+  const style = (styleMatch?.[1]?.toLowerCase() || "duo") as "solo" | "duo" | "interview";
+  const topic = args.replace(/--style\s+\w+/i, "").trim();
+
+  // Daily briefing mode — fetch emails first
+  let briefingContext = "";
+  const isDailyBriefing = /daily\s*(briefing|summary|email)/i.test(topic);
+  if (isDailyBriefing) {
+    say("Fetching emails for daily briefing podcast…");
+    try {
+      const { getConnectedServers } = await import("@/lib/mcp/store");
+      const { discoverToolsViaProxy, executeToolCallViaProxy, parseMcpToolName } = await import("@/lib/mcp/client");
+      const servers = getConnectedServers();
+      const gmail = servers.find((s) => s.name.toLowerCase().includes("gmail") || s.id === "gmail-local");
+      if (gmail) {
+        const tools = await discoverToolsViaProxy(gmail);
+        const listTool = tools.find((t) => t.name.includes("gmail_list")) || tools.find((t) => t.name.includes("gmail_search"));
+        if (listTool) {
+          const parsed = parseMcpToolName(listTool.name);
+          if (parsed) {
+            const result = await executeToolCallViaProxy(gmail.url, gmail.token || "", parsed.originalName, { max_results: 8 });
+            const content = result.content?.[0];
+            if (content && "text" in content) {
+              const emails = JSON.parse((content as { text: string }).text).emails || [];
+              briefingContext = emails.slice(0, 5).map((e: { from?: string; subject?: string; snippet?: string }, i: number) =>
+                `${i + 1}. From: ${e.from || "?"} — ${e.subject || "?"}: ${(e.snippet || "").slice(0, 150)}`
+              ).join("\n");
+              say(`Found ${emails.length} emails — generating podcast script…`);
+            }
+          }
+        }
+      }
+      if (!briefingContext) say("No Gmail connected — generating podcast from topic instead.");
+    } catch (e) {
+      say(`Email fetch failed: ${(e as Error).message} — using topic only.`);
+    }
+  }
+
+  // Step 1: Generate podcast script via Gemini
+  say(`Writing ${style} podcast script…`);
+  const scriptPrompt = buildScriptPrompt(topic, style, briefingContext);
+
+  let script: Array<{ host: string; text: string }>;
+  try {
+    const resp = await fetch("/api/agent/gemini", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts: [{ text: scriptPrompt }] }],
+      }),
+    });
+    if (!resp.ok) return `Script generation failed: ${resp.status}`;
+    const payload = await resp.json();
+    const rawText = payload.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
+    script = parseScript(rawText, style);
+    if (script.length === 0) return "Script generation returned no usable segments.";
+    say(`Script ready — ${script.length} segments. Generating audio…`);
+  } catch (e) {
+    return `Script failed: ${(e as Error).message}`;
+  }
+
+  // Step 2: Generate audio for each segment
+  const voiceA = "chatterbox-tts";
+  const voiceB = "gemini-tts";
+  const audioCards: string[] = [];
+
+  for (let i = 0; i < script.length; i++) {
+    const seg = script[i];
+    const isHostA = seg.host === "A" || seg.host === "Host" || seg.host === "Interviewer";
+    const capability = style === "solo" ? voiceB : isHostA ? voiceA : voiceB;
+    const label = style === "solo" ? "Narrator" : isHostA ? "Host A" : "Host B";
+
+    say(`${label} (${i + 1}/${script.length}): "${seg.text.slice(0, 40)}…"`);
+
+    try {
+      const params: Record<string, unknown> = { text: seg.text };
+      const result = await runInference({ capability, prompt: seg.text, params });
+      const r = result as Record<string, unknown>;
+      const data = (r.data ?? r) as Record<string, unknown>;
+      const audioUrl = (r.audio_url as string)
+        ?? (data.audio as { url: string })?.url
+        ?? (data.audio_file as { url: string })?.url;
+
+      if (audioUrl) {
+        const refId = `podcast-${i + 1}-${Date.now()}`;
+        const card = canvas.addCard({ type: "audio", title: `${label}: ${seg.text.slice(0, 25)}`, refId });
+        canvas.updateCard(card.id, { url: audioUrl, capability });
+        if (audioCards.length > 0) {
+          canvas.addEdge(audioCards[audioCards.length - 1], refId, { action: "podcast-sequence" });
+        }
+        audioCards.push(refId);
+      }
+    } catch (e) {
+      say(`Segment ${i + 1} failed: ${(e as Error).message?.slice(0, 80)}`);
+    }
+  }
+
+  if (audioCards.length === 0) return "Podcast generation failed — no audio segments created.";
+  return `Podcast complete! ${audioCards.length} audio segments on the canvas. Play them in order.`;
+}
+
+function buildScriptPrompt(topic: string, style: "solo" | "duo" | "interview", briefingContext: string): string {
+  const emailBlock = briefingContext
+    ? `\n\nHere are today's emails to discuss:\n${briefingContext}\n\nBase the conversation on these emails — summarize key points, highlight urgent items, add casual commentary.`
+    : "";
+
+  if (style === "solo") {
+    return `Write a solo podcast narration about: "${topic}"${emailBlock}
+
+Rules:
+- 4-6 paragraphs, each 2-3 sentences
+- Natural speaking style — not formal essay
+- Vary pace: some paragraphs are reflective, some energetic
+- Include occasional rhetorical questions
+- Under 500 words total
+
+Output STRICT format — one paragraph per line, no labels:
+First paragraph here.
+Second paragraph here.
+Third paragraph here.`;
+  }
+
+  if (style === "interview") {
+    return `Write a podcast interview script about: "${topic}"${emailBlock}
+
+Rules:
+- Interviewer asks curious, probing questions
+- Guest gives insightful, specific answers with examples
+- 8-10 exchanges total
+- Natural conversation — not scripted-sounding
+- Include follow-up questions based on answers
+- Under 600 words total
+
+Output STRICT format — alternating A: and B: labels:
+A: Opening question here?
+B: Answer here with specific detail.
+A: Follow-up question?
+B: Deeper answer.`;
+  }
+
+  // duo (default)
+  return `Write a two-host podcast conversation about: "${topic}"${emailBlock}
+
+Rules:
+- Two hosts (A and B) having a natural conversation
+- They build on each other's points, sometimes lightly disagree
+- Include reactions: "Oh interesting!", "Right, exactly", "Wait, really?"
+- 8-12 exchanges total
+- Each line is 1-3 sentences (keeps TTS natural)
+- Under 600 words total
+- Casual, engaging, like friends talking
+
+Output STRICT format — alternating A: and B: labels:
+A: Hey, so today we're talking about...
+B: Yeah, this is fascinating because...
+A: Oh interesting, I didn't know that.
+B: Right? And there's more...`;
+}
+
+function parseScript(raw: string, style: "solo" | "duo" | "interview"): Array<{ host: string; text: string }> {
+  const lines = raw.split("\n").map((l) => l.trim()).filter((l) => l.length > 5);
+
+  if (style === "solo") {
+    // Each non-empty line is a paragraph
+    return lines
+      .filter((l) => !l.startsWith("```") && !l.startsWith("#"))
+      .slice(0, 8)
+      .map((text) => ({ host: "Host", text }));
+  }
+
+  // duo / interview — parse A: and B: labels
+  const segments: Array<{ host: string; text: string }> = [];
+  for (const line of lines) {
+    const match = line.match(/^([AB]):\s*(.+)/i);
+    if (match) {
+      segments.push({ host: match[1].toUpperCase(), text: match[2] });
+    } else if (line.match(/^(Host\s*[AB12]|Interviewer|Guest):\s*/i)) {
+      const m = line.match(/^[^:]+:\s*(.+)/);
+      if (m) {
+        const isA = /^(Host\s*[A1]|Interviewer)/i.test(line);
+        segments.push({ host: isA ? "A" : "B", text: m[1] });
+      }
+    }
+  }
+
+  // Fallback: if no labels found, alternate lines
+  if (segments.length === 0) {
+    return lines.slice(0, 12).map((text, i) => ({ host: i % 2 === 0 ? "A" : "B", text }));
+  }
+
+  return segments.slice(0, 14);
 }
