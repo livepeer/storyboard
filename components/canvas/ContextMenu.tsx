@@ -712,7 +712,7 @@ export function ContextMenu() {
         // Resize source image for video models (prevents "file too large" / "dimensions too large")
         if (isVideoAction && params.image_url && typeof params.image_url === "string") {
           try {
-            params.image_url = await resizeImageForModel(params.image_url as string, 1024, 1024, 5_000_000);
+            params.image_url = await resizeImageForModel(params.image_url as string);
           } catch { /* keep original */ }
         }
 

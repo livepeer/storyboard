@@ -1,14 +1,24 @@
 /**
- * Resize an image URL to fit within max dimensions.
- * Uses canvas to downscale, returns a data URL.
- * Preserves aspect ratio. No-op if already within limits.
+ * Resize an image URL to fit within max dimensions for video model input.
+ * Uses canvas to downscale, then uploads to get a public HTTP URL.
+ * Preserves aspect ratio. No-op if already within limits AND already HTTP.
+ *
+ * @param uploadUrl - endpoint that accepts {dataUrl, fileName} POST and returns {url}
  */
 export async function resizeImageForModel(
   imageUrl: string,
-  maxWidth = 1024,
-  maxHeight = 1024,
-  maxBytes = 5_000_000,
+  opts: {
+    maxWidth?: number;
+    maxHeight?: number;
+    maxBytes?: number;
+    /** Upload endpoint URL. If provided, uploads resized result to get public HTTP URL. */
+    uploadUrl?: string;
+  } = {},
 ): Promise<string> {
+  const maxWidth = opts.maxWidth ?? 1024;
+  const maxHeight = opts.maxHeight ?? 1024;
+  const maxBytes = opts.maxBytes ?? 5_000_000;
+
   // Load the image
   const img = new Image();
   img.crossOrigin = "anonymous";
@@ -19,14 +29,17 @@ export async function resizeImageForModel(
   });
 
   // Check if resize is needed
-  if (img.naturalWidth <= maxWidth && img.naturalHeight <= maxHeight) {
-    // Still might be too large in bytes — check by fetching
+  const fitsInDimensions = img.naturalWidth <= maxWidth && img.naturalHeight <= maxHeight;
+  const isHttpUrl = imageUrl.startsWith("http://") || imageUrl.startsWith("https://");
+
+  if (fitsInDimensions && isHttpUrl) {
+    // Check byte size
     try {
       const resp = await fetch(imageUrl);
       const blob = await resp.blob();
       if (blob.size <= maxBytes) return imageUrl; // already fine
     } catch {
-      // Can't check size — resize anyway to be safe
+      // Can't check size — resize to be safe
     }
   }
 
@@ -44,15 +57,30 @@ export async function resizeImageForModel(
   if (!ctx) throw new Error("Canvas 2D context not available");
   ctx.drawImage(img, 0, 0, w, h);
 
-  // Export as JPEG (smaller than PNG, good enough for video input)
+  // Export as JPEG
   let quality = 0.85;
   let dataUrl = canvas.toDataURL("image/jpeg", quality);
-
-  // If still too large, reduce quality
   while (dataUrl.length * 0.75 > maxBytes && quality > 0.3) {
     quality -= 0.15;
     dataUrl = canvas.toDataURL("image/jpeg", quality);
   }
 
+  // Upload to get a public HTTP URL that fal.ai can download
+  const uploadEndpoint = opts.uploadUrl || "/api/upload";
+  try {
+    const resp = await fetch(uploadEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataUrl, fileName: `resized-${Date.now()}.jpg` }),
+    });
+    if (resp.ok) {
+      const { url } = (await resp.json()) as { url: string };
+      if (url && url.startsWith("http")) return url;
+    }
+  } catch {
+    // Upload failed — fall through to data URL
+  }
+
+  // Fallback: return data URL (SDK may accept it via image_data path)
   return dataUrl;
 }

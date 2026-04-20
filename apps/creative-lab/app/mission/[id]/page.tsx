@@ -177,7 +177,7 @@ export default function MissionPage() {
           // Resize source image to fit video model limits (1024x1024, <5MB)
           let resizedUrl: string;
           try {
-            resizedUrl = await resizeImageForModel(lastArtifactUrl, 1024, 1024, 5_000_000);
+            resizedUrl = await resizeImageForModel(lastArtifactUrl);
           } catch {
             resizedUrl = lastArtifactUrl; // fallback to original
           }
@@ -213,7 +213,7 @@ export default function MissionPage() {
           if (!lastArtifactUrl) throw new Error("No image for talking head");
           // Resize for talking-head model
           let narrateImg: string;
-          try { narrateImg = await resizeImageForModel(lastArtifactUrl, 1024, 1024, 5_000_000); }
+          try { narrateImg = await resizeImageForModel(lastArtifactUrl); }
           catch { narrateImg = lastArtifactUrl; }
           // Step A: TTS
           const ttsResult = await callSDK("chatterbox-tts", input, { text: input });
