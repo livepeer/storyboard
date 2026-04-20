@@ -261,8 +261,24 @@ export function SettingsPanel() {
 }
 
 function UsageStats() {
+  // Re-render every 3s to pick up token usage changes
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick((t) => t + 1), 3000);
+    return () => clearInterval(interval);
+  }, []);
+
   const budget = checkBudget();
   const compaction = getCompactionStats();
+
+  // Artifact counts from canvas + project stores
+  const { useCanvasStore } = require("@/lib/canvas/store");
+  const { useProjectStore } = require("@/lib/projects/store");
+  const cards = useCanvasStore.getState().cards;
+  const projects = useProjectStore.getState().projects;
+  const imageCount = cards.filter((c: { type: string }) => c.type === "image").length;
+  const videoCount = cards.filter((c: { type: string }) => c.type === "video").length;
+  const audioCount = cards.filter((c: { type: string }) => c.type === "audio").length;
 
   return (
     <div className="mt-2 space-y-2 text-[10px] text-[var(--text-dim)]">
@@ -279,6 +295,16 @@ function UsageStats() {
           }`}
           style={{ width: `${Math.min(budget.pct, 100)}%` }}
         />
+      </div>
+      <div className="flex items-center justify-between">
+        <span>Artifacts on canvas</span>
+        <span>
+          {cards.length} total ({imageCount} img, {videoCount} vid, {audioCount} aud)
+        </span>
+      </div>
+      <div className="flex items-center justify-between">
+        <span>Projects</span>
+        <span>{projects.length}</span>
       </div>
       {compaction.estimated_tokens_saved > 0 && (
         <div className="flex items-center justify-between">
