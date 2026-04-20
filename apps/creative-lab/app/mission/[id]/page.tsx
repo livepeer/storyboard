@@ -80,34 +80,12 @@ export default function MissionPage() {
 
   // Auto-start mission
   useEffect(() => {
-    if (mission && !getProgress(id)) startMission(id);
-  }, [id, mission, getProgress]);
+    if (mounted && mission && !getProgress(id)) startMission(id);
+  }, [id, mission, mounted, getProgress]);
 
-  if (!mission) {
-    return (
-      <div style={{ padding: 40, textAlign: "center" }}>
-        <p style={{ color: "var(--text-muted)" }}>Mission not found.</p>
-        <button onClick={() => router.push("/")} style={{ marginTop: 16, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 700 }}>
-          ← Back to missions
-        </button>
-      </div>
-    );
-  }
-
-  // Wait for client hydration (localStorage-backed store causes SSR mismatch)
-  if (!mounted) {
-    return (
-      <div style={{ maxWidth: 720, margin: "0 auto", padding: "32px 16px", textAlign: "center" }}>
-        <div style={{ fontSize: 56, marginBottom: 8 }}>{mission.icon}</div>
-        <h1 style={{ fontSize: 28, fontWeight: 800, color: "var(--text)" }}>{mission.title}</h1>
-      </div>
-    );
-  }
-
-  const progress = getProgress(id);
-  const currentStep = getCurrentStep(id);
+  const progress = mounted ? getProgress(id) : undefined;
+  const currentStep = mounted ? getCurrentStep(id) : null;
   const stepNumber = progress?.currentStep ?? 0;
-
   const lastArtifactUrl = artifacts.length > 0 ? artifacts[artifacts.length - 1].url : undefined;
 
   const addArt = (url: string, prompt: string, type: "image" | "video" | "audio" = "image") => {
@@ -118,7 +96,7 @@ export default function MissionPage() {
   };
 
   const handleStepSubmit = useCallback(async (input: string) => {
-    if (!currentStep) return;
+    if (!currentStep || !mission) return;
     setError(null);
 
     try {
@@ -279,12 +257,33 @@ export default function MissionPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [currentStep, id, lastPrompt, stylePrefix, lastArtifactUrl, addArtifact]);
+  }, [currentStep, mission, id, lastPrompt, stylePrefix, lastArtifactUrl, addArtifact]);
 
   // Auto-trigger celebrate
   useEffect(() => {
     if (currentStep?.type === "celebrate") setShowCelebration(true);
   }, [currentStep?.type]);
+
+  // Early returns AFTER all hooks (React Rules of Hooks)
+  if (!mission) {
+    return (
+      <div style={{ padding: 40, textAlign: "center" }}>
+        <p style={{ color: "var(--text-muted)" }}>Mission not found.</p>
+        <button onClick={() => router.push("/")} style={{ marginTop: 16, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 700 }}>
+          ← Back to missions
+        </button>
+      </div>
+    );
+  }
+
+  if (!mounted) {
+    return (
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: "32px 16px", textAlign: "center" }}>
+        <div style={{ fontSize: 56, marginBottom: 8 }}>{mission.icon}</div>
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: "var(--text)" }}>{mission.title}</h1>
+      </div>
+    );
+  }
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: "32px 16px" }}>
