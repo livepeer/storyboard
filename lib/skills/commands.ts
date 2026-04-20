@@ -114,6 +114,10 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handle3D(cmd.args);
     case "podcast":
       return handlePodcast(cmd.args);
+    case "music":
+      return handleMusic(cmd.args);
+    case "sfx":
+      return handleMusic(cmd.args, true);
     case "analyze":
       return handleAnalyze(cmd.args);
     case "talk":
@@ -173,6 +177,8 @@ function showHelp(): string {
     "  /3d <description>          Generate 3D model from text (or /3d <card> for image→3D)",
     "  /podcast <topic>           Generate conversational podcast audio",
     "  /podcast daily briefing    Podcast from today's email summary",
+    "  /music <description>       Generate music track",
+    "  /sfx <description>         Generate sound effect",
     "",
     "── TALKING VIDEO ──",
     "  /talk <text> --face <card>  Generate talking video (TTS → lip-sync animation)",
@@ -1131,4 +1137,55 @@ function parseScript(raw: string, style: "solo" | "duo" | "interview"): Array<{ 
   }
 
   return segments.slice(0, 14);
+}
+
+/**
+ * /music <description> — generate a music track
+ * /sfx <description> — generate a sound effect
+ */
+async function handleMusic(args: string, isSfx = false): Promise<string> {
+  const cmd = isSfx ? "/sfx" : "/music";
+  const cap = isSfx ? "sfx" : "music";
+  if (!args.trim()) {
+    return isSfx
+      ? "Usage: /sfx <description>\nExample: /sfx thunderstorm with heavy rain"
+      : [
+          "Usage: /music <description>",
+          "",
+          "Examples:",
+          "  /music upbeat electronic, energetic, 120bpm, product demo",
+          "  /music lo-fi chill hip hop, rainy day study vibes",
+          "  /music cinematic orchestral, epic trailer, dramatic strings",
+          "  /music acoustic guitar, warm, sunset campfire feel",
+        ].join("\n");
+  }
+
+  const { runInference } = await import("@/lib/sdk/client");
+  const { extractFalError } = await import("@/lib/tools/compound-tools");
+  const { useChatStore } = await import("@/lib/chat/store");
+  const canvas = useCanvasStore.getState();
+  const say = (msg: string) => useChatStore.getState().addMessage(msg, "system");
+
+  say(`Generating ${isSfx ? "sound effect" : "music"}: "${args.slice(0, 50)}"…`);
+
+  try {
+    const result = await runInference({ capability: cap, prompt: args, params: {} });
+    const r = result as Record<string, unknown>;
+    const data = (r.data ?? r) as Record<string, unknown>;
+    const audioUrl = (r.audio_url as string)
+      ?? (data.audio as { url: string })?.url
+      ?? (data.audio_file as { url: string })?.url
+      ?? (data.output as string);
+    const falError = extractFalError(data);
+
+    if (falError) return `${cmd} failed: ${falError}`;
+    if (!audioUrl) return `${cmd} returned no audio.`;
+
+    const refId = `${isSfx ? "sfx" : "music"}-${Date.now()}`;
+    const card = canvas.addCard({ type: "audio", title: `${isSfx ? "SFX" : "Music"}: ${args.slice(0, 30)}`, refId });
+    canvas.updateCard(card.id, { url: audioUrl, capability: cap });
+    return `${isSfx ? "Sound effect" : "Music"} created: ${refId}`;
+  } catch (e) {
+    return `${cmd} failed: ${e instanceof Error ? e.message : "unknown"}`;
+  }
 }
