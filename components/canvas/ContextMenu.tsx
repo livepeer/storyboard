@@ -709,52 +709,30 @@ export function ContextMenu() {
           }
         }
 
-        // Ensure image_url is a public HTTP URL that fal.ai can download.
-        // blob: URLs get revoked; data: URLs can't be fetched by fal.
-        // Fix: capture from the card's rendered <img> DOM element → canvas → upload.
-        if (params.image_url && typeof params.image_url === "string") {
+        // Ensure image_url is a fetchable HTTP URL for fal.ai.
+        // Problems: blob: URLs get revoked, cross-origin images taint canvas,
+        // large images exceed video model limits.
+        // Solution: for video actions, always re-fetch via our proxy, resize, upload.
+        if (isVideoAction && params.image_url && typeof params.image_url === "string") {
           const imgUrl = params.image_url as string;
-          const isHttp = imgUrl.startsWith("http://") || imgUrl.startsWith("https://");
-
-          if (!isHttp || isVideoAction) {
-            try {
-              let dataUrl: string | null = null;
-
-              // Step 1: If not HTTP, grab pixels from the card's <img> in the DOM
-              if (!isHttp && targetCard) {
-                // Find the card's img by searching all card images for one with content
-                const allImgs = document.querySelectorAll("[data-card] img") as NodeListOf<HTMLImageElement>;
-                for (const el of allImgs) {
-                  if (el.naturalWidth > 0) {
-                    const c = document.createElement("canvas");
-                    c.width = Math.min(el.naturalWidth, 1024);
-                    c.height = Math.min(el.naturalHeight, 1024);
-                    c.getContext("2d")!.drawImage(el, 0, 0, c.width, c.height);
-                    dataUrl = c.toDataURL("image/jpeg", 0.85);
-                    break;
-                  }
-                }
-              }
-
-              // Step 2: Resize + upload to get public HTTPS URL
-              const sourceForResize = dataUrl || imgUrl;
-              if (sourceForResize.startsWith("http") || sourceForResize.startsWith("data:")) {
-                params.image_url = await resizeImageForModel(sourceForResize);
-              } else if (dataUrl) {
-                // data URL from canvas — upload directly
-                const resp = await fetch("/api/upload", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ dataUrl, fileName: `card-${Date.now()}.jpg` }),
-                });
-                if (resp.ok) {
-                  const { url } = (await resp.json()) as { url: string };
-                  if (url?.startsWith("http")) params.image_url = url;
-                }
-              }
-            } catch (e) {
-              console.warn("[ContextMenu] Image prep failed:", (e as Error).message);
+          try {
+            if (imgUrl.startsWith("http")) {
+              // HTTP URL — just resize+upload (resizeImageForModel handles it)
+              params.image_url = await resizeImageForModel(imgUrl);
+            } else {
+              // blob:/data: URL — fetch the blob, convert to data URL, resize+upload
+              const resp = await fetch(imgUrl);
+              const blob = await resp.blob();
+              const reader = new FileReader();
+              const dataUrl = await new Promise<string>((resolve) => {
+                reader.onload = () => resolve(reader.result as string);
+                reader.readAsDataURL(blob);
+              });
+              params.image_url = await resizeImageForModel(dataUrl);
             }
+          } catch (e) {
+            console.warn("[ContextMenu] Image prep failed:", (e as Error).message);
+            // Keep original — will likely fail at fal but at least we tried
           }
         }
 
