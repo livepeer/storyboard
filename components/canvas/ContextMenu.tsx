@@ -620,14 +620,21 @@ export function ContextMenu() {
           addMessage(`Card "${audioRef}" not found or has no audio.`, "system");
           return;
         }
-        addMessage(`Mixing "${targetCard.title}" + "${audioCard.title}"…`, "system");
+        addMessage(`Mixing "${targetCard.title}" + "${audioCard.title}"… This takes a few seconds.`, "system");
         try {
           const { mixVideoAudio } = await import("@livepeer/creative-kit");
+          console.log("[Mix] Starting:", targetCard.url, audioCard.url);
           const blobUrl = await mixVideoAudio({
             videoUrl: targetCard.url!,
             audioUrl: audioCard.url!,
             maxDuration: 60,
+            onProgress: (pct) => {
+              if (pct > 0 && pct < 1 && Math.round(pct * 100) % 25 === 0) {
+                addMessage(`Mixing… ${Math.round(pct * 100)}%`, "system");
+              }
+            },
           });
+          console.log("[Mix] Done, blob URL:", blobUrl);
           const refId = `mix-${Date.now()}`;
           const card = addCard({ type: "video", title: `Mix: ${targetCard.title}`, refId });
           updateCard(card.id, { url: blobUrl });
@@ -635,6 +642,7 @@ export function ContextMenu() {
           addEdge(audioCard.refId, refId, { action: "mix" });
           addMessage("Mix complete — video + audio combined!", "system");
         } catch (e) {
+          console.error("[Mix] Failed:", e);
           addMessage(`Mix failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
         }
         return;
