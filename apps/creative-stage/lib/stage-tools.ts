@@ -17,6 +17,45 @@ function textOnlyGraph() {
   };
 }
 
+/** Enrich a short music description into a detailed prompt for better generation */
+function enrichMusicPrompt(desc: string): string {
+  const lower = desc.toLowerCase();
+  const parts: string[] = [desc];
+
+  // Add instrument hints if missing
+  if (!lower.match(/piano|guitar|drum|synth|violin|bass|orchestra|flute|saxophone/)) {
+    if (lower.includes("calm") || lower.includes("peaceful") || lower.includes("serene")) {
+      parts.push("soft piano and ambient pads");
+    } else if (lower.includes("epic") || lower.includes("cinematic")) {
+      parts.push("orchestral strings and percussion");
+    } else if (lower.includes("electronic") || lower.includes("edm") || lower.includes("techno")) {
+      parts.push("synthesizers and electronic drums");
+    } else if (lower.includes("jazz") || lower.includes("lounge")) {
+      parts.push("jazz piano and smooth saxophone");
+    } else {
+      parts.push("melodic instrumental arrangement");
+    }
+  }
+
+  // Add quality descriptors
+  if (!lower.includes("quality") && !lower.includes("professional")) {
+    parts.push("high quality production, studio mastered");
+  }
+
+  return parts.join(", ");
+}
+
+/** Guess BPM from mood description */
+function guessBpm(desc: string): number {
+  const lower = desc.toLowerCase();
+  if (lower.match(/slow|calm|peaceful|serene|ambient|chill|relaxed|gentle/)) return 75;
+  if (lower.match(/moderate|medium|steady|walking/)) return 100;
+  if (lower.match(/upbeat|happy|bright|cheerful|playful/)) return 120;
+  if (lower.match(/fast|energetic|intense|driving|dance|edm/)) return 140;
+  if (lower.match(/very fast|frantic|extreme|hardcore/)) return 170;
+  return 110; // default moderate
+}
+
 export interface StageToolContext {
   sdkUrl: string;
   apiKey: string;
@@ -313,61 +352,80 @@ export function createStageTools(ctx: StageToolContext) {
 
     {
       name: "stage_music",
-      description: "Generate background music for the performance, then sync visuals to its beat",
+      description: "Generate background music for the performance. Accepts a mood/style description and auto-generates lyrics structure for best results.",
       parameters: {
         type: "object",
         properties: {
-          prompt: { type: "string", description: "Music description (mood, genre, tempo)" },
-          bpm: { type: "number", description: "Target BPM if known (60-200)" },
-          sync_param: { type: "string", description: "Visual parameter to modulate with the beat (default: noise_scale)" },
-          sync_depth: { type: "number", description: "Modulation depth 0.0-1.0 (default: 0.3)" },
+          description: { type: "string", description: "Music mood, genre, tempo, and feel. E.g. 'happy upbeat electronic, 120bpm, energetic and playful' or 'calm ambient piano, slow tempo, peaceful and serene'" },
+          lyrics: { type: "string", description: "Optional song structure/lyrics. Auto-generated if omitted." },
         },
-        required: ["prompt"],
+        required: ["description"],
       },
       async execute(args: Record<string, unknown>) {
-        const prompt = args.prompt as string;
+        const description = args.description as string;
 
-        // Generate music via SDK inference
-        const resp = await fetch(`${ctx.sdkUrl}/inference`, {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({
-            model_id: "music",
-            params: { prompt, duration: 30 },
-          }),
-        });
+        // Enrich the prompt for better music generation
+        const enrichedPrompt = enrichMusicPrompt(description);
+
+        // Auto-generate lyrics structure if not provided
+        const lyrics = (args.lyrics as string)
+          || `[Intro]\n[Verse]\n${enrichedPrompt}\n[Chorus]\n${enrichedPrompt}\n[Outro]`;
+
+        // minimax-music/v2 requires both prompt AND lyrics_prompt
+        let resp: Response;
+        try {
+          resp = await fetch(`${ctx.sdkUrl}/inference`, {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              capability: "music",
+              prompt: enrichedPrompt,
+              params: {
+                prompt: enrichedPrompt,
+                lyrics_prompt: lyrics,
+              },
+            }),
+          });
+        } catch (e) {
+          return JSON.stringify({ error: `SDK unreachable: ${(e as Error).message}` });
+        }
 
         if (!resp.ok) {
-          return JSON.stringify({ error: `Music generation failed: ${resp.status}` });
+          const text = await resp.text().catch(() => "");
+          return JSON.stringify({ error: `Music generation failed (${resp.status}): ${text.slice(0, 150)}` });
         }
 
         const data = await resp.json();
-        const audioUrl = data.url || data.audio_url;
-        if (!audioUrl) return JSON.stringify({ error: "No audio URL returned" });
+        // Extract audio URL from various response shapes
+        const audioUrl = (data.audio_url as string)
+          ?? (data.data as Record<string, unknown>)?.audio && ((data.data as Record<string, unknown>).audio as { url: string })?.url
+          ?? (data.url as string);
+
+        if (!audioUrl) {
+          return JSON.stringify({ error: "No audio URL in response", details: JSON.stringify(data).slice(0, 200) });
+        }
 
         ctx.setAudioUrl(audioUrl);
 
-        // Apply beat sync if stream active
-        const targetBpm = args.bpm as number || 120;
-        ctx.setBpm(targetBpm);
+        // Estimate BPM from description
+        const bpmMatch = description.match(/(\d{2,3})\s*bpm/i);
+        const estimatedBpm = bpmMatch ? parseInt(bpmMatch[1]) : guessBpm(description);
+        ctx.setBpm(estimatedBpm);
 
+        // Auto-enable beat sync if streaming
         if (ctx.streamId) {
-          const syncParam = (args.sync_param as string) || "noise_scale";
-          const depth = (args.sync_depth as number) ?? 0.3;
           await ctx.controlStream({
             modulation: {
-              [syncParam]: {
-                enabled: true, shape: "cosine", rate: "bar", depth,
-              },
+              noise_scale: { enabled: true, shape: "cosine", rate: "bar", depth: 0.3 },
             },
           });
         }
 
         return JSON.stringify({
-          status: "music_loaded",
+          status: "music_generated",
           audio_url: audioUrl,
-          bpm: targetBpm,
-          message: `Music generated and loaded. ${ctx.streamId ? "Beat sync active." : "Start a stream to enable beat sync."}`,
+          bpm: estimatedBpm,
+          message: `Music generated (${estimatedBpm} BPM). ${ctx.streamId ? "Beat sync enabled on noise_scale." : "Start a stream to enable beat sync."}`,
         });
       },
     },

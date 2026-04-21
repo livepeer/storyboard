@@ -414,9 +414,13 @@ function AddSceneForm({ onAdd, onCancel }: {
         <input type="number" min={5} max={120} value={duration} onChange={(e) => setDuration(Number(e.target.value))} style={inputStyle} />
       </div>
       <button
-        onClick={() => { if (title && prompt) onAdd({ title, prompt, preset, duration }); }}
+        onClick={() => {
+          if (!prompt) return;
+          const finalTitle = title || prompt.split(/[,.]/).at(0)?.trim().slice(0, 20) || "New Scene";
+          onAdd({ title: finalTitle, prompt, preset, duration });
+        }}
         style={btnStyle("#4ade80")}
-        disabled={!title || !prompt}
+        disabled={!prompt}
       >Add</button>
       <button onClick={onCancel} style={btnStyle("#555")}>Cancel</button>
     </div>
