@@ -247,7 +247,7 @@ export function createStageTools(ctx: StageToolContext) {
 
     {
       name: "stage_scene",
-      description: "Create a LIVE STREAM with multi-scene timeline. Use for ANY request containing 'stream', 'live', or 'real-time'. Starts a real-time Scope stream that morphs between scenes via prompt traveling. Also use for journeys, evolution, transformation — unless user explicitly says 'cinematic'.",
+      description: "Create a LIVE STREAM with multi-scene timeline. Use for ANY request containing 'stream', 'live', or 'real-time'. The stream morphs between scenes via prompt traveling — no cuts, continuous visual evolution.",
       parameters: {
         type: "object",
         properties: {
@@ -257,13 +257,13 @@ export function createStageTools(ctx: StageToolContext) {
               type: "object",
               properties: {
                 title: { type: "string", description: "Short scene title" },
-                prompt: { type: "string", description: "Visual scene description (20-40 words). For smooth morphing: keep consistent composition/camera angle across scenes, describe the SAME position in frame (e.g. always center-frame subject), include shared visual anchors (colors, shapes) between consecutive scenes so the morph is natural" },
-                preset: { type: "string", description: "dreamy(0.7) cinematic(0.5) anime(0.6) abstract(0.95) faithful(0.2) painterly(0.65) psychedelic(0.9) — use abstract/psychedelic for dramatic transformation moments, cinematic for stable beauty shots, dreamy for ethereal transitions" },
-                duration: { type: "number", description: "Seconds (15-45). Shorter=faster morph, longer=linger. Use 15-20s for dramatic transformations, 30-45s for beauty shots" },
+                prompt: { type: "string", description: "30-40 words. MUST start with camera angle (same in every scene). Include: subject position, motion direction, background, lighting, colors, textures. Between consecutive scenes share at least 2 colors and 1 material." },
+                preset: { type: "string", description: "cinematic=stable hold(0.5), abstract=dramatic morph(0.95), psychedelic=extreme morph+cache reset(0.9), dreamy=soft transition(0.7), faithful=frozen(0.2), painterly=artistic(0.65)" },
+                duration: { type: "number", description: "25-40s for stable shots, 10-15s for transformation bridges" },
               },
               required: ["title", "prompt", "preset", "duration"],
             },
-            description: "Scenes in order. TRANSFORMATION TIPS: (1) Keep same framing — center subject, same angle (2) Bridge consecutive scenes with shared elements — a horse's legs become wheel spokes, feathers become metal panels (3) Use abstract/psychedelic preset at transformation peaks for maximum morph energy (4) Describe motion direction consistently — all subjects moving left-to-right or toward camera (5) Include texture/material words that bridge: chrome, organic, flowing, mechanical",
+            description: "SCENE TRAVELING PATTERN: alternate stable→bridge→stable. Stable scenes (cinematic preset, 25-40s) hold the subject clearly. Bridge scenes (abstract/psychedelic preset, 10-15s) describe the MID-TRANSFORMATION state between two subjects — e.g. 'wooden frame cracking as brass gears push through, wheels thickening from wood to metal'. Every scene MUST use the same camera angle. Background must evolve gradually (autumn trees→pine trees→palm trees, never jump). For transformations: use at least 2x as many scenes as subjects (1 stable + 1 bridge per subject).",
           },
         },
         required: ["scenes"],
