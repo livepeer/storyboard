@@ -27,7 +27,7 @@ export { createIntentClassifier, type IntentRule, type IntentClassifier, type In
 // UI Components
 // Utils
 export { resizeImageForModel } from "./utils/resize-image";
-export { mixVideoAudio, type MixOptions } from "./utils/media-mixer";
+export { mixVideoAudio, mixMedia, type MixOptions } from "./utils/media-mixer";
 
 // UI Components
 export { InfiniteBoard } from "./ui/InfiniteBoard";

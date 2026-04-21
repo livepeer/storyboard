@@ -181,7 +181,7 @@ function showHelp(): string {
     "  /podcast daily briefing    Podcast from today's email summary",
     "  /music <description>       Generate music track",
     "  /sfx <desc> --video <card> Generate sound effects for a video",
-    "  /mix <video> <audio>       Combine video + audio into one (loops shorter track)",
+    "  /mix <videos> + <audios>   Combine video(s) + audio(s) into one (stitch + loop)",
     "",
     "── TALKING VIDEO ──",
     "  /talk <text> --face <card>  Generate talking video (TTS → lip-sync animation)",
@@ -1250,38 +1250,80 @@ async function handleMusic(args: string, isSfx = false): Promise<string> {
  * /mix <video-card> <audio-card> — combine video + audio into one track.
  * Video loops if shorter than audio. Audio loops if shorter than video.
  */
+/**
+ * /mix <videos...> + <audios...>
+ * Supports multiple videos and audios separated by +
+ * Videos stitch sequentially, audios stitch sequentially, shorter side loops.
+ *
+ * Examples:
+ *   /mix vid-1 music-1                   (simple: 1 video + 1 audio)
+ *   /mix vid-1 vid-2 vid-3 + music-1     (montage: 3 videos + 1 audio)
+ *   /mix vid-1 + aud-1 aud-2 aud-3       (1 video + 3 audio segments)
+ *   /mix vid-1 vid-2 + music-1 sfx-1     (2 videos + 2 audios)
+ */
 async function handleMix(args: string): Promise<string> {
-  const parts = args.trim().split(/\s+/);
-  if (parts.length < 2) {
+  if (!args.trim()) {
     return [
-      "Usage: /mix <video-card> <audio-card>",
+      "Usage: /mix <videos...> + <audios...>",
       "",
-      "Combines a video and audio card into one video with sound.",
-      "The shorter track loops to match the longer one.",
+      "Combines video and audio cards. Use + to separate video and audio lists.",
+      "Videos play sequentially (stitched). Audios play sequentially.",
+      "Shorter side loops to match the longer one.",
       "",
-      "Example: /mix vid-1 music-1",
-      "         /mix vid-2 aud-talk-3",
+      "Examples:",
+      "  /mix vid-1 music-1                    1 video + 1 audio",
+      "  /mix vid-1 vid-2 vid-3 + music-1      3 videos stitched + 1 audio",
+      "  /mix vid-1 + aud-1 aud-2              1 video + 2 audios sequenced",
+      "  /mix vid-1 vid-2 + music-1 sfx-1      2 videos + 2 audios",
     ].join("\n");
   }
 
-  const [videoRef, audioRef] = parts;
   const canvas = useCanvasStore.getState();
-  const videoCard = canvas.cards.find((c) => c.refId === videoRef);
-  const audioCard = canvas.cards.find((c) => c.refId === audioRef);
-
-  if (!videoCard?.url) return `Video card "${videoRef}" not found or has no URL.`;
-  if (!audioCard?.url) return `Audio card "${audioRef}" not found or has no URL.`;
-
   const { useChatStore } = await import("@/lib/chat/store");
   const say = (msg: string) => useChatStore.getState().addMessage(msg, "system");
 
-  say(`Mixing "${videoRef}" + "${audioRef}"… (this takes a few seconds)`);
+  // Parse: split by + to get video refs and audio refs
+  let videoRefs: string[];
+  let audioRefs: string[];
+
+  if (args.includes("+")) {
+    const [videoPart, audioPart] = args.split("+").map((s) => s.trim());
+    videoRefs = videoPart.split(/\s+/).filter(Boolean);
+    audioRefs = audioPart.split(/\s+/).filter(Boolean);
+  } else {
+    // No + separator: assume first is video, second is audio (backwards compat)
+    const parts = args.trim().split(/\s+/);
+    if (parts.length < 2) return "Need at least 1 video + 1 audio. Use: /mix vid-1 music-1";
+    videoRefs = [parts[0]];
+    audioRefs = [parts[1]];
+  }
+
+  if (videoRefs.length === 0) return "No video cards specified.";
+  if (audioRefs.length === 0) return "No audio cards specified.";
+
+  // Resolve card URLs
+  const videoUrls: string[] = [];
+  for (const ref of videoRefs) {
+    const card = canvas.cards.find((c) => c.refId === ref);
+    if (!card?.url) return `Card "${ref}" not found or has no URL.`;
+    videoUrls.push(card.url);
+  }
+  const audioUrls: string[] = [];
+  for (const ref of audioRefs) {
+    const card = canvas.cards.find((c) => c.refId === ref);
+    if (!card?.url) return `Card "${ref}" not found or has no URL.`;
+    audioUrls.push(card.url);
+  }
+
+  const videoLabel = videoRefs.join(" + ");
+  const audioLabel = audioRefs.join(" + ");
+  say(`Mixing ${videoRefs.length} video${videoRefs.length > 1 ? "s" : ""} + ${audioRefs.length} audio${audioRefs.length > 1 ? "s" : ""}…`);
 
   try {
-    const { mixVideoAudio } = await import("@livepeer/creative-kit");
-    const blobUrl = await mixVideoAudio({
-      videoUrl: videoCard.url,
-      audioUrl: audioCard.url,
+    const { mixMedia } = await import("@livepeer/creative-kit");
+    const blobUrl = await mixMedia({
+      videoUrls,
+      audioUrls,
       maxDuration: 300,
       onProgress: (pct) => {
         if (Math.round(pct * 100) % 25 === 0 && pct > 0 && pct < 1) {
@@ -1291,12 +1333,13 @@ async function handleMix(args: string): Promise<string> {
     });
 
     const refId = `mix-${Date.now()}`;
-    const card = canvas.addCard({ type: "video", title: `Mix: ${videoRef} + ${audioRef}`, refId });
+    const title = `Mix: ${videoRefs.length}v+${audioRefs.length}a`;
+    const card = canvas.addCard({ type: "video", title, refId });
     canvas.updateCard(card.id, { url: blobUrl });
-    canvas.addEdge(videoRef, refId, { action: "mix" });
-    canvas.addEdge(audioRef, refId, { action: "mix" });
+    for (const vr of videoRefs) canvas.addEdge(vr, refId, { action: "mix" });
+    for (const ar of audioRefs) canvas.addEdge(ar, refId, { action: "mix" });
 
-    return `Mixed video created: ${refId}. Video + audio combined into one track.`;
+    return `Mixed: ${refId} (${videoRefs.length} video${videoRefs.length > 1 ? "s" : ""} + ${audioRefs.length} audio${audioRefs.length > 1 ? "s" : ""})`;
   } catch (e) {
     return `/mix failed: ${e instanceof Error ? e.message : "unknown"}`;
   }
