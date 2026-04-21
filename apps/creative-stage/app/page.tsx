@@ -256,7 +256,14 @@ export default function Stage() {
       playWhenReady: () => { pendingPlayRef.current = true; },
       setAudioUrl, setBpm,
       addArtifact: (a) => {
-        artifacts.getState().add({ type: a.type as "image" | "video", title: a.title, url: a.url, refId: a.refId, x: a.x ?? 900, y: a.y ?? 50, w: 200, h: 130 });
+        const isVideo = a.type === "video";
+        artifacts.getState().add({
+          type: a.type as "image" | "video" | "audio",
+          title: a.title, url: a.url, refId: a.refId,
+          x: a.x ?? 900, y: a.y ?? 50,
+          w: isVideo ? 320 : 200,
+          h: isVideo ? 200 : 130,
+        });
       },
       say: (msg) => chat.getState().addMessage(msg, "system"),
     };

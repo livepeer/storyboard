@@ -562,8 +562,10 @@ export function createStageTools(ctx: StageToolContext) {
 
           if (videoUrl) {
             videoUrls.push(videoUrl);
-            ctx.addArtifact({ type: "video", title: `${scenes[i]?.title} → ${toScene?.title}`, url: videoUrl, refId: `trans-${i}`, x: cardX, y: 50 });
-            cardX += 220;
+            console.log(`[cinematic] Transition ${i+1} video URL:`, videoUrl);
+            ctx.say(`Transition ${i + 1} video: ${videoUrl.slice(0, 80)}…`);
+            ctx.addArtifact({ type: "video", title: `${scenes[i]?.title} → ${toScene?.title}`, url: videoUrl, refId: `trans-${i}`, x: cardX, y: 250 });
+            cardX += 360;
           } else {
             ctx.say(`Transition ${i + 1} failed on all models`);
           }
