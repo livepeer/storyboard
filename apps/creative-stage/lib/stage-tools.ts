@@ -301,7 +301,11 @@ export function createStageTools(ctx: StageToolContext) {
           ctx.stopPerformance();
           return JSON.stringify({ status: "stopped" });
         }
-        if (!ctx.streamId) return JSON.stringify({ error: "Start a stream first with stage_start, then play the performance" });
+        if (!ctx.streamId) {
+          // Stream might be starting in background — queue play for when ready
+          ctx.playWhenReady();
+          return JSON.stringify({ status: "queued", message: "Performance queued — will start when stream is ready." });
+        }
         ctx.playPerformance();
         return JSON.stringify({ status: "playing" });
       },

@@ -202,7 +202,7 @@ export default function Stage() {
 
     const toolCtx: StageToolContext = {
       sdkUrl: sdk.url, apiKey: sdk.key,
-      streamId: streamIdRef.current,
+      get streamId() { return streamIdRef.current; },
       setStreamId: (id) => {
         streamIdRef.current = id;
         if (id) setActiveStreamId(id);
