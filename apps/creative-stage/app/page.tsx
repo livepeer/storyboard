@@ -439,7 +439,8 @@ export default function Stage() {
         <InfiniteBoard
           viewport={viewport}
           onViewportChange={(v) => setViewport((prev) => ({ ...prev, ...v }))}
-          gridColor="rgba(255,255,255,0.015)"
+          gridSize={32}
+          gridColor="rgba(255,255,255,0.06)"
         >
           {/* Live Output */}
           {liveCard && (
@@ -479,6 +480,38 @@ export default function Stage() {
             </ArtifactCard>
           ))}
         </InfiniteBoard>
+
+        {/* Zoom controls — bottom-left */}
+        <div style={{
+          position: "absolute", bottom: perfState.scenes.length > 0 ? 84 : 14, right: 372,
+          zIndex: 50, display: "flex", gap: 4, alignItems: "center",
+        }}>
+          <button
+            onClick={() => setViewport({ x: 0, y: 0, scale: 1 })}
+            style={{
+              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)",
+              color: "#8888aa", borderRadius: 6, padding: "3px 8px", cursor: "pointer",
+              fontSize: 10, fontWeight: 600, fontFamily: "inherit",
+            }}
+          >Fit</button>
+          <button
+            onClick={() => setViewport((v) => ({ ...v, scale: Math.max(0.1, v.scale * 0.8) }))}
+            style={{
+              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)",
+              color: "#8888aa", borderRadius: 6, padding: "3px 6px", cursor: "pointer", fontSize: 11,
+            }}
+          >−</button>
+          <span style={{ fontSize: 10, color: "#555570", fontVariantNumeric: "tabular-nums", width: 36, textAlign: "center" }}>
+            {Math.round(viewport.scale * 100)}%
+          </span>
+          <button
+            onClick={() => setViewport((v) => ({ ...v, scale: Math.min(5, v.scale * 1.25) }))}
+            style={{
+              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)",
+              color: "#8888aa", borderRadius: 6, padding: "3px 6px", cursor: "pointer", fontSize: 11,
+            }}
+          >+</button>
+        </div>
 
         {/* Hidden audio player */}
         <audio ref={audioRef} style={{ display: "none" }} />

@@ -42,6 +42,7 @@ export function InfiniteBoard({
       const vp = vpRef.current;
       const cb = cbRef.current;
 
+      // Pinch-to-zoom (trackpad sends ctrlKey) or Ctrl+scroll
       if (e.ctrlKey || e.metaKey) {
         const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
         const newScale = Math.max(0.1, Math.min(10, vp.scale * zoomFactor));
@@ -51,8 +52,19 @@ export function InfiniteBoard({
         const newX = cx - (cx - vp.x) * (newScale / vp.scale);
         const newY = cy - (cy - vp.y) * (newScale / vp.scale);
         cb({ scale: newScale, x: newX, y: newY });
-      } else {
+      } else if (e.deltaX !== 0 || e.shiftKey) {
+        // Horizontal scroll or shift+scroll = pan
         cb({ x: vp.x - e.deltaX, y: vp.y - e.deltaY });
+      } else {
+        // Vertical scroll = zoom (Figma-style)
+        const zoomFactor = e.deltaY > 0 ? 0.95 : 1.05;
+        const newScale = Math.max(0.1, Math.min(10, vp.scale * zoomFactor));
+        const rect = el.getBoundingClientRect();
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        const newX = cx - (cx - vp.x) * (newScale / vp.scale);
+        const newY = cy - (cy - vp.y) * (newScale / vp.scale);
+        cb({ scale: newScale, x: newX, y: newY });
       }
     };
 
