@@ -184,8 +184,17 @@ export default function Stage() {
   }, [mounted]);
 
   // ─── Agent Handler ───
+  const processingRef = useRef(false);
   const handleSend = useCallback(async (text: string) => {
+    // Always show the user message
     chat.getState().addMessage(text, "user");
+
+    // Guard against concurrent agent calls
+    if (processingRef.current) {
+      chat.getState().addMessage("Still processing previous request — please wait.", "system");
+      return;
+    }
+    processingRef.current = true;
 
     const sdk = getSdkConfig();
     const say = (msg: string) => chat.getState().addMessage(msg, "system");
@@ -266,6 +275,7 @@ export default function Stage() {
       say(`Agent error: ${(e as Error).message}`);
     } finally {
       chat.getState().setProcessing(false);
+      processingRef.current = false;
     }
   }, []);
 
