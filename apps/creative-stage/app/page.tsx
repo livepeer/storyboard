@@ -232,9 +232,10 @@ export default function Stage() {
             } else {
               try {
                 const r = JSON.parse(event.content || '{}');
-                if (r.stream_id) say(`Stream started: ${r.stream_id}`);
-                else if (r.error) say(`Error: ${r.error}`);
-                else if (r.count) say(`${r.count} scenes loaded (${r.total_duration}s)`);
+                if (r.error) say(`Error: ${r.error}`);
+                else if (r.message) say(r.message);
+                else if (r.stream_id) say(`Stream started: ${r.stream_id}`);
+                else if (r.status) say(`${event.name}: ${r.status}`);
               } catch { /* not JSON */ }
             }
             break;
