@@ -148,6 +148,9 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
             const color = PRESET_COLORS[scene.preset] || "#818cf8";
             const isHovered = hoverIdx === idx;
 
+            // Width proportional to duration — visually syncs with the progress bar
+            const pct = totalDuration > 0 ? (scene.duration / totalDuration) * 100 : 100 / scenes.length;
+
             return (
               <div
                 key={`${idx}-${scene.title}`}
@@ -161,7 +164,7 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
                 onMouseLeave={() => setHoverIdx(null)}
                 style={{
                   position: "relative",
-                  minWidth: 120, maxWidth: 180, height: 48,
+                  width: `${pct}%`, minWidth: 80, height: 48,
                   borderRadius: 8, padding: "6px 10px",
                   background: isCurrent
                     ? `linear-gradient(135deg, ${color}33, ${color}11)`
@@ -171,7 +174,7 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
                   cursor: locked ? "default" : "grab",
                   opacity: isDragging ? 0.4 : locked && !isCurrent ? 0.5 : 1,
                   transition: "all 0.15s ease",
-                  flexShrink: 0,
+                  flexShrink: 1,
                   overflow: "hidden",
                 }}
               >
