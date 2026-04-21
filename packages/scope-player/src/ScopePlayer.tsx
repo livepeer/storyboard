@@ -120,6 +120,7 @@ export function ScopePlayer({
     <div className={className} style={{ position: "relative", width: "100%", height: "100%", background: "#000", borderRadius: 8, overflow: "hidden" }}>
       <canvas
         ref={canvasRef}
+        data-scope-player=""
         style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
       />
       {statusOverlay}

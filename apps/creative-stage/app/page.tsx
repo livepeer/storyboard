@@ -15,7 +15,9 @@ import { createStageTools, type StageToolContext } from "../lib/stage-tools";
 import { PerformanceEngine, type PerformanceState, type Scene } from "../lib/performance";
 import { SceneStrip } from "../components/SceneStrip";
 import { WaveformBar } from "../components/WaveformBar";
+import { RecordBar } from "../components/RecordBar";
 import { detectBpm } from "../lib/bpm-detect";
+import { StageRecorder, type RecorderState } from "../lib/recorder";
 
 // Stores
 const artifacts = createArtifactStore();
@@ -44,6 +46,9 @@ export default function Stage() {
   const [perfState, setPerfState] = useState<PerformanceState>({ scenes: [], currentScene: 0, isPlaying: false, elapsed: 0, totalDuration: 0 });
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [bpm, setBpm] = useState<number | null>(null);
+  const recorderRef = useRef(new StageRecorder());
+  const [recState, setRecState] = useState<RecorderState>({ isRecording: false, duration: 0, blobUrl: null });
+  const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -426,6 +431,34 @@ export default function Stage() {
             Object.assign(perfRef.current.scenes[idx], updates);
             setPerfState(perfRef.current.getState());
           }}
+        />
+
+        {/* Record controls */}
+        <RecordBar
+          state={recState}
+          isStreaming={streamState?.status === "streaming"}
+          onRecord={() => {
+            // Find the ScopePlayer canvas
+            const canvas = document.querySelector("canvas[data-scope-player]") as HTMLCanvasElement;
+            if (!canvas) {
+              chat.getState().addMessage("No active stream canvas to record.", "system");
+              return;
+            }
+            recorderRef.current.start(canvas, undefined, setRecState);
+            chat.getState().addMessage("Recording started…", "system");
+          }}
+          onStop={() => {
+            recorderRef.current.stop();
+            setRecState(recorderRef.current.getState());
+            // blobUrl will be set async via onstop callback
+            setTimeout(() => {
+              setRecState(recorderRef.current.getState());
+              if (recorderRef.current.blobUrl) {
+                chat.getState().addMessage("Recording saved. Click Download to export.", "system");
+              }
+            }, 500);
+          }}
+          onDownload={() => recorderRef.current.download()}
         />
 
         {/* Import + Settings buttons */}
