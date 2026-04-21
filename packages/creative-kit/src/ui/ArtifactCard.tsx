@@ -88,19 +88,52 @@ export function ArtifactCard({
         left: artifact.x,
         top: artifact.y,
         width: artifact.w,
-        height: artifact.h,
+        height: artifact.h + 24,
         boxSizing: "border-box",
-        border: selected ? "2px solid #3b82f6" : "2px solid transparent",
-        boxShadow: selected ? "0 0 0 2px rgba(59,130,246,0.3)" : "none",
-        borderRadius: 6,
-        cursor: dragStart.current ? "grabbing" : "grab",
         userSelect: "none",
       }}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
     >
-      {children}
+      {/* Drag handle bar — always on top, always draggable */}
+      <div
+        style={{
+          height: 24,
+          background: selected ? "rgba(59,130,246,0.15)" : "rgba(255,255,255,0.04)",
+          borderRadius: "6px 6px 0 0",
+          border: selected ? "1px solid rgba(59,130,246,0.4)" : "1px solid rgba(255,255,255,0.06)",
+          borderBottom: "none",
+          cursor: dragStart.current ? "grabbing" : "grab",
+          display: "flex",
+          alignItems: "center",
+          padding: "0 8px",
+          gap: 6,
+        }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+      >
+        {/* Drag dots */}
+        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, letterSpacing: 2 }}>⠿</span>
+        {/* Title */}
+        <span style={{
+          fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.5)",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1,
+        }}>
+          {artifact.title || artifact.refId}
+        </span>
+      </div>
+
+      {/* Content area */}
+      <div style={{
+        width: artifact.w,
+        height: artifact.h,
+        borderRadius: "0 0 6px 6px",
+        border: selected ? "1px solid rgba(59,130,246,0.4)" : "1px solid rgba(255,255,255,0.06)",
+        borderTop: "none",
+        overflow: "hidden",
+        boxShadow: selected ? "0 0 0 2px rgba(59,130,246,0.3)" : "none",
+      }}>
+        {children}
+      </div>
 
       {/* Bottom-right resize handle */}
       <div
@@ -111,7 +144,7 @@ export function ArtifactCard({
           width: 14,
           height: 14,
           cursor: "se-resize",
-          background: selected ? "#3b82f6" : "rgba(255,255,255,0.2)",
+          background: selected ? "#3b82f6" : "rgba(255,255,255,0.15)",
           borderRadius: "3px 0 4px 0",
         }}
         onPointerDown={handleResizePointerDown}
