@@ -226,13 +226,63 @@ export function createStageTools(ctx: StageToolContext) {
       async execute(args: Record<string, unknown>) {
         const scenes = args.scenes as Array<{ title: string; prompt: string; preset: string; duration: number }>;
         if (!scenes || scenes.length === 0) return JSON.stringify({ error: "No scenes provided" });
+
+        // Auto-start a stream with Scene 1's prompt if no stream is active
+        let autoStarted = false;
+        if (!ctx.streamId) {
+          if (!ctx.apiKey) {
+            return JSON.stringify({ error: "No Daydream API key — open Settings and enter your sk_... key" });
+          }
+          const first = scenes[0];
+          const presetMap: Record<string, number> = {
+            dreamy: 0.7, cinematic: 0.5, anime: 0.6, abstract: 0.95,
+            faithful: 0.2, painterly: 0.65, psychedelic: 0.9,
+          };
+          const noise = presetMap[first.preset] ?? 0.5;
+          try {
+            const resp = await fetch(`${ctx.sdkUrl}/stream/start`, {
+              method: "POST",
+              headers: headers(),
+              body: JSON.stringify({
+                model_id: "scope",
+                params: {
+                  prompt: first.prompt,
+                  prompts: first.prompt,
+                  pipeline_ids: ["longlive"],
+                  noise_scale: noise,
+                  denoising_step_list: [1000, 750, 500, 250],
+                },
+              }),
+            });
+            if (resp.ok) {
+              const data = await resp.json();
+              if (data.stream_id) {
+                ctx.setStreamId(data.stream_id);
+                autoStarted = true;
+              }
+            } else {
+              const text = await resp.text().catch(() => "");
+              return JSON.stringify({ error: `Stream start failed (${resp.status}): ${text.slice(0, 200)}` });
+            }
+          } catch (e) {
+            return JSON.stringify({ error: `SDK unreachable: ${(e as Error).message}` });
+          }
+        }
+
         ctx.setScenes(scenes);
         const total = scenes.reduce((s, sc) => s + sc.duration, 0);
+
+        // Auto-play the performance
+        if (ctx.streamId) {
+          ctx.playPerformance();
+        }
+
         return JSON.stringify({
-          status: "scenes_loaded",
+          status: autoStarted ? "stream_started_and_scenes_loaded" : "scenes_loaded",
           count: scenes.length,
           total_duration: total,
-          message: `${scenes.length} scenes loaded (${total}s). Use stage_perform to start.`,
+          stream_id: ctx.streamId || null,
+          message: `${scenes.length} scenes loaded (${total}s).${autoStarted ? " Stream started and performance playing." : " Performance playing."}`,
         });
       },
     },
