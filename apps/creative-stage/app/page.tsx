@@ -226,7 +226,18 @@ export default function Stage() {
         switch (event.kind) {
           case "text": if (event.text) chat.getState().addMessage(event.text, "agent"); break;
           case "tool_call": say(`Calling ${event.name}…`); break;
-          case "tool_result": if (!event.ok) say(`${event.name} failed`); break;
+          case "tool_result":
+            if (!event.ok) {
+              say(`${event.name} failed: ${event.content?.slice(0, 200) || ''}`);
+            } else {
+              try {
+                const r = JSON.parse(event.content || '{}');
+                if (r.stream_id) say(`Stream started: ${r.stream_id}`);
+                else if (r.error) say(`Error: ${r.error}`);
+                else if (r.count) say(`${r.count} scenes loaded (${r.total_duration}s)`);
+              } catch { /* not JSON */ }
+            }
+            break;
           case "usage": { const t = event.usage.input + event.usage.output; if (t > 0) say(`${t.toLocaleString()} tokens`); break; }
           case "error": say(`Error: ${event.error}`); break;
         }

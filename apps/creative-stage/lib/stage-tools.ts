@@ -56,28 +56,40 @@ export function createStageTools(ctx: StageToolContext) {
         };
         const noise = presetMap[(args.preset as string) || "cinematic"] ?? 0.5;
 
-        const resp = await fetch(`${ctx.sdkUrl}/stream/start`, {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({
-            model_id: "scope",
-            params: {
-              prompt: prompt,
-              prompts: prompt,
-              graph: textOnlyGraph(),
-              pipeline_ids: ["longlive"],
-              noise_scale: noise,
-              denoising_step_list: [1000, 750, 500, 250],
-            },
-          }),
-        });
+        if (!ctx.apiKey) {
+          return JSON.stringify({ error: "No Daydream API key — open Settings and enter your sk_... key" });
+        }
+
+        let resp: Response;
+        try {
+          resp = await fetch(`${ctx.sdkUrl}/stream/start`, {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              model_id: "scope",
+              params: {
+                prompt: prompt,
+                prompts: prompt,
+                pipeline_ids: ["longlive"],
+                noise_scale: noise,
+                denoising_step_list: [1000, 750, 500, 250],
+              },
+            }),
+          });
+        } catch (e) {
+          return JSON.stringify({ error: `SDK unreachable: ${(e as Error).message}` });
+        }
         if (!resp.ok) {
           const text = await resp.text().catch(() => "");
-          return JSON.stringify({ error: `Start failed: ${resp.status} ${text.slice(0, 100)}` });
+          return JSON.stringify({ error: `Start failed (${resp.status}): ${text.slice(0, 200)}` });
         }
         const data = await resp.json();
-        ctx.setStreamId(data.stream_id);
-        return JSON.stringify({ stream_id: data.stream_id, status: "started", prompt });
+        const streamId = data.stream_id;
+        if (!streamId) {
+          return JSON.stringify({ error: "SDK returned no stream_id", data });
+        }
+        ctx.setStreamId(streamId);
+        return JSON.stringify({ stream_id: streamId, status: "started", prompt });
       },
     },
 
