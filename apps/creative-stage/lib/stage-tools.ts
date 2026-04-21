@@ -247,7 +247,7 @@ export function createStageTools(ctx: StageToolContext) {
 
     {
       name: "stage_scene",
-      description: "Create a multi-scene performance timeline with smooth prompt-traveling transformations. The stream morphs seamlessly between scenes — no cuts, just continuous visual evolution.",
+      description: "Create a LIVE STREAM with multi-scene timeline. Use for ANY request containing 'stream', 'live', or 'real-time'. Starts a real-time Scope stream that morphs between scenes via prompt traveling. Also use for journeys, evolution, transformation — unless user explicitly says 'cinematic'.",
       parameters: {
         type: "object",
         properties: {
@@ -437,7 +437,7 @@ export function createStageTools(ctx: StageToolContext) {
 
     {
       name: "stage_cinematic",
-      description: "Generate HIGH QUALITY cinematic transformation. Generates key frame images (flux-dev), transition videos (seedance-i2v), places them on canvas, then starts a VACE-enhanced Scope stream using the key frames as visual references for live morphing. Use for car evolution, transformations, or WOW quality.",
+      description: "ONLY use when user explicitly says 'cinematic' or 'high quality video'. Generates key frame images + transition videos. Do NOT use for 'live stream' or 'stream' requests — those MUST use stage_scene instead.",
       parameters: {
         type: "object",
         properties: {
