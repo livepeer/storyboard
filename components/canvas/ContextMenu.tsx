@@ -88,6 +88,9 @@ export function ContextMenu() {
     resolve: (value: string | null) => void;
   } | null>(null);
 
+  // Progress bar for long operations (mix, etc.)
+  const [progress, setProgress] = useState<{ label: string; pct: number } | null>(null);
+
   const styledPrompt = useCallback((title: string, placeholder: string, defaultValue = ""): Promise<string | null> => {
     return new Promise((resolve) => {
       setPromptState({ title, placeholder, value: defaultValue, resolve });
@@ -620,21 +623,16 @@ export function ContextMenu() {
           addMessage(`Card "${audioRef}" not found or has no audio.`, "system");
           return;
         }
-        addMessage(`Mixing "${targetCard.title}" + "${audioCard.title}"… This takes a few seconds.`, "system");
+        setProgress({ label: `Mixing "${targetCard.title}" + "${audioCard.title}"`, pct: 0 });
         try {
           const { mixVideoAudio } = await import("@livepeer/creative-kit");
-          console.log("[Mix] Starting:", targetCard.url, audioCard.url);
           const blobUrl = await mixVideoAudio({
             videoUrl: targetCard.url!,
             audioUrl: audioCard.url!,
             maxDuration: 300,
-            onProgress: (pct) => {
-              if (pct > 0 && pct < 1 && Math.round(pct * 100) % 25 === 0) {
-                addMessage(`Mixing… ${Math.round(pct * 100)}%`, "system");
-              }
-            },
+            onProgress: (pct) => setProgress((p) => p ? { ...p, pct } : null),
           });
-          console.log("[Mix] Done, blob URL:", blobUrl);
+          setProgress(null);
           const refId = `mix-${Date.now()}`;
           const card = addCard({ type: "video", title: `Mix: ${targetCard.title}`, refId });
           updateCard(card.id, { url: blobUrl });
@@ -642,7 +640,7 @@ export function ContextMenu() {
           addEdge(audioCard.refId, refId, { action: "mix" });
           addMessage("Mix complete — video + audio combined!", "system");
         } catch (e) {
-          console.error("[Mix] Failed:", e);
+          setProgress(null);
           addMessage(`Mix failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
         }
         return;
@@ -855,6 +853,43 @@ export function ContextMenu() {
     },
     [targetCard, addCard, addEdge, updateCard, addMessage, prefillChat, sendToAgent]
   );
+
+  // --- Progress bar toast (for mix and other long operations) ---
+  if (progress) {
+    return (
+      <>
+      <div style={{
+        position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
+        zIndex: 9999, width: 360, background: "#1a1a1e",
+        border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+        padding: "14px 18px", boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.8)", marginBottom: 8 }}>
+          {progress.label}
+        </div>
+        <div style={{ height: 6, background: "rgba(255,255,255,0.08)", borderRadius: 3, overflow: "hidden" }}>
+          <div style={{
+            height: "100%", borderRadius: 3,
+            background: "linear-gradient(90deg, #6366f1, #8b5cf6)",
+            width: `${Math.round(progress.pct * 100)}%`,
+            transition: "width 0.3s",
+          }} />
+        </div>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 6, textAlign: "right" }}>
+          {Math.round(progress.pct * 100)}%
+        </div>
+      </div>
+      {/* Keep prompt dialog accessible during progress */}
+      {promptState && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)" }}
+          onClick={() => { promptState.resolve(null); setPromptState(null); }}>
+          <div style={{ width: 340, background: "#1a1a1e", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12, padding: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.6)" }}
+            onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
+      </>
+    );
+  }
 
   // Prompt dialog renders independently of menu visibility.
   // When user clicks "Restyle", menu closes + dialog opens in the same cycle.
