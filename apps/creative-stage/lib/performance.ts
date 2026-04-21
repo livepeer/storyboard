@@ -18,6 +18,8 @@ export interface Scene {
   preset: string;
   noiseScale?: number;
   duration: number; // seconds
+  /** VACE reference image URL — used by cinematic mode to anchor visuals */
+  vaceRef?: string;
 }
 
 export interface PerformanceState {
@@ -70,6 +72,13 @@ function buildControlParams(scene: Scene, prevScene?: Scene): Record<string, unk
   // Reset cache on dramatic preset changes for clean break
   if (params.reset_cache) {
     control.reset_cache = true;
+  }
+
+  // Apply VACE reference image if scene has one (cinematic mode key frames)
+  if (scene.vaceRef) {
+    control.vace_enabled = true;
+    control.vace_ref_images = [scene.vaceRef];
+    control.vace_context_scale = 1.2; // strong visual anchor
   }
 
   return control;

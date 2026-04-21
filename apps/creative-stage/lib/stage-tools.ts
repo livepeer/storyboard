@@ -65,10 +65,13 @@ export interface StageToolContext {
   setScenes: (scenes: Array<{ title: string; prompt: string; preset: string; duration: number }>) => void;
   playPerformance: () => void;
   stopPerformance: () => void;
-  /** Queue performance to auto-play when stream becomes ready */
   playWhenReady: () => void;
   setAudioUrl: (url: string) => void;
   setBpm: (bpm: number) => void;
+  /** Add an artifact card to the canvas */
+  addArtifact: (artifact: { type: string; title: string; url: string; refId: string; x?: number; y?: number }) => void;
+  /** Notify user via chat */
+  say: (msg: string) => void;
 }
 
 export function createStageTools(ctx: StageToolContext) {
@@ -434,7 +437,7 @@ export function createStageTools(ctx: StageToolContext) {
 
     {
       name: "stage_cinematic",
-      description: "Generate a HIGH QUALITY cinematic transformation video. Instead of live streaming, this generates each scene as a beautiful key frame image (flux-dev), then creates smooth transition videos between them (seedance-i2v). Much higher quality than live mode — use this for car evolution, transformation sequences, or any time the user wants WOW quality. Takes 2-5 minutes to render.",
+      description: "Generate HIGH QUALITY cinematic transformation. Generates key frame images (flux-dev), transition videos (seedance-i2v), places them on canvas, then starts a VACE-enhanced Scope stream using the key frames as visual references for live morphing. Use for car evolution, transformations, or WOW quality.",
       parameters: {
         type: "object",
         properties: {
@@ -444,29 +447,34 @@ export function createStageTools(ctx: StageToolContext) {
               type: "object",
               properties: {
                 title: { type: "string", description: "Scene title" },
-                prompt: { type: "string", description: "Detailed visual description (30-50 words). Include: camera angle, lighting, colors, textures, motion blur, composition. Keep SAME camera angle and framing across all scenes for smooth transitions." },
-                duration: { type: "number", description: "Video transition duration in seconds (5 or 8)" },
+                prompt: { type: "string", description: "30-50 words. Same camera angle, same subject position, same framing in every scene." },
+                duration: { type: "number", description: "Video transition duration: 5 or 8 seconds" },
               },
               required: ["title", "prompt", "duration"],
             },
-            description: "Scenes in order. Each consecutive pair generates a transition video. Use same camera angle, same subject position, same framing across ALL scenes.",
+            description: "Scenes in order. Same camera, same composition, same framing across ALL scenes.",
           },
-          style_prefix: { type: "string", description: "Style prefix prepended to every scene prompt. E.g. 'cinematic low-angle tracking shot, motion blur, film grain, 4K'" },
+          style_prefix: { type: "string", description: "Prepended to every prompt. E.g. 'cinematic low-angle tracking shot, motion blur, 4K, photorealistic'" },
         },
         required: ["scenes"],
       },
       async execute(args: Record<string, unknown>) {
         const scenes = args.scenes as Array<{ title: string; prompt: string; duration: number }>;
         const stylePrefix = (args.style_prefix as string) || "";
-        if (!scenes || scenes.length < 2) return JSON.stringify({ error: "Need at least 2 scenes for transitions" });
+        if (!scenes || scenes.length < 2) return JSON.stringify({ error: "Need at least 2 scenes" });
         if (!ctx.apiKey) return JSON.stringify({ error: "No Daydream API key" });
 
-        const results: Array<{ title: string; type: string; url?: string; error?: string }> = [];
+        const imageUrls: string[] = [];
+        const videoUrls: string[] = [];
+        let cardX = 900;
 
-        // Step 1: Generate key frame images for each scene
+        // ── Step 1: Generate key frame images ──
+        ctx.say(`Generating ${scenes.length} key frames via flux-dev…`);
+
         for (let i = 0; i < scenes.length; i++) {
           const scene = scenes[i];
           const fullPrompt = stylePrefix ? `${stylePrefix}, ${scene.prompt}` : scene.prompt;
+          ctx.say(`Key frame ${i + 1}/${scenes.length}: ${scene.title}…`);
 
           try {
             const resp = await fetch(`${ctx.sdkUrl}/inference`, {
@@ -481,80 +489,144 @@ export function createStageTools(ctx: StageToolContext) {
 
             if (resp.ok) {
               const data = await resp.json();
-              const url = data.url || (data.images?.[0] as { url: string })?.url;
-              results.push({ title: `${scene.title} (image)`, type: "image", url });
+              const url = extractUrl(data);
+              if (url) {
+                imageUrls.push(url);
+                ctx.addArtifact({ type: "image", title: scene.title, url, refId: `kf-${i}`, x: cardX, y: 50 });
+                cardX += 220;
+              } else {
+                ctx.say(`Key frame ${i + 1} returned no URL`);
+              }
             } else {
-              results.push({ title: scene.title, type: "image", error: `Failed: ${resp.status}` });
+              ctx.say(`Key frame ${i + 1} failed: ${resp.status}`);
             }
           } catch (e) {
-            results.push({ title: scene.title, type: "image", error: (e as Error).message });
+            ctx.say(`Key frame ${i + 1} error: ${(e as Error).message}`);
           }
         }
 
-        // Step 2: Generate transition videos between consecutive images
-        const imageUrls = results.filter((r) => r.type === "image" && r.url).map((r) => r.url!);
+        if (imageUrls.length < 2) {
+          return JSON.stringify({ error: `Only ${imageUrls.length} key frames generated — need at least 2` });
+        }
+
+        // ── Step 2: Generate transition videos ──
+        ctx.say(`Creating ${imageUrls.length - 1} transition videos via seedance…`);
 
         for (let i = 0; i < imageUrls.length - 1; i++) {
           const fromUrl = imageUrls[i];
-          const toTitle = scenes[i + 1]?.title || `Transition ${i + 1}`;
+          const toScene = scenes[i + 1];
           const toPrompt = stylePrefix
-            ? `${stylePrefix}, smooth cinematic transition, ${scenes[i + 1].prompt}`
-            : `smooth cinematic transition, ${scenes[i + 1].prompt}`;
-          const dur = scenes[i + 1]?.duration || 5;
+            ? `${stylePrefix}, smooth cinematic morphing transition, ${toScene?.prompt || ""}`
+            : `smooth cinematic morphing transition, ${toScene?.prompt || ""}`;
+          const dur = toScene?.duration || 5;
+          ctx.say(`Transition ${i + 1}/${imageUrls.length - 1}: ${scenes[i]?.title} → ${toScene?.title}…`);
 
-          try {
-            const resp = await fetch(`${ctx.sdkUrl}/inference`, {
-              method: "POST",
-              headers: headers(),
-              body: JSON.stringify({
-                capability: "seedance-i2v",
-                prompt: toPrompt,
-                image_data: fromUrl,
-                params: { duration: String(dur), aspect_ratio: "16:9" },
-              }),
-            });
+          let videoUrl: string | null = null;
 
-            if (resp.ok) {
-              const data = await resp.json();
-              const url = data.url || data.video_url || (data.video as { url: string })?.url;
-              results.push({ title: `${toTitle} (video)`, type: "video", url });
-            } else {
-              // Fallback to ltx-i2v
-              const resp2 = await fetch(`${ctx.sdkUrl}/inference`, {
+          // Try seedance first, fallback to ltx
+          for (const cap of ["seedance-i2v", "ltx-i2v"]) {
+            try {
+              const params: Record<string, unknown> = cap === "seedance-i2v"
+                ? { duration: String(dur), aspect_ratio: "16:9" }
+                : { duration: dur };
+
+              const resp = await fetch(`${ctx.sdkUrl}/inference`, {
                 method: "POST",
                 headers: headers(),
-                body: JSON.stringify({
-                  capability: "ltx-i2v",
-                  prompt: toPrompt,
-                  image_data: fromUrl,
-                  params: { duration: dur },
-                }),
+                body: JSON.stringify({ capability: cap, prompt: toPrompt, image_data: fromUrl, params }),
               });
-              if (resp2.ok) {
-                const data = await resp2.json();
-                const url = data.url || data.video_url || (data.video as { url: string })?.url;
-                results.push({ title: `${toTitle} (video)`, type: "video", url });
-              } else {
-                results.push({ title: toTitle, type: "video", error: `Failed: seedance ${resp.status}, ltx ${resp2.status}` });
+
+              if (resp.ok) {
+                const data = await resp.json();
+                videoUrl = extractUrl(data);
+                if (videoUrl) {
+                  ctx.say(`Transition ${i + 1} complete (${cap})`);
+                  break;
+                }
               }
-            }
-          } catch (e) {
-            results.push({ title: toTitle, type: "video", error: (e as Error).message });
+            } catch { /* try next */ }
+          }
+
+          if (videoUrl) {
+            videoUrls.push(videoUrl);
+            ctx.addArtifact({ type: "video", title: `${scenes[i]?.title} → ${toScene?.title}`, url: videoUrl, refId: `trans-${i}`, x: cardX, y: 50 });
+            cardX += 220;
+          } else {
+            ctx.say(`Transition ${i + 1} failed on all models`);
           }
         }
 
-        const succeeded = results.filter((r) => r.url);
-        const failed = results.filter((r) => r.error);
+        // ── Step 3: Start VACE-enhanced Scope stream ──
+        // Use the key frame images as VACE references for live morphing
+        if (imageUrls.length >= 2) {
+          ctx.say("Starting VACE-enhanced live stream with key frames as references…");
+
+          // Load scenes into timeline for live morphing (each scene uses its key frame as VACE ref)
+          const liveScenes = scenes.map((s, i) => ({
+            title: s.title,
+            prompt: stylePrefix ? `${stylePrefix}, ${s.prompt}` : s.prompt,
+            preset: "cinematic" as const,
+            duration: s.duration + 10,
+            vaceRef: imageUrls[i] || undefined, // key frame as VACE anchor
+          }));
+          ctx.setScenes(liveScenes);
+
+          // Start stream with first key frame as VACE reference
+          fetch(`${ctx.sdkUrl}/stream/start`, {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              model_id: "scope",
+              params: {
+                prompt: liveScenes[0].prompt,
+                prompts: liveScenes[0].prompt,
+                pipeline_ids: ["longlive"],
+                noise_scale: 0.45,
+                kv_cache_attention_bias: 0.65,
+                denoising_step_list: [1000, 750, 500, 250],
+                vace_enabled: true,
+                vace_ref_images: [imageUrls[0]],
+                vace_context_scale: 1.2,
+              },
+            }),
+          }).then(async (resp) => {
+            if (resp.ok) {
+              const data = await resp.json();
+              if (data.stream_id) {
+                ctx.setStreamId(data.stream_id);
+                ctx.playWhenReady();
+                ctx.say(`VACE stream started: ${data.stream_id}`);
+              }
+            } else {
+              ctx.say(`Stream start failed: ${resp.status}`);
+            }
+          }).catch((e) => ctx.say(`Stream error: ${(e as Error).message}`));
+        }
 
         return JSON.stringify({
-          status: "cinematic_generated",
-          total: results.length,
-          succeeded: succeeded.length,
-          failed: failed.length,
-          results: results.map((r) => ({ title: r.title, type: r.type, url: r.url, error: r.error })),
-          message: `Cinematic sequence: ${succeeded.length} assets generated (${results.filter(r => r.type === "image" && r.url).length} images + ${results.filter(r => r.type === "video" && r.url).length} transition videos). ${failed.length > 0 ? `${failed.length} failed.` : ""}`,
+          status: "cinematic_complete",
+          key_frames: imageUrls.length,
+          transitions: videoUrls.length,
+          message: `${imageUrls.length} key frames + ${videoUrls.length} transition videos on canvas. VACE-enhanced live stream starting with key frames as visual anchors.`,
         });
       },
     },
   ];
+}
+
+/** Extract URL from various SDK response shapes */
+function extractUrl(data: Record<string, unknown>): string | null {
+  if (typeof data.url === "string") return data.url;
+  if (typeof data.audio_url === "string") return data.audio_url;
+  if (typeof data.video_url === "string") return data.video_url;
+  const images = data.images as Array<{ url: string }> | undefined;
+  if (images?.[0]?.url) return images[0].url;
+  const video = data.video as { url: string } | undefined;
+  if (video?.url) return video.url;
+  const d = data.data as Record<string, unknown> | undefined;
+  if (d) {
+    const audio = d.audio as { url: string } | undefined;
+    if (audio?.url) return audio.url;
+  }
+  return null;
 }

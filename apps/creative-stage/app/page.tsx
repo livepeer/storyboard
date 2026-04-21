@@ -241,6 +241,10 @@ export default function Stage() {
       stopPerformance: () => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); },
       playWhenReady: () => { pendingPlayRef.current = true; },
       setAudioUrl, setBpm,
+      addArtifact: (a) => {
+        artifacts.getState().add({ type: a.type as "image" | "video", title: a.title, url: a.url, refId: a.refId, x: a.x ?? 900, y: a.y ?? 50, w: 200, h: 130 });
+      },
+      say: (msg) => chat.getState().addMessage(msg, "system"),
     };
 
     const tools = new ToolRegistry();
