@@ -431,5 +431,130 @@ export function createStageTools(ctx: StageToolContext) {
         });
       },
     },
+
+    {
+      name: "stage_cinematic",
+      description: "Generate a HIGH QUALITY cinematic transformation video. Instead of live streaming, this generates each scene as a beautiful key frame image (flux-dev), then creates smooth transition videos between them (seedance-i2v). Much higher quality than live mode — use this for car evolution, transformation sequences, or any time the user wants WOW quality. Takes 2-5 minutes to render.",
+      parameters: {
+        type: "object",
+        properties: {
+          scenes: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "Scene title" },
+                prompt: { type: "string", description: "Detailed visual description (30-50 words). Include: camera angle, lighting, colors, textures, motion blur, composition. Keep SAME camera angle and framing across all scenes for smooth transitions." },
+                duration: { type: "number", description: "Video transition duration in seconds (5 or 8)" },
+              },
+              required: ["title", "prompt", "duration"],
+            },
+            description: "Scenes in order. Each consecutive pair generates a transition video. Use same camera angle, same subject position, same framing across ALL scenes.",
+          },
+          style_prefix: { type: "string", description: "Style prefix prepended to every scene prompt. E.g. 'cinematic low-angle tracking shot, motion blur, film grain, 4K'" },
+        },
+        required: ["scenes"],
+      },
+      async execute(args: Record<string, unknown>) {
+        const scenes = args.scenes as Array<{ title: string; prompt: string; duration: number }>;
+        const stylePrefix = (args.style_prefix as string) || "";
+        if (!scenes || scenes.length < 2) return JSON.stringify({ error: "Need at least 2 scenes for transitions" });
+        if (!ctx.apiKey) return JSON.stringify({ error: "No Daydream API key" });
+
+        const results: Array<{ title: string; type: string; url?: string; error?: string }> = [];
+
+        // Step 1: Generate key frame images for each scene
+        for (let i = 0; i < scenes.length; i++) {
+          const scene = scenes[i];
+          const fullPrompt = stylePrefix ? `${stylePrefix}, ${scene.prompt}` : scene.prompt;
+
+          try {
+            const resp = await fetch(`${ctx.sdkUrl}/inference`, {
+              method: "POST",
+              headers: headers(),
+              body: JSON.stringify({
+                capability: "flux-dev",
+                prompt: fullPrompt,
+                params: { width: 1280, height: 720, num_inference_steps: 28 },
+              }),
+            });
+
+            if (resp.ok) {
+              const data = await resp.json();
+              const url = data.url || (data.images?.[0] as { url: string })?.url;
+              results.push({ title: `${scene.title} (image)`, type: "image", url });
+            } else {
+              results.push({ title: scene.title, type: "image", error: `Failed: ${resp.status}` });
+            }
+          } catch (e) {
+            results.push({ title: scene.title, type: "image", error: (e as Error).message });
+          }
+        }
+
+        // Step 2: Generate transition videos between consecutive images
+        const imageUrls = results.filter((r) => r.type === "image" && r.url).map((r) => r.url!);
+
+        for (let i = 0; i < imageUrls.length - 1; i++) {
+          const fromUrl = imageUrls[i];
+          const toTitle = scenes[i + 1]?.title || `Transition ${i + 1}`;
+          const toPrompt = stylePrefix
+            ? `${stylePrefix}, smooth cinematic transition, ${scenes[i + 1].prompt}`
+            : `smooth cinematic transition, ${scenes[i + 1].prompt}`;
+          const dur = scenes[i + 1]?.duration || 5;
+
+          try {
+            const resp = await fetch(`${ctx.sdkUrl}/inference`, {
+              method: "POST",
+              headers: headers(),
+              body: JSON.stringify({
+                capability: "seedance-i2v",
+                prompt: toPrompt,
+                image_data: fromUrl,
+                params: { duration: String(dur), aspect_ratio: "16:9" },
+              }),
+            });
+
+            if (resp.ok) {
+              const data = await resp.json();
+              const url = data.url || data.video_url || (data.video as { url: string })?.url;
+              results.push({ title: `${toTitle} (video)`, type: "video", url });
+            } else {
+              // Fallback to ltx-i2v
+              const resp2 = await fetch(`${ctx.sdkUrl}/inference`, {
+                method: "POST",
+                headers: headers(),
+                body: JSON.stringify({
+                  capability: "ltx-i2v",
+                  prompt: toPrompt,
+                  image_data: fromUrl,
+                  params: { duration: dur },
+                }),
+              });
+              if (resp2.ok) {
+                const data = await resp2.json();
+                const url = data.url || data.video_url || (data.video as { url: string })?.url;
+                results.push({ title: `${toTitle} (video)`, type: "video", url });
+              } else {
+                results.push({ title: toTitle, type: "video", error: `Failed: seedance ${resp.status}, ltx ${resp2.status}` });
+              }
+            }
+          } catch (e) {
+            results.push({ title: toTitle, type: "video", error: (e as Error).message });
+          }
+        }
+
+        const succeeded = results.filter((r) => r.url);
+        const failed = results.filter((r) => r.error);
+
+        return JSON.stringify({
+          status: "cinematic_generated",
+          total: results.length,
+          succeeded: succeeded.length,
+          failed: failed.length,
+          results: results.map((r) => ({ title: r.title, type: r.type, url: r.url, error: r.error })),
+          message: `Cinematic sequence: ${succeeded.length} assets generated (${results.filter(r => r.type === "image" && r.url).length} images + ${results.filter(r => r.type === "video" && r.url).length} transition videos). ${failed.length > 0 ? `${failed.length} failed.` : ""}`,
+        });
+      },
+    },
   ];
 }
