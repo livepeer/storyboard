@@ -46,7 +46,11 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
   const updateState = useCallback((patch: Partial<ScopeStreamState>) => {
     setState((prev) => {
       const next = { ...prev, ...patch };
-      opts.onStateChange?.(next);
+      // Defer parent callback to avoid setState-during-render
+      if (opts.onStateChange) {
+        const cb = opts.onStateChange;
+        queueMicrotask(() => cb(next));
+      }
       return next;
     });
   }, [opts.onStateChange]);
