@@ -84,6 +84,115 @@ test.describe("Live Stream Flow", () => {
   });
 });
 
+test.describe("Cinematic Mode (mocked SDK)", () => {
+  test("stage_cinematic generates key frames and transition videos on canvas", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("sdk_api_key", "sk_test_cinematic");
+      localStorage.setItem("sdk_service_url", "https://sdk.daydream.monster");
+    });
+
+    // Mock SDK inference — return fake image/video URLs
+    let inferenceCount = 0;
+    await page.route("**/inference", (route) => {
+      inferenceCount++;
+      const body = JSON.parse(route.request().postData() || "{}");
+      const isVideo = body.capability?.includes("i2v");
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: isVideo
+            ? { video: { url: `https://example.com/transition-${inferenceCount}.mp4` } }
+            : { images: [{ url: `https://example.com/keyframe-${inferenceCount}.jpg` }] },
+        }),
+      });
+    });
+
+    // Mock stream start
+    await page.route("**/stream/start", (route) => {
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ stream_id: "cinematic-stream-001" }),
+      });
+    });
+    await page.route("**/stream/cinematic-stream-001/**", (route) => {
+      route.fulfill({ status: 200, body: "{}" });
+    });
+
+    // Mock LLM to call stage_cinematic
+    await page.route("**/api/llm/chat", (route, request) => {
+      const body = JSON.parse(request.postData() || "{}");
+      const hasToolResult = (body.messages || []).some((m: {role: string}) => m.role === "tool");
+
+      if (hasToolResult) {
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Cinematic sequence ready! Key frames and transition videos are on the canvas." }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 200, completion_tokens: 30 },
+          }),
+        });
+      } else {
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            choices: [{
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [{
+                  id: "call_cine1",
+                  type: "function",
+                  function: {
+                    name: "stage_cinematic",
+                    arguments: JSON.stringify({
+                      style_prefix: "cinematic low angle, 4K",
+                      scenes: [
+                        { title: "Horse Carriage", prompt: "wooden horse carriage on forest road", duration: 5 },
+                        { title: "Model T", prompt: "black Ford Model T on dirt road", duration: 5 },
+                        { title: "Tesla", prompt: "white Tesla on glass highway", duration: 5 },
+                      ],
+                    }),
+                  },
+                }],
+              },
+              finish_reason: "tool_calls",
+            }],
+            usage: { prompt_tokens: 150, completion_tokens: 80 },
+          }),
+        });
+      }
+    });
+
+    await page.goto("/");
+    await page.waitForSelector("text=Creative Stage", { timeout: 15_000 });
+
+    const chatInput = page.locator('textarea, input[placeholder*="scene"], input[placeholder*="Describe"]').last();
+    await chatInput.fill("Create a cinematic car evolution transformation");
+    await chatInput.press("Enter");
+
+    // Should see progress messages
+    await expect(page.getByText("Calling stage_cinematic")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(/Generating.*key frames/)).toBeVisible({ timeout: 10_000 });
+
+    // Wait for key frames to generate
+    await expect(page.getByText(/Key frame.*done|transition.*complete/i).first()).toBeVisible({ timeout: 30_000 });
+
+    // Key frame images should appear as artifacts
+    await expect(page.getByText("Horse Carriage").first()).toBeVisible({ timeout: 10_000 });
+
+    // Should see cinematic complete message
+    await expect(page.getByText(/key frames|transition videos|cinematic/i).first()).toBeVisible({ timeout: 15_000 });
+
+    // Verify inference was called (3 images + 2 transitions = 5 calls)
+    console.log("Total inference calls:", inferenceCount);
+    expect(inferenceCount).toBeGreaterThanOrEqual(3);
+  });
+});
+
 test.describe("Agent Tool Execution (mocked SDK)", () => {
   test("stage_scene creates scenes and shows in timeline", async ({ page }) => {
     await page.addInitScript(() => {

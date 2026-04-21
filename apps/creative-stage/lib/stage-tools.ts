@@ -489,16 +489,19 @@ export function createStageTools(ctx: StageToolContext) {
 
             if (resp.ok) {
               const data = await resp.json();
+              console.log(`[cinematic] Key frame ${i + 1} response keys:`, Object.keys(data), data.data ? Object.keys(data.data as object) : "no .data");
               const url = extractUrl(data);
               if (url) {
                 imageUrls.push(url);
                 ctx.addArtifact({ type: "image", title: scene.title, url, refId: `kf-${i}`, x: cardX, y: 50 });
                 cardX += 220;
+                ctx.say(`Key frame ${i + 1} done`);
               } else {
-                ctx.say(`Key frame ${i + 1} returned no URL`);
+                ctx.say(`Key frame ${i + 1} returned no URL — response: ${JSON.stringify(data).slice(0, 150)}`);
               }
             } else {
-              ctx.say(`Key frame ${i + 1} failed: ${resp.status}`);
+              const errText = await resp.text().catch(() => "");
+              ctx.say(`Key frame ${i + 1} failed (${resp.status}): ${errText.slice(0, 100)}`);
             }
           } catch (e) {
             ctx.say(`Key frame ${i + 1} error: ${(e as Error).message}`);
@@ -614,19 +617,36 @@ export function createStageTools(ctx: StageToolContext) {
   ];
 }
 
-/** Extract URL from various SDK response shapes */
-function extractUrl(data: Record<string, unknown>): string | null {
+/** Extract URL from various SDK response shapes — matches storyboard's compound-tools.ts */
+function extractUrl(resp: Record<string, unknown>): string | null {
+  // The SDK nests results: { data: { images: [{ url }], video: { url }, ... } }
+  const data = (resp.data ?? resp) as Record<string, unknown>;
+
+  // Direct URL fields
+  if (typeof resp.url === "string") return resp.url;
+  if (typeof resp.image_url === "string") return resp.image_url;
+  if (typeof resp.video_url === "string") return resp.video_url;
+  if (typeof resp.audio_url === "string") return resp.audio_url;
+
+  // Nested in data
   if (typeof data.url === "string") return data.url;
-  if (typeof data.audio_url === "string") return data.audio_url;
-  if (typeof data.video_url === "string") return data.video_url;
   const images = data.images as Array<{ url: string }> | undefined;
   if (images?.[0]?.url) return images[0].url;
+  const image = data.image as { url: string } | undefined;
+  if (image?.url) return image.url;
   const video = data.video as { url: string } | undefined;
   if (video?.url) return video.url;
-  const d = data.data as Record<string, unknown> | undefined;
-  if (d) {
-    const audio = d.audio as { url: string } | undefined;
-    if (audio?.url) return audio.url;
-  }
+  const audio = data.audio as { url: string } | undefined;
+  if (audio?.url) return audio.url;
+  const audioFile = data.audio_file as { url: string } | undefined;
+  if (audioFile?.url) return audioFile.url;
+  const output = data.output as { url: string } | undefined;
+  if (output?.url) return output.url;
+
+  // Last resort: find any https URL in the response
+  const json = JSON.stringify(resp);
+  const match = json.match(/"(https:\/\/[^"]+\.(png|jpg|jpeg|mp4|webm|wav|mp3)[^"]*)"/i);
+  if (match) return match[1];
+
   return null;
 }
