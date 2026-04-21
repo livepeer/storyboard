@@ -243,7 +243,7 @@ export function createStageTools(ctx: StageToolContext) {
 
     {
       name: "stage_scene",
-      description: "Create a multi-scene performance timeline. Each scene has a title, prompt, visual preset, and duration. The stream will auto-transition through scenes using prompt traveling.",
+      description: "Create a multi-scene performance timeline with smooth prompt-traveling transformations. The stream morphs seamlessly between scenes — no cuts, just continuous visual evolution.",
       parameters: {
         type: "object",
         properties: {
@@ -253,13 +253,13 @@ export function createStageTools(ctx: StageToolContext) {
               type: "object",
               properties: {
                 title: { type: "string", description: "Short scene title" },
-                prompt: { type: "string", description: "Visual description for this scene" },
-                preset: { type: "string", description: "Visual preset: dreamy, cinematic, anime, abstract, faithful, painterly, psychedelic" },
-                duration: { type: "number", description: "Scene duration in seconds (10-120)" },
+                prompt: { type: "string", description: "Visual scene description (20-40 words). For smooth morphing: keep consistent composition/camera angle across scenes, describe the SAME position in frame (e.g. always center-frame subject), include shared visual anchors (colors, shapes) between consecutive scenes so the morph is natural" },
+                preset: { type: "string", description: "dreamy(0.7) cinematic(0.5) anime(0.6) abstract(0.95) faithful(0.2) painterly(0.65) psychedelic(0.9) — use abstract/psychedelic for dramatic transformation moments, cinematic for stable beauty shots, dreamy for ethereal transitions" },
+                duration: { type: "number", description: "Seconds (15-45). Shorter=faster morph, longer=linger. Use 15-20s for dramatic transformations, 30-45s for beauty shots" },
               },
               required: ["title", "prompt", "preset", "duration"],
             },
-            description: "Array of scenes in performance order",
+            description: "Scenes in order. TRANSFORMATION TIPS: (1) Keep same framing — center subject, same angle (2) Bridge consecutive scenes with shared elements — a horse's legs become wheel spokes, feathers become metal panels (3) Use abstract/psychedelic preset at transformation peaks for maximum morph energy (4) Describe motion direction consistently — all subjects moving left-to-right or toward camera (5) Include texture/material words that bridge: chrome, organic, flowing, mechanical",
           },
         },
         required: ["scenes"],
