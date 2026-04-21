@@ -13,13 +13,13 @@ interface SceneStripProps {
 }
 
 const PRESET_COLORS: Record<string, string> = {
-  dreamy: "#7c3aed",
-  cinematic: "#ea580c",
-  anime: "#ec4899",
-  abstract: "#06b6d4",
-  faithful: "#22c55e",
-  painterly: "#f59e0b",
-  psychedelic: "#e11d48",
+  dreamy: "#a78bfa",
+  cinematic: "#fb923c",
+  anime: "#f472b6",
+  abstract: "#22d3ee",
+  faithful: "#4ade80",
+  painterly: "#fbbf24",
+  psychedelic: "#fb7185",
 };
 
 export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditScene }: SceneStripProps) {
@@ -58,11 +58,11 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
   if (scenes.length === 0) {
     return (
       <div style={{
-        position: "absolute", bottom: 0, left: 0, right: 340,
-        height: 72, background: "rgba(0,0,0,0.6)",
-        borderTop: "1px solid rgba(255,255,255,0.06)",
+        position: "absolute", bottom: 0, left: 0, right: 360,
+        height: 64, background: "rgba(8,8,12,0.7)", backdropFilter: "blur(16px)",
+        borderTop: "1px solid rgba(255,255,255,0.04)",
         display: "flex", alignItems: "center", justifyContent: "center",
-        color: "#555", fontSize: 13, fontStyle: "italic",
+        color: "#555570", fontSize: 12, fontWeight: 500,
       }}>
         No scenes — ask the agent to create a performance
       </div>
@@ -71,17 +71,19 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
 
   return (
     <div style={{
-      position: "absolute", bottom: 0, left: 0, right: 340,
-      background: "rgba(0,0,0,0.7)", backdropFilter: "blur(12px)",
-      borderTop: "1px solid rgba(255,255,255,0.08)",
+      position: "absolute", bottom: 0, left: 0, right: 360,
+      background: "rgba(8,8,12,0.8)", backdropFilter: "blur(20px) saturate(1.2)",
+      borderTop: "1px solid rgba(255,255,255,0.06)",
     }}>
       {/* Progress bar */}
       {isPlaying && totalDuration > 0 && (
-        <div style={{ height: 3, background: "rgba(255,255,255,0.05)" }}>
+        <div style={{ height: 2, background: "rgba(255,255,255,0.03)" }}>
           <div style={{
-            height: "100%", background: "#6366f1",
+            height: "100%",
+            background: "linear-gradient(90deg, #818cf8, #c084fc)",
             width: `${(elapsed / totalDuration) * 100}%`,
             transition: "width 0.5s linear",
+            boxShadow: "0 0 8px rgba(129,140,248,0.4)",
           }} />
         </div>
       )}
@@ -92,11 +94,15 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
         <button
           onClick={isPlaying ? onStop : onPlay}
           style={{
-            width: 36, height: 36, borderRadius: "50%", border: "none",
-            background: isPlaying ? "rgba(239,68,68,0.2)" : "rgba(99,102,241,0.2)",
-            color: isPlaying ? "#ef4444" : "#6366f1",
-            cursor: "pointer", fontSize: 16, flexShrink: 0,
+            width: 34, height: 34, borderRadius: "50%", border: "1px solid transparent",
+            background: isPlaying
+              ? "rgba(248,113,113,0.15)"
+              : "linear-gradient(135deg, rgba(129,140,248,0.2), rgba(192,132,252,0.15))",
+            color: isPlaying ? "#f87171" : "#818cf8",
+            cursor: "pointer", fontSize: 14, flexShrink: 0,
             display: "flex", alignItems: "center", justifyContent: "center",
+            transition: "all 150ms ease",
+            boxShadow: isPlaying ? "none" : "0 0 12px rgba(129,140,248,0.15)",
           }}
           title={isPlaying ? "Stop" : "Play"}
         >
@@ -252,16 +258,19 @@ function SceneEditor({ scene, onSave, onCancel }: {
 }
 
 const inputStyle: React.CSSProperties = {
-  width: "100%", padding: "5px 8px", borderRadius: 5,
-  border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)",
-  color: "#eee", fontSize: 12, boxSizing: "border-box",
+  width: "100%", padding: "6px 10px", borderRadius: 8,
+  border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)",
+  color: "#e4e4f0", fontSize: 12, fontFamily: "inherit", boxSizing: "border-box",
+  transition: "border-color 150ms ease",
 };
 
 function btnStyle(bg: string): React.CSSProperties {
   return {
-    padding: "5px 12px", borderRadius: 5, border: "none",
-    background: bg + "33", color: bg === "#555" ? "#aaa" : bg,
-    cursor: "pointer", fontSize: 11, fontWeight: 600,
+    padding: "6px 14px", borderRadius: 8, border: "1px solid transparent",
+    background: bg === "#555" ? "rgba(255,255,255,0.04)" : bg + "1a",
+    color: bg === "#555" ? "#8888aa" : bg,
+    cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit",
+    transition: "all 150ms ease",
   };
 }
 

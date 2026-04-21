@@ -20,11 +20,10 @@ import { RecordBar } from "../components/RecordBar";
 import { detectBpm } from "../lib/bpm-detect";
 import { StageRecorder, type RecorderState } from "../lib/recorder";
 
-// Stores
+// ─── Stores ───
 const artifacts = createArtifactStore();
 const chat = createChatStore();
 
-// SDK config from localStorage
 function getSdkConfig() {
   if (typeof window === "undefined") return { url: "https://sdk.daydream.monster", key: "" };
   return {
@@ -33,6 +32,92 @@ function getSdkConfig() {
   };
 }
 
+// ─── Styles ───
+const S = {
+  root: {
+    display: "flex", height: "100vh", overflow: "hidden", background: "#08080c",
+  } as React.CSSProperties,
+
+  canvasArea: {
+    flex: 1, position: "relative" as const, overflow: "hidden",
+  } as React.CSSProperties,
+
+  chatSidebar: {
+    width: 360, display: "flex", flexDirection: "column" as const,
+    background: "rgba(12, 12, 18, 0.85)", backdropFilter: "blur(20px) saturate(1.2)",
+    borderLeft: "1px solid rgba(255,255,255,0.06)",
+  } as React.CSSProperties,
+
+  chatHeader: {
+    padding: "16px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+  } as React.CSSProperties,
+
+  chatTitle: {
+    fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em",
+    background: "linear-gradient(135deg, #818cf8, #c084fc)",
+    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+  } as React.CSSProperties,
+
+  liveIndicator: {
+    display: "flex", alignItems: "center", gap: 6,
+    fontSize: 11, fontWeight: 500, color: "rgba(255,255,255,0.4)",
+    background: "rgba(255,255,255,0.03)", padding: "4px 10px", borderRadius: 20,
+  } as React.CSSProperties,
+
+  liveDot: {
+    width: 6, height: 6, borderRadius: "50%", background: "#4ade80",
+    animation: "pulse-dot 1.5s ease-in-out infinite",
+  } as React.CSSProperties,
+
+  streamOverlay: {
+    position: "absolute" as const, bottom: 10, left: 12,
+    display: "flex", alignItems: "center", gap: 6,
+    fontSize: 11, fontWeight: 500, color: "rgba(255,255,255,0.6)",
+    background: "rgba(0,0,0,0.5)", backdropFilter: "blur(8px)",
+    padding: "4px 10px", borderRadius: 20,
+  } as React.CSSProperties,
+
+  topBar: {
+    position: "absolute" as const, top: 14, right: 14, zIndex: 100,
+    display: "flex", gap: 8,
+  } as React.CSSProperties,
+
+  cardContent: {
+    width: "100%", height: "100%", background: "rgba(255,255,255,0.02)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    borderRadius: 8, overflow: "hidden",
+  } as React.CSSProperties,
+
+  overlay: {
+    position: "fixed" as const, inset: 0, zIndex: 9999,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)",
+    animation: "fadeIn 0.2s ease-out",
+  } as React.CSSProperties,
+
+  dialog: {
+    width: 400, background: "rgba(16,16,22,0.95)", backdropFilter: "blur(24px)",
+    border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16,
+    padding: "28px 28px 24px", boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
+    animation: "fadeInScale 0.25s ease-out",
+  } as React.CSSProperties,
+
+  dialogTitle: {
+    margin: "0 0 4px", fontSize: 18, fontWeight: 700, letterSpacing: "-0.02em",
+  } as React.CSSProperties,
+
+  dialogSubtitle: {
+    margin: "0 0 20px", fontSize: 12, color: "#8888aa",
+  } as React.CSSProperties,
+
+  label: {
+    fontSize: 11, fontWeight: 600, color: "#8888aa", display: "block",
+    marginBottom: 5, textTransform: "uppercase" as const, letterSpacing: "0.05em",
+  } as React.CSSProperties,
+};
+
+// ─── Component ───
 export default function Stage() {
   const [mounted, setMounted] = useState(false);
   const [viewport, setViewport] = useState({ x: 0, y: 0, scale: 1 });
@@ -58,7 +143,7 @@ export default function Stage() {
     return () => { unsubArt(); unsubChat(); };
   }, []);
 
-  // Test hook: allow E2E tests to inject scenes directly
+  // Test hook for E2E
   useEffect(() => {
     if (!mounted) return;
     (window as unknown as Record<string, unknown>).__testInjectScenes = (scenes: Array<{ title: string; prompt: string; preset: string; duration: number }>) => {
@@ -68,86 +153,60 @@ export default function Stage() {
     };
   }, [mounted]);
 
-  // Create the live output card (center of canvas)
+  // Create live output card
   useEffect(() => {
     if (!mounted) return;
     const existing = artifacts.getState().getByRefId("live-output");
     if (!existing) {
       artifacts.getState().add({
-        type: "stream",
-        title: "Live Output",
-        refId: "live-output",
-        x: 200,
-        y: 50,
-        w: 640,
-        h: 400,
+        type: "stream", title: "Live Output", refId: "live-output",
+        x: 200, y: 50, w: 640, h: 400,
       });
     }
   }, [mounted]);
 
-  // Agent setup
+  // ─── Agent Handler ───
   const handleSend = useCallback(async (text: string) => {
     chat.getState().addMessage(text, "user");
 
     const sdk = getSdkConfig();
     const say = (msg: string) => chat.getState().addMessage(msg, "system");
 
-    // Build agent with stage tools
     const controlStreamFn = async (params: Record<string, unknown>) => {
       if (!streamIdRef.current) return;
       const cfg = getSdkConfig();
       await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}),
-        },
+        headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
         body: JSON.stringify({ type: "parameters", params }),
       });
     };
 
     const toolCtx: StageToolContext = {
-      sdkUrl: sdk.url,
-      apiKey: sdk.key,
+      sdkUrl: sdk.url, apiKey: sdk.key,
       streamId: streamIdRef.current,
       setStreamId: (id) => {
         streamIdRef.current = id;
-        if (id) {
-          setStreamParams({
-            prompts: text,
-          });
-        }
+        if (id) setStreamParams({ prompts: text });
       },
       controlStream: async (params) => {
-        try {
-          await controlStreamFn(params as Record<string, unknown>);
-        } catch (e) {
-          say(`Control failed: ${(e as Error).message}`);
-        }
+        try { await controlStreamFn(params as Record<string, unknown>); }
+        catch (e) { say(`Control failed: ${(e as Error).message}`); }
       },
       setScenes: (scenes) => {
         const indexed: Scene[] = scenes.map((s, i) => ({ ...s, index: i }));
         perfRef.current.setScenes(indexed);
         setPerfState(perfRef.current.getState());
       },
-      playPerformance: () => {
-        perfRef.current.play(controlStreamFn, setPerfState);
-      },
-      stopPerformance: () => {
-        perfRef.current.stop();
-        setPerfState(perfRef.current.getState());
-      },
-      setAudioUrl,
-      setBpm,
+      playPerformance: () => { perfRef.current.play(controlStreamFn, setPerfState); },
+      stopPerformance: () => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); },
+      setAudioUrl, setBpm,
     };
 
     const tools = new ToolRegistry();
     for (const tool of createStageTools(toolCtx)) {
       tools.register({
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-        mcp_exposed: false,
+        name: tool.name, description: tool.description, parameters: tool.parameters, mcp_exposed: false,
         execute: async (args) => {
           const result = await tool.execute(args as Record<string, unknown>);
           return typeof result === "string" ? result : JSON.stringify(result);
@@ -155,45 +214,21 @@ export default function Stage() {
       });
     }
 
-    // Use LivepeerProvider via /api/llm/chat proxy
-    // For now, use a simple fetch-based provider
     const { LivepeerProvider } = await import("../lib/livepeer-provider");
     const provider = new LivepeerProvider({ proxyUrl: "/api/llm/chat" });
-
     const working = new WorkingMemoryStore();
     working.setCriticalConstraints([STAGE_SYSTEM_PROMPT]);
-
-    const runner = new AgentRunner(
-      provider,
-      tools,
-      working,
-      new SessionMemoryStore(),
-    );
+    const runner = new AgentRunner(provider, tools, working, new SessionMemoryStore());
 
     chat.getState().setProcessing(true);
-
     try {
       for await (const event of runner.runStream({ user: text, maxIterations: 8 })) {
         switch (event.kind) {
-          case "text":
-            if (event.text) {
-              chat.getState().addMessage(event.text, "agent");
-            }
-            break;
-          case "tool_call":
-            say(`Calling ${event.name}…`);
-            break;
-          case "tool_result":
-            if (!event.ok) say(`${event.name} failed`);
-            break;
-          case "usage": {
-            const t = event.usage.input + event.usage.output;
-            if (t > 0) say(`${t.toLocaleString()} tokens`);
-            break;
-          }
-          case "error":
-            say(`Error: ${event.error}`);
-            break;
+          case "text": if (event.text) chat.getState().addMessage(event.text, "agent"); break;
+          case "tool_call": say(`Calling ${event.name}…`); break;
+          case "tool_result": if (!event.ok) say(`${event.name} failed`); break;
+          case "usage": { const t = event.usage.input + event.usage.output; if (t > 0) say(`${t.toLocaleString()} tokens`); break; }
+          case "error": say(`Error: ${event.error}`); break;
         }
       }
     } catch (e) {
@@ -203,7 +238,7 @@ export default function Stage() {
     }
   }, []);
 
-  // Import media — file picker
+  // ─── Import Handler ───
   const handleImportFile = useCallback(() => {
     const input = document.createElement("input");
     input.type = "file";
@@ -220,7 +255,6 @@ export default function Stage() {
       const refId = `${type}-${Date.now()}`;
       store.add({ type, title, refId, url: blobUrl, x: 50, y: 500 });
 
-      // Auto-detect BPM for audio files
       if (isAudio) {
         setAudioUrl(blobUrl);
         detectBpm(file).then((result) => {
@@ -229,7 +263,6 @@ export default function Stage() {
         }).catch(() => {});
       }
 
-      // Upload to GCS for public URL
       const reader = new FileReader();
       reader.onload = async () => {
         try {
@@ -253,34 +286,23 @@ export default function Stage() {
     input.click();
   }, []);
 
-  // Drag-drop near LiveOutput → apply as VACE reference
+  // ─── VACE Proximity ───
   const handleCardDrop = useCallback((droppedId: string) => {
     const store = artifacts.getState();
     const dropped = store.artifacts.find((a) => a.id === droppedId);
     const live = store.getByRefId("live-output");
     if (!dropped || !live || dropped.refId === "live-output") return;
-    if (dropped.type !== "image") return; // only images for VACE
+    if (dropped.type !== "image") return;
 
-    // Check if dropped card is near the LiveOutput
     const dx = Math.abs((dropped.x + dropped.w / 2) - (live.x + live.w / 2));
     const dy = Math.abs((dropped.y + dropped.h / 2) - (live.y + live.h / 2));
-    const isNear = dx < live.w && dy < live.h;
-
-    if (isNear && dropped.url && streamIdRef.current) {
+    if (dx < live.w && dy < live.h && dropped.url && streamIdRef.current) {
       const sdk = getSdkConfig();
-      // Apply as VACE reference
       fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}),
-        },
-        body: JSON.stringify({
-          type: "parameters",
-          params: { vace_enabled: true, vace_ref_images: [dropped.url], vace_context_scale: 0.8 },
-        }),
+        headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
+        body: JSON.stringify({ type: "parameters", params: { vace_enabled: true, vace_ref_images: [dropped.url], vace_context_scale: 0.8 } }),
       }).then(() => {
-        // Connect edge
         store.connect(dropped.refId, "live-output", { action: "vace-reference" });
         chat.getState().addMessage(`Reference applied: "${dropped.title}" → Live Output`, "system");
       }).catch((e) => {
@@ -289,7 +311,7 @@ export default function Stage() {
     }
   }, []);
 
-  // Settings dialog
+  // ─── Settings ───
   const [showSettings, setShowSettings] = useState(false);
   const [sdkUrl, setSdkUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -299,11 +321,11 @@ export default function Stage() {
       const cfg = getSdkConfig();
       setSdkUrl(cfg.url);
       setApiKey(cfg.key);
-      if (!cfg.key) setShowSettings(true); // auto-show if no key
+      if (!cfg.key) setShowSettings(true);
     }
   }, [mounted]);
 
-  // Keyboard shortcuts: Space = play/stop performance, R = record
+  // ─── Keyboard Shortcuts ───
   useEffect(() => {
     if (!mounted) return;
     const handler = (e: KeyboardEvent) => {
@@ -351,17 +373,18 @@ export default function Stage() {
 
   const liveCard = arts.find((a) => a.refId === "live-output");
   const sdk = getSdkConfig();
+  const isStreaming = streamState?.status === "streaming";
 
   return (
-    <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
-      {/* Canvas (left, 75%) */}
-      <div style={{ flex: 1, position: "relative" }}>
+    <div style={S.root}>
+      {/* ─── Canvas Area ─── */}
+      <div style={S.canvasArea}>
         <InfiniteBoard
           viewport={viewport}
           onViewportChange={(v) => setViewport((prev) => ({ ...prev, ...v }))}
-          gridColor="rgba(255,255,255,0.02)"
+          gridColor="rgba(255,255,255,0.015)"
         >
-          {/* Live Output — ScopePlayer as a canvas card */}
+          {/* Live Output */}
           {liveCard && (
             <ArtifactCard
               artifact={liveCard}
@@ -370,204 +393,153 @@ export default function Stage() {
               onResize={(id, w, h) => artifacts.getState().update(id, { w, h })}
             >
               <ScopePlayer
-                sdkUrl={sdk.url}
-                apiKey={sdk.key}
+                sdkUrl={sdk.url} apiKey={sdk.key}
                 initialParams={streamParams ?? undefined}
-                onStateChange={setStreamState}
-                showFps={true}
+                onStateChange={setStreamState} showFps={true}
               >
-                {/* Stream info overlay */}
-                {streamState?.status === "streaming" && (
-                  <div style={{
-                    position: "absolute", bottom: 8, left: 10,
-                    fontSize: 11, color: "rgba(255,255,255,0.5)",
-                    background: "rgba(0,0,0,0.4)", padding: "3px 8px", borderRadius: 4,
-                  }}>
-                    🔴 Live
+                {isStreaming && (
+                  <div style={S.streamOverlay}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#f87171", animation: "pulse-dot 1.5s ease-in-out infinite" }} />
+                    <span>Live</span>
                   </div>
                 )}
               </ScopePlayer>
             </ArtifactCard>
           )}
 
-          {/* Other artifact cards (reference images, recordings, etc.) */}
+          {/* Reference cards */}
           {arts.filter((a) => a.refId !== "live-output").map((a) => (
             <ArtifactCard
-              key={a.id}
-              artifact={a}
-              viewportScale={viewport.scale}
-              onMove={(id, x, y) => {
-                artifacts.getState().update(id, { x, y });
-                // Check proximity to LiveOutput on every move — apply VACE when near
-                handleCardDrop(id);
-              }}
+              key={a.id} artifact={a} viewportScale={viewport.scale}
+              onMove={(id, x, y) => { artifacts.getState().update(id, { x, y }); handleCardDrop(id); }}
               onResize={(id, w, h) => artifacts.getState().update(id, { w, h })}
             >
-              <div style={{ width: "100%", height: "100%", background: "#111", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6, overflow: "hidden" }}>
+              <div style={S.cardContent}>
                 {a.url && a.type === "image" && <img src={a.url} alt={a.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 {a.url && a.type === "video" && <video src={a.url} controls muted style={{ width: "100%", height: "100%" }} />}
-                {!a.url && <span style={{ color: "#555", fontSize: 12 }}>{a.title}</span>}
+                {!a.url && <span style={{ color: "#555570", fontSize: 12, fontWeight: 500 }}>{a.title}</span>}
               </div>
             </ArtifactCard>
           ))}
         </InfiniteBoard>
 
-        {/* Waveform Bar (above scene strip when audio loaded) */}
+        {/* Waveform */}
         <WaveformBar
-          audioUrl={audioUrl}
-          bpm={bpm}
-          isPlaying={perfState.isPlaying}
-          currentTime={perfState.elapsed}
+          audioUrl={audioUrl} bpm={bpm}
+          isPlaying={perfState.isPlaying} currentTime={perfState.elapsed}
           totalDuration={perfState.totalDuration}
           onSync={(detectedBpm) => {
             if (!streamIdRef.current) return;
-            const sdk = getSdkConfig();
-            fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+            const s = getSdkConfig();
+            fetch(`${s.url}/stream/${streamIdRef.current}/control`, {
               method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}),
-              },
-              body: JSON.stringify({
-                type: "parameters",
-                params: {
-                  modulation: {
-                    noise_scale: {
-                      enabled: true, shape: "cosine", rate: "bar",
-                      depth: 0.3, bpm: detectedBpm,
-                    },
-                  },
-                },
-              }),
-            }).then(() => {
-              chat.getState().addMessage(`Beat sync enabled: ${detectedBpm} BPM → noise_scale modulation`, "system");
-            }).catch(() => {});
+              headers: { "Content-Type": "application/json", ...(s.key ? { Authorization: `Bearer ${s.key}` } : {}) },
+              body: JSON.stringify({ type: "parameters", params: { modulation: { noise_scale: { enabled: true, shape: "cosine", rate: "bar", depth: 0.3, bpm: detectedBpm } } } }),
+            }).then(() => chat.getState().addMessage(`Beat sync: ${detectedBpm} BPM → noise_scale`, "system")).catch(() => {});
           }}
         />
 
-        {/* Scene Timeline Strip (bottom of canvas) */}
+        {/* Scene Timeline */}
         <SceneStrip
           state={perfState}
           onPlay={() => {
-            if (!streamIdRef.current) {
-              chat.getState().addMessage("Start a stream first, then play the performance.", "system");
-              return;
-            }
-            const sdk = getSdkConfig();
-            const controlFn = async (params: Record<string, unknown>) => {
-              await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+            if (!streamIdRef.current) { chat.getState().addMessage("Start a stream first, then play.", "system"); return; }
+            const s = getSdkConfig();
+            const fn = async (params: Record<string, unknown>) => {
+              await fetch(`${s.url}/stream/${streamIdRef.current}/control`, {
                 method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}),
-                },
+                headers: { "Content-Type": "application/json", ...(s.key ? { Authorization: `Bearer ${s.key}` } : {}) },
                 body: JSON.stringify({ type: "parameters", params }),
               });
             };
-            perfRef.current.play(controlFn, setPerfState);
+            perfRef.current.play(fn, setPerfState);
           }}
-          onStop={() => {
-            perfRef.current.stop();
-            setPerfState(perfRef.current.getState());
-          }}
-          onReorder={(from, to) => {
-            perfRef.current.reorderScenes(from, to);
-            setPerfState(perfRef.current.getState());
-          }}
-          onRemove={(idx) => {
-            perfRef.current.scenes.splice(idx, 1);
-            perfRef.current.scenes.forEach((s, i) => { s.index = i; });
-            setPerfState(perfRef.current.getState());
-          }}
-          onEditScene={(idx, updates) => {
-            Object.assign(perfRef.current.scenes[idx], updates);
-            setPerfState(perfRef.current.getState());
-          }}
+          onStop={() => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); }}
+          onReorder={(from, to) => { perfRef.current.reorderScenes(from, to); setPerfState(perfRef.current.getState()); }}
+          onRemove={(idx) => { perfRef.current.scenes.splice(idx, 1); perfRef.current.scenes.forEach((s, i) => { s.index = i; }); setPerfState(perfRef.current.getState()); }}
+          onEditScene={(idx, updates) => { Object.assign(perfRef.current.scenes[idx], updates); setPerfState(perfRef.current.getState()); }}
         />
 
-        {/* Record controls */}
+        {/* Record */}
         <RecordBar
-          state={recState}
-          isStreaming={streamState?.status === "streaming"}
+          state={recState} isStreaming={isStreaming}
           onRecord={() => {
-            // Find the ScopePlayer canvas
             const canvas = document.querySelector("canvas[data-scope-player]") as HTMLCanvasElement;
-            if (!canvas) {
-              chat.getState().addMessage("No active stream canvas to record.", "system");
-              return;
-            }
+            if (!canvas) { chat.getState().addMessage("No active stream to record.", "system"); return; }
             recorderRef.current.start(canvas, undefined, setRecState);
             chat.getState().addMessage("Recording started…", "system");
           }}
           onStop={() => {
             recorderRef.current.stop();
             setRecState(recorderRef.current.getState());
-            // blobUrl will be set async via onstop callback
             setTimeout(() => {
               setRecState(recorderRef.current.getState());
-              if (recorderRef.current.blobUrl) {
-                chat.getState().addMessage("Recording saved. Click Download to export.", "system");
-              }
+              if (recorderRef.current.blobUrl) chat.getState().addMessage("Recording saved. Click Download to export.", "system");
             }, 500);
           }}
           onDownload={() => recorderRef.current.download()}
         />
 
-        {/* Import + Settings buttons */}
-        <button
-          onClick={handleImportFile}
-          style={{
-            position: "absolute", top: 12, right: 80, zIndex: 100,
-            background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
-            color: "#aaa", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13,
-          }}
-        >
-          + Import
-        </button>
-        <button
-          onClick={() => setShowSettings(true)}
-          style={{
-            position: "absolute", top: 12, right: 12, zIndex: 100,
-            background: apiKey ? "rgba(255,255,255,0.06)" : "rgba(233,69,96,0.2)",
-            border: apiKey ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(233,69,96,0.4)",
-            color: apiKey ? "#aaa" : "#e94560",
-            borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13,
-          }}
-        >
-          ⚙️ {apiKey ? "" : "Setup"}
-        </button>
+        {/* Top-right actions */}
+        <div style={S.topBar}>
+          <button onClick={handleImportFile} className="btn" style={{ fontSize: 12 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            Import
+          </button>
+          <button
+            onClick={() => setShowSettings(true)}
+            className={apiKey ? "btn" : "btn btn-danger"}
+            style={{ fontSize: 12 }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+            {apiKey ? "" : "Setup"}
+          </button>
+        </div>
+
+        {/* Keyboard hint */}
+        {(perfState.scenes.length > 0 || isStreaming) && (
+          <div style={{
+            position: "absolute", bottom: perfState.scenes.length > 0 ? 84 : 14, left: 14, zIndex: 50,
+            display: "flex", gap: 6, opacity: 0.3, fontSize: 10, color: "#8888aa",
+          }}>
+            {perfState.scenes.length > 0 && <span style={{ padding: "2px 6px", borderRadius: 4, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(0,0,0,0.4)" }}>Space — Play/Stop</span>}
+            {isStreaming && <span style={{ padding: "2px 6px", borderRadius: 4, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(0,0,0,0.4)" }}>R — Record</span>}
+          </div>
+        )}
       </div>
 
-      {/* Chat (right, 340px) */}
-      <div style={{ width: 340, borderLeft: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "12px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", fontSize: 14, fontWeight: 700 }}>
-          Creative Stage
+      {/* ─── Chat Sidebar ─── */}
+      <div style={S.chatSidebar}>
+        <div style={S.chatHeader}>
+          <span style={S.chatTitle}>Creative Stage</span>
+          {isStreaming && (
+            <div style={S.liveIndicator}>
+              <span style={S.liveDot} />
+              <span>Streaming</span>
+            </div>
+          )}
         </div>
         <div style={{ flex: 1, overflow: "hidden" }}>
-          <ChatPanel
-            messages={messages}
-            onSend={handleSend}
-            placeholder="Describe a scene to stream live…"
-          />
+          <ChatPanel messages={messages} onSend={handleSend} placeholder="Describe a scene to stream live…" />
         </div>
       </div>
 
-      {/* Settings dialog */}
+      {/* ─── Settings Dialog ─── */}
       {showSettings && (
-        <div
-          style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)" }}
-          onClick={() => setShowSettings(false)}
-        >
-          <div
-            style={{ width: 380, background: "#1a1a1e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,0.6)" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>Settings</h3>
-            <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>SDK URL</label>
-            <input value={sdkUrl} onChange={(e) => setSdkUrl(e.target.value)} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "#eee", fontSize: 13, marginBottom: 12, boxSizing: "border-box" }} />
-            <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>Daydream API Key</label>
-            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk_..." style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "#eee", fontSize: 13, marginBottom: 16, boxSizing: "border-box" }} />
-            <button onClick={saveSettings} style={{ width: "100%", padding: "10px", borderRadius: 8, border: "none", background: "#6366f1", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 14 }}>Save</button>
+        <div style={S.overlay} onClick={() => setShowSettings(false)}>
+          <div style={S.dialog} onClick={(e) => e.stopPropagation()}>
+            <h3 style={S.dialogTitle}>Settings</h3>
+            <p style={S.dialogSubtitle}>Connect to Livepeer SDK for live AI streaming</p>
+
+            <label style={S.label}>SDK Service URL</label>
+            <input value={sdkUrl} onChange={(e) => setSdkUrl(e.target.value)} className="input" style={{ marginBottom: 14 }} />
+
+            <label style={S.label}>Daydream API Key</label>
+            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk_..." className="input" style={{ marginBottom: 20 }} />
+
+            <button onClick={saveSettings} className="btn btn-accent" style={{ width: "100%", justifyContent: "center", padding: "11px 0", fontSize: 14 }}>
+              Save & Connect
+            </button>
           </div>
         </div>
       )}

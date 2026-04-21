@@ -148,7 +148,7 @@ test.describe("Page Load & Layout", () => {
     await presetConfig(page);
     await page.goto("/");
     await waitForMount(page);
-    await expect(page.getByText("+ Import")).toBeVisible();
+    await expect(page.getByText("Import")).toBeVisible();
   });
 
   test("scene strip shows empty state when no scenes", async ({ page }) => {
@@ -386,7 +386,7 @@ test.describe("[WOW] Journey 2: Import → VACE Reference", () => {
     // Mock the file chooser
     const [fileChooser] = await Promise.all([
       page.waitForEvent("filechooser"),
-      page.getByText("+ Import").click(),
+      page.getByText("Import").click(),
     ]);
 
     // Upload a test image
@@ -420,7 +420,7 @@ test.describe("[WOW] Journey 3: Music → BPM → Beat Sync", () => {
     // Mock the file chooser with an audio file
     const [fileChooser] = await Promise.all([
       page.waitForEvent("filechooser"),
-      page.getByText("+ Import").click(),
+      page.getByText("Import").click(),
     ]);
 
     // Create a minimal WAV file (44100Hz, mono, 16-bit, 0.1s)
@@ -495,7 +495,7 @@ test.describe("[WOW] Journey 5: Full Creative Session", () => {
 
     // Step 2: Verify UI is ready
     await expect(page.getByText("Creative Stage")).toBeVisible();
-    await expect(page.getByText("+ Import")).toBeVisible();
+    await expect(page.getByText("Import")).toBeVisible();
     await expect(page.locator("canvas").first()).toBeVisible();
 
     // Step 3: Scene strip shows empty state
