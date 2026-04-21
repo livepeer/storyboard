@@ -10,6 +10,7 @@ interface SceneStripProps {
   onReorder: (fromIdx: number, toIdx: number) => void;
   onRemove: (idx: number) => void;
   onEditScene: (idx: number, updates: Partial<Scene>) => void;
+  onAddScene?: (scene: Omit<Scene, "index">) => void;
 }
 
 const PRESET_COLORS: Record<string, string> = {
@@ -22,10 +23,14 @@ const PRESET_COLORS: Record<string, string> = {
   psychedelic: "#fb7185",
 };
 
-export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditScene }: SceneStripProps) {
+const PRESETS = Object.keys(PRESET_COLORS);
+
+export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditScene, onAddScene }: SceneStripProps) {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const stripRef = useRef<HTMLDivElement>(null);
 
   const { scenes, currentScene, isPlaying, elapsed, totalDuration } = state;
@@ -36,24 +41,27 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
   const currentDur = scenes[currentScene]?.duration ?? 1;
   const scenePct = Math.min(sceneElapsed / currentDur, 1);
 
-  // Drag handlers
+  // A scene is "locked" if it's already played or currently playing
+  const isLocked = (idx: number) => isPlaying && idx <= currentScene;
+
+  // Drag handlers — only for unlocked scenes
   const handleDragStart = useCallback((idx: number) => {
-    if (isPlaying) return;
+    if (isLocked(idx)) return;
     setDragIdx(idx);
-  }, [isPlaying]);
+  }, [isPlaying, currentScene]);
 
   const handleDragOver = useCallback((idx: number) => {
-    if (dragIdx === null || dragIdx === idx) return;
+    if (dragIdx === null || dragIdx === idx || isLocked(idx)) return;
     setDragOverIdx(idx);
-  }, [dragIdx]);
+  }, [dragIdx, isPlaying, currentScene]);
 
   const handleDrop = useCallback((idx: number) => {
-    if (dragIdx !== null && dragIdx !== idx) {
+    if (dragIdx !== null && dragIdx !== idx && !isLocked(idx)) {
       onReorder(dragIdx, idx);
     }
     setDragIdx(null);
     setDragOverIdx(null);
-  }, [dragIdx, onReorder]);
+  }, [dragIdx, onReorder, isPlaying, currentScene]);
 
   if (scenes.length === 0) {
     return (
@@ -61,10 +69,23 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
         position: "absolute", bottom: 0, left: 0, right: 360,
         height: 64, background: "rgba(8,8,12,0.7)", backdropFilter: "blur(16px)",
         borderTop: "1px solid rgba(255,255,255,0.04)",
-        display: "flex", alignItems: "center", justifyContent: "center",
+        display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
         color: "#555570", fontSize: 12, fontWeight: 500,
       }}>
-        No scenes — ask the agent to create a performance
+        <span>No scenes — ask the agent to create a performance</span>
+        {onAddScene && (
+          <button onClick={() => setShowAddForm(true)} style={{
+            background: "rgba(129,140,248,0.1)", border: "1px solid rgba(129,140,248,0.2)",
+            color: "#818cf8", borderRadius: 6, padding: "4px 10px", cursor: "pointer",
+            fontSize: 11, fontWeight: 600, fontFamily: "inherit",
+          }}>+ Add Scene</button>
+        )}
+        {showAddForm && (
+          <AddSceneForm
+            onAdd={(s) => { onAddScene?.(s); setShowAddForm(false); }}
+            onCancel={() => setShowAddForm(false)}
+          />
+        )}
       </div>
     );
   }
@@ -121,29 +142,34 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
         }}>
           {scenes.map((scene, idx) => {
             const isCurrent = idx === currentScene && isPlaying;
+            const locked = isLocked(idx);
             const isDragging = dragIdx === idx;
             const isDragOver = dragOverIdx === idx;
-            const color = PRESET_COLORS[scene.preset] || "#6366f1";
+            const color = PRESET_COLORS[scene.preset] || "#818cf8";
+            const isHovered = hoverIdx === idx;
 
             return (
               <div
-                key={idx}
-                draggable={!isPlaying}
+                key={`${idx}-${scene.title}`}
+                draggable={!locked}
                 onDragStart={() => handleDragStart(idx)}
                 onDragOver={(e) => { e.preventDefault(); handleDragOver(idx); }}
                 onDrop={() => handleDrop(idx)}
                 onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
-                onClick={() => !isPlaying && setEditingIdx(editingIdx === idx ? null : idx)}
+                onClick={() => !locked && setEditingIdx(editingIdx === idx ? null : idx)}
+                onMouseEnter={() => setHoverIdx(idx)}
+                onMouseLeave={() => setHoverIdx(null)}
                 style={{
                   position: "relative",
                   minWidth: 120, maxWidth: 180, height: 48,
                   borderRadius: 8, padding: "6px 10px",
                   background: isCurrent
                     ? `linear-gradient(135deg, ${color}33, ${color}11)`
-                    : isDragOver ? "rgba(99,102,241,0.15)" : "rgba(255,255,255,0.04)",
+                    : isDragOver ? "rgba(99,102,241,0.15)"
+                    : locked ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
                   border: `1px solid ${isCurrent ? color + "66" : isDragOver ? "#6366f144" : "rgba(255,255,255,0.06)"}`,
-                  cursor: isPlaying ? "default" : "grab",
-                  opacity: isDragging ? 0.4 : 1,
+                  cursor: locked ? "default" : "grab",
+                  opacity: isDragging ? 0.4 : locked && !isCurrent ? 0.5 : 1,
                   transition: "all 0.15s ease",
                   flexShrink: 0,
                   overflow: "hidden",
@@ -161,21 +187,28 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
                 {/* Scene index badge */}
                 <div style={{
                   position: "absolute", top: 4, left: 6,
-                  fontSize: 9, fontWeight: 700, color: color,
-                  opacity: 0.7,
+                  fontSize: 9, fontWeight: 700, color: color, opacity: 0.7,
                 }}>
                   {idx + 1}
                 </div>
 
-                {/* Remove button (only when not playing) */}
-                {!isPlaying && (
+                {/* Lock icon for past scenes */}
+                {locked && !isCurrent && (
+                  <div style={{ position: "absolute", top: 4, right: 6, fontSize: 8, color: "#555570" }}>✓</div>
+                )}
+
+                {/* Remove button — only for unlocked scenes */}
+                {!locked && (
                   <button
                     onClick={(e) => { e.stopPropagation(); onRemove(idx); }}
                     style={{
                       position: "absolute", top: 2, right: 4,
-                      background: "none", border: "none", color: "#666",
+                      background: "none", border: "none", color: "#555570",
                       cursor: "pointer", fontSize: 11, padding: "0 2px",
+                      opacity: 0.5, transition: "opacity 150ms",
                     }}
+                    onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "1"; (e.target as HTMLElement).style.color = "#f87171"; }}
+                    onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "0.5"; (e.target as HTMLElement).style.color = "#555570"; }}
                     title="Remove scene"
                   >
                     ×
@@ -184,7 +217,7 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
 
                 {/* Title */}
                 <div style={{
-                  fontSize: 11, fontWeight: 600, color: isCurrent ? "#eee" : "#bbb",
+                  fontSize: 11, fontWeight: 600, color: isCurrent ? "#eee" : locked ? "#777" : "#bbb",
                   marginTop: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                 }}>
                   {scene.title}
@@ -200,24 +233,112 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
                     {scene.preset}
                   </span>
                 </div>
+
+                {/* Hover tooltip */}
+                {isHovered && (
+                  <Tooltip scene={scene} idx={idx} locked={locked} isCurrent={isCurrent} />
+                )}
               </div>
             );
           })}
+
+          {/* Add Scene button (always visible) */}
+          {onAddScene && (
+            <button
+              onClick={() => setShowAddForm(true)}
+              style={{
+                minWidth: 40, height: 48, borderRadius: 8,
+                border: "1px dashed rgba(129,140,248,0.3)",
+                background: "transparent", color: "#818cf8",
+                cursor: "pointer", fontSize: 18, flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "all 150ms ease",
+                opacity: 0.5,
+              }}
+              onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "1"; }}
+              onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "0.5"; }}
+              title="Add scene"
+            >
+              +
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Inline scene editor (below strip, shown when a scene is selected) */}
-      {editingIdx !== null && scenes[editingIdx] && !isPlaying && (
+      {/* Inline scene editor */}
+      {editingIdx !== null && scenes[editingIdx] && !isLocked(editingIdx) && (
         <SceneEditor
           scene={scenes[editingIdx]}
           onSave={(updates) => { onEditScene(editingIdx, updates); setEditingIdx(null); }}
           onCancel={() => setEditingIdx(null)}
         />
       )}
+
+      {/* Add scene form */}
+      {showAddForm && (
+        <AddSceneForm
+          onAdd={(s) => { onAddScene?.(s); setShowAddForm(false); }}
+          onCancel={() => setShowAddForm(false)}
+        />
+      )}
     </div>
   );
 }
 
+// ─── Tooltip ───
+function Tooltip({ scene, idx, locked, isCurrent }: { scene: Scene; idx: number; locked: boolean; isCurrent: boolean }) {
+  return (
+    <div style={{
+      position: "absolute", bottom: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)",
+      width: 220, padding: "10px 12px", borderRadius: 10,
+      background: "rgba(16,16,22,0.95)", backdropFilter: "blur(16px)",
+      border: "1px solid rgba(255,255,255,0.08)",
+      boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+      animation: "fadeIn 0.15s ease-out", zIndex: 100, pointerEvents: "none",
+    }}>
+      {/* Status badge */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+        <span style={{
+          fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4,
+          background: isCurrent ? "rgba(74,222,128,0.15)" : locked ? "rgba(255,255,255,0.05)" : "rgba(129,140,248,0.1)",
+          color: isCurrent ? "#4ade80" : locked ? "#666" : "#818cf8",
+        }}>
+          {isCurrent ? "NOW PLAYING" : locked ? "PLAYED" : "UPCOMING"}
+        </span>
+        <span style={{ fontSize: 9, color: "#666" }}>Scene {idx + 1}</span>
+      </div>
+
+      {/* Prompt */}
+      <div style={{ fontSize: 11, color: "#ccc", lineHeight: 1.4, marginBottom: 6 }}>
+        {scene.prompt}
+      </div>
+
+      {/* Config row */}
+      <div style={{ display: "flex", gap: 8, fontSize: 9, color: "#888" }}>
+        <span>🎨 {scene.preset}</span>
+        <span>⏱ {scene.duration}s</span>
+        {scene.noiseScale !== undefined && <span>🎚 noise {scene.noiseScale}</span>}
+      </div>
+
+      {/* Edit hint */}
+      {!locked && (
+        <div style={{ fontSize: 9, color: "#555570", marginTop: 6, fontStyle: "italic" }}>
+          Click to edit
+        </div>
+      )}
+
+      {/* Arrow */}
+      <div style={{
+        position: "absolute", bottom: -5, left: "50%", transform: "translateX(-50%) rotate(45deg)",
+        width: 10, height: 10, background: "rgba(16,16,22,0.95)",
+        borderRight: "1px solid rgba(255,255,255,0.08)",
+        borderBottom: "1px solid rgba(255,255,255,0.08)",
+      }} />
+    </div>
+  );
+}
+
+// ─── Scene Editor ───
 function SceneEditor({ scene, onSave, onCancel }: {
   scene: Scene;
   onSave: (updates: Partial<Scene>) => void;
@@ -232,30 +353,81 @@ function SceneEditor({ scene, onSave, onCancel }: {
     <div style={{
       padding: "8px 12px 10px", borderTop: "1px solid rgba(255,255,255,0.05)",
       display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap",
+      animation: "slideUp 0.2s ease-out",
     }}>
       <div style={{ flex: "0 0 100px" }}>
-        <label style={{ fontSize: 9, color: "#666", display: "block", marginBottom: 2 }}>Title</label>
+        <label style={labelStyle}>Title</label>
         <input value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} />
       </div>
       <div style={{ flex: 1, minWidth: 200 }}>
-        <label style={{ fontSize: 9, color: "#666", display: "block", marginBottom: 2 }}>Prompt</label>
+        <label style={labelStyle}>Prompt</label>
         <input value={prompt} onChange={(e) => setPrompt(e.target.value)} style={inputStyle} />
       </div>
       <div style={{ flex: "0 0 100px" }}>
-        <label style={{ fontSize: 9, color: "#666", display: "block", marginBottom: 2 }}>Preset</label>
+        <label style={labelStyle}>Preset</label>
         <select value={preset} onChange={(e) => setPreset(e.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
-          {Object.keys(PRESET_COLORS).map((p) => <option key={p} value={p}>{p}</option>)}
+          {PRESETS.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
       </div>
       <div style={{ flex: "0 0 60px" }}>
-        <label style={{ fontSize: 9, color: "#666", display: "block", marginBottom: 2 }}>Duration</label>
+        <label style={labelStyle}>Duration</label>
         <input type="number" min={5} max={120} value={duration} onChange={(e) => setDuration(Number(e.target.value))} style={inputStyle} />
       </div>
-      <button onClick={() => onSave({ title, prompt, preset, duration })} style={btnStyle("#6366f1")}>Save</button>
+      <button onClick={() => onSave({ title, prompt, preset, duration })} style={btnStyle("#818cf8")}>Save</button>
       <button onClick={onCancel} style={btnStyle("#555")}>Cancel</button>
     </div>
   );
 }
+
+// ─── Add Scene Form ───
+function AddSceneForm({ onAdd, onCancel }: {
+  onAdd: (scene: Omit<Scene, "index">) => void;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [preset, setPreset] = useState("cinematic");
+  const [duration, setDuration] = useState(30);
+
+  return (
+    <div style={{
+      padding: "8px 12px 10px", borderTop: "1px solid rgba(129,140,248,0.15)",
+      display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap",
+      animation: "slideUp 0.2s ease-out",
+    }}>
+      <div style={{ flex: "0 0 100px" }}>
+        <label style={labelStyle}>Title</label>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Scene name" style={inputStyle} />
+      </div>
+      <div style={{ flex: 1, minWidth: 200 }}>
+        <label style={labelStyle}>Prompt</label>
+        <input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe the visual scene…" style={inputStyle} />
+      </div>
+      <div style={{ flex: "0 0 100px" }}>
+        <label style={labelStyle}>Preset</label>
+        <select value={preset} onChange={(e) => setPreset(e.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+          {PRESETS.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+      </div>
+      <div style={{ flex: "0 0 60px" }}>
+        <label style={labelStyle}>Duration</label>
+        <input type="number" min={5} max={120} value={duration} onChange={(e) => setDuration(Number(e.target.value))} style={inputStyle} />
+      </div>
+      <button
+        onClick={() => { if (title && prompt) onAdd({ title, prompt, preset, duration }); }}
+        style={btnStyle("#4ade80")}
+        disabled={!title || !prompt}
+      >Add</button>
+      <button onClick={onCancel} style={btnStyle("#555")}>Cancel</button>
+    </div>
+  );
+}
+
+// ─── Shared styles ───
+const labelStyle: React.CSSProperties = {
+  fontSize: 9, color: "#666", display: "block", marginBottom: 2,
+  textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600,
+};
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "6px 10px", borderRadius: 8,
@@ -264,11 +436,11 @@ const inputStyle: React.CSSProperties = {
   transition: "border-color 150ms ease",
 };
 
-function btnStyle(bg: string): React.CSSProperties {
+function btnStyle(color: string): React.CSSProperties {
   return {
     padding: "6px 14px", borderRadius: 8, border: "1px solid transparent",
-    background: bg === "#555" ? "rgba(255,255,255,0.04)" : bg + "1a",
-    color: bg === "#555" ? "#8888aa" : bg,
+    background: color === "#555" ? "rgba(255,255,255,0.04)" : color + "1a",
+    color: color === "#555" ? "#8888aa" : color,
     cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit",
     transition: "all 150ms ease",
   };

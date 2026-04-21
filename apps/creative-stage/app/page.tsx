@@ -468,8 +468,9 @@ export default function Stage() {
           }}
           onStop={() => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); }}
           onReorder={(from, to) => { perfRef.current.reorderScenes(from, to); setPerfState(perfRef.current.getState()); }}
-          onRemove={(idx) => { perfRef.current.scenes.splice(idx, 1); perfRef.current.scenes.forEach((s, i) => { s.index = i; }); setPerfState(perfRef.current.getState()); }}
-          onEditScene={(idx, updates) => { Object.assign(perfRef.current.scenes[idx], updates); setPerfState(perfRef.current.getState()); }}
+          onRemove={(idx) => { perfRef.current.removeScene(idx); setPerfState(perfRef.current.getState()); }}
+          onEditScene={(idx, updates) => { perfRef.current.editScene(idx, updates); setPerfState(perfRef.current.getState()); }}
+          onAddScene={(scene) => { perfRef.current.addScene(scene); setPerfState(perfRef.current.getState()); }}
         />
 
         {/* Record */}
