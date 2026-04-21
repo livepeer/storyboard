@@ -271,6 +271,7 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
       {/* Inline scene editor */}
       {editingIdx !== null && scenes[editingIdx] && !isLocked(editingIdx) && (
         <SceneEditor
+          key={editingIdx}
           scene={scenes[editingIdx]}
           onSave={(updates) => { onEditScene(editingIdx, updates); setEditingIdx(null); }}
           onCancel={() => setEditingIdx(null)}
