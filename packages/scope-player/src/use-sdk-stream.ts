@@ -75,6 +75,9 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
 
       updateState({ status: "warming", streamId, phase: "warming up GPU…" });
 
+      // Publish blank frames so the pipeline has input to process
+      publishBlankFrames(streamId);
+
       // Start polling frames immediately — first frame arrival transitions to "streaming"
       frameCountRef.current = 0;
       fpsStartRef.current = performance.now();
@@ -96,10 +99,57 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
 
     updateState({ status: "warming", streamId, phase: "connecting to stream…" });
 
+    // Start publishing blank frames — the SDK requires input frames even for
+    // "text-only" mode because the pipeline processes input→output. Without
+    // published frames, the pipeline has nothing to process and the stream
+    // times out. Scope applies noise_scale to transform the blank input.
+    publishBlankFrames(streamId);
+
     frameCountRef.current = 0;
     fpsStartRef.current = performance.now();
     pollFrames(streamId);
   }, [updateState]);
+
+  // Publish blank (black) frames at 10fps to keep the pipeline fed.
+  // The SDK requires input even for "text-only" streams — Scope applies
+  // noise/prompt to transform the input. With high noise_scale (>0.5),
+  // the black input is almost entirely replaced by the generated scene.
+  const publishBlankFrames = useCallback(async (streamId: string) => {
+    // Create a 512x512 black JPEG
+    const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
+    if (!canvas) return;
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, 512, 512);
+
+    let seq = 0;
+    const publishHeaders: Record<string, string> = {};
+    if (opts.apiKey) publishHeaders["Authorization"] = `Bearer ${opts.apiKey}`;
+
+    async function publishLoop() {
+      while (runningRef.current && streamIdRef.current === streamId) {
+        try {
+          const blob = await new Promise<Blob>((resolve) =>
+            canvas!.toBlob((b) => resolve(b!), "image/jpeg", 0.5)
+          );
+          await fetch(`${opts.sdkUrl}/stream/${streamId}/publish?seq=${seq}`, {
+            method: "POST",
+            headers: { "Content-Type": "image/jpeg", ...publishHeaders },
+            body: blob,
+          });
+          seq++;
+        } catch {
+          // Network error — continue
+        }
+        await new Promise((r) => setTimeout(r, 100)); // 10fps publish rate
+      }
+    }
+    // Fire and forget — runs until stream stops
+    publishLoop();
+  }, [opts.sdkUrl, opts.apiKey]);
 
   // Poll frames — dual-fetcher for higher throughput
   const pollFrames = useCallback(async (streamId: string) => {

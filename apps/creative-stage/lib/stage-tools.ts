@@ -62,6 +62,7 @@ export function createStageTools(ctx: StageToolContext) {
           body: JSON.stringify({
             model_id: "scope",
             params: {
+              prompt: prompt,
               prompts: prompt,
               graph: textOnlyGraph(),
               pipeline_ids: ["longlive"],
