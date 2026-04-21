@@ -529,14 +529,16 @@ export function createStageTools(ctx: StageToolContext) {
           // Try seedance first, fallback to ltx
           for (const cap of ["seedance-i2v", "ltx-i2v"]) {
             try {
+              // Pass image URL via params.image_url (not image_data which expects base64)
+              // The SDK merges params into the BYOC payload, and fal models read image_url directly
               const params: Record<string, unknown> = cap === "seedance-i2v"
-                ? { duration: String(dur), aspect_ratio: "16:9" }
-                : { duration: dur };
+                ? { image_url: fromUrl, duration: String(dur), aspect_ratio: "16:9" }
+                : { image_url: fromUrl, duration: dur };
 
               const resp = await fetch(`${ctx.sdkUrl}/inference`, {
                 method: "POST",
                 headers: headers(),
-                body: JSON.stringify({ capability: cap, prompt: toPrompt, image_data: fromUrl, params }),
+                body: JSON.stringify({ capability: cap, prompt: toPrompt, params }),
               });
 
               if (resp.ok) {
@@ -545,9 +547,17 @@ export function createStageTools(ctx: StageToolContext) {
                 if (videoUrl) {
                   ctx.say(`Transition ${i + 1} complete (${cap})`);
                   break;
+                } else {
+                  console.log(`[cinematic] Transition ${i+1} ${cap} ok but no URL:`, JSON.stringify(data).slice(0, 200));
                 }
+              } else {
+                const errText = await resp.text().catch(() => "");
+                console.log(`[cinematic] Transition ${i+1} ${cap} failed ${resp.status}:`, errText.slice(0, 150));
+                ctx.say(`Transition ${i + 1} (${cap}): ${resp.status} — trying next model…`);
               }
-            } catch { /* try next */ }
+            } catch (e) {
+              console.log(`[cinematic] Transition ${i+1} ${cap} error:`, (e as Error).message);
+            }
           }
 
           if (videoUrl) {
