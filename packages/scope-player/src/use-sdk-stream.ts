@@ -110,12 +110,11 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
     pollFrames(streamId);
   }, [updateState]);
 
-  // Publish blank (black) frames at 10fps to keep the pipeline fed.
-  // The SDK requires input even for "text-only" streams — Scope applies
-  // noise/prompt to transform the input. With high noise_scale (>0.5),
-  // the black input is almost entirely replaced by the generated scene.
+  // Publish blank (black) frames to keep the pipeline fed.
+  // The SDK creates per-stream trickle channels during _init_stream_session
+  // (30-90s cold start). Until then, /publish returns 404. We poll slowly
+  // (every 2s) until the first successful publish, then ramp up to 10fps.
   const publishBlankFrames = useCallback(async (streamId: string) => {
-    // Create a 512x512 black JPEG
     const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
     if (!canvas) return;
     canvas.width = 512;
@@ -126,28 +125,53 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
     ctx.fillRect(0, 0, 512, 512);
 
     let seq = 0;
+    let consecutive404 = 0;
+    let publishReady = false;
     const publishHeaders: Record<string, string> = {};
     if (opts.apiKey) publishHeaders["Authorization"] = `Bearer ${opts.apiKey}`;
+
+    // Pre-create the JPEG blob once (reuse for all frames)
+    const blob = await new Promise<Blob>((resolve) =>
+      canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.5)
+    );
 
     async function publishLoop() {
       while (runningRef.current && streamIdRef.current === streamId) {
         try {
-          const blob = await new Promise<Blob>((resolve) =>
-            canvas!.toBlob((b) => resolve(b!), "image/jpeg", 0.5)
-          );
-          await fetch(`${opts.sdkUrl}/stream/${streamId}/publish?seq=${seq}`, {
+          const resp = await fetch(`${opts.sdkUrl}/stream/${streamId}/publish?seq=${seq}`, {
             method: "POST",
             headers: { "Content-Type": "image/jpeg", ...publishHeaders },
             body: blob,
           });
-          seq++;
+
+          if (resp.ok || resp.status === 200 || resp.status === 204) {
+            seq++;
+            consecutive404 = 0;
+            if (!publishReady) {
+              publishReady = true;
+              console.log("[ScopePlayer] Publish channel ready, ramping to 10fps");
+            }
+          } else if (resp.status === 404) {
+            consecutive404++;
+            // During warm-up, 404 is expected (session not initialized yet)
+            // After publish was working, 404 means stream died
+            if (publishReady && consecutive404 > 5) {
+              console.log("[ScopePlayer] Publish 404 after ready — stream gone");
+              return;
+            }
+          } else if (resp.status === 410) {
+            console.log("[ScopePlayer] Publish 410 — stream ended");
+            return;
+          }
         } catch {
           // Network error — continue
         }
-        await new Promise((r) => setTimeout(r, 100)); // 10fps publish rate
+
+        // Slow poll during warm-up, fast during streaming
+        const delay = publishReady ? 100 : 2000;
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
-    // Fire and forget — runs until stream stops
     publishLoop();
   }, [opts.sdkUrl, opts.apiKey]);
 
