@@ -1143,20 +1143,31 @@ function parseScript(raw: string, style: "solo" | "duo" | "interview"): Array<{ 
  * /music <description> — generate a music track
  * /sfx <description> — generate a sound effect
  */
+/**
+ * /music <description> — generate music via minimax-music/v2
+ * Requires: prompt (style description) + lyrics_prompt (song lyrics/structure)
+ * If user provides just a description, we auto-generate lyrics structure.
+ *
+ * /sfx <description> --video <card> — generate sound effects for a video via mmaudio-v2
+ * Requires: video_url + prompt
+ */
 async function handleMusic(args: string, isSfx = false): Promise<string> {
-  const cmd = isSfx ? "/sfx" : "/music";
-  const cap = isSfx ? "sfx" : "music";
   if (!args.trim()) {
     return isSfx
-      ? "Usage: /sfx <description>\nExample: /sfx thunderstorm with heavy rain"
+      ? [
+          "Usage: /sfx <description> --video <card>",
+          "",
+          "Generates audio/sound effects for an existing video card.",
+          "Example: /sfx thunderstorm with rain --video vid-1",
+        ].join("\n")
       : [
-          "Usage: /music <description>",
+          "Usage: /music <style description>",
+          "       /music <style> --lyrics <lyrics text>",
           "",
           "Examples:",
-          "  /music upbeat electronic, energetic, 120bpm, product demo",
-          "  /music lo-fi chill hip hop, rainy day study vibes",
-          "  /music cinematic orchestral, epic trailer, dramatic strings",
-          "  /music acoustic guitar, warm, sunset campfire feel",
+          "  /music upbeat electronic, energetic, 120bpm",
+          "  /music lo-fi chill hip hop, rainy day vibes",
+          '  /music pop ballad --lyrics [Verse] Walking through the rain [Chorus] You light up my world',
         ].join("\n");
   }
 
@@ -1166,28 +1177,68 @@ async function handleMusic(args: string, isSfx = false): Promise<string> {
   const canvas = useCanvasStore.getState();
   const say = (msg: string) => useChatStore.getState().addMessage(msg, "system");
 
-  say(`Generating ${isSfx ? "sound effect" : "music"}: "${args.slice(0, 50)}"…`);
+  if (isSfx) {
+    // SFX: requires video_url
+    const videoMatch = args.match(/--video\s+(\S+)/i);
+    if (!videoMatch) return "Usage: /sfx <description> --video <card>\nmmaudio requires a video input.";
+    const videoRef = videoMatch[1];
+    const videoCard = canvas.cards.find((c) => c.refId === videoRef);
+    if (!videoCard?.url) return `Video card "${videoRef}" not found or has no URL.`;
+    const prompt = args.replace(/--video\s+\S+/i, "").trim();
+    if (!prompt) return "Provide a description of the sound (e.g., /sfx ocean waves crashing --video vid-1)";
 
+    say(`Generating sound effects for "${videoRef}": "${prompt.slice(0, 40)}"…`);
+    try {
+      const result = await runInference({
+        capability: "sfx",
+        prompt,
+        params: { prompt, video_url: videoCard.url },
+      });
+      const r = result as Record<string, unknown>;
+      const data = (r.data ?? r) as Record<string, unknown>;
+      const audioUrl = (r.audio_url as string) ?? (data.audio as { url: string })?.url ?? (data.audio_file as { url: string })?.url;
+      const falError = extractFalError(data);
+      if (falError) return `/sfx failed: ${falError}`;
+      if (!audioUrl) return "/sfx returned no audio.";
+
+      const refId = `sfx-${Date.now()}`;
+      const card = canvas.addCard({ type: "audio", title: `SFX: ${prompt.slice(0, 25)}`, refId });
+      canvas.updateCard(card.id, { url: audioUrl, capability: "sfx" });
+      canvas.addEdge(videoRef, refId, { action: "sfx" });
+      return `Sound effect created: ${refId} (linked to ${videoRef})`;
+    } catch (e) {
+      return `/sfx failed: ${e instanceof Error ? e.message : "unknown"}`;
+    }
+  }
+
+  // Music: minimax-music/v2 requires prompt + lyrics_prompt
+  const lyricsMatch = args.match(/--lyrics\s+([\s\S]+)/i);
+  const stylePrompt = args.replace(/--lyrics\s+[\s\S]+/i, "").trim();
+  // Auto-generate lyrics structure if not provided
+  const lyrics = lyricsMatch?.[1]?.trim()
+    || `[Intro]\n[Verse]\n${stylePrompt}\n[Chorus]\n${stylePrompt}\n[Outro]`;
+
+  say(`Generating music: "${stylePrompt.slice(0, 40)}"…`);
   try {
-    // minimax-music expects {prompt}, mmaudio-v2 expects {prompt} too
-    // but both may need the prompt in params.prompt as well as top-level
-    const result = await runInference({ capability: cap, prompt: args, params: { prompt: args } });
+    const result = await runInference({
+      capability: "music",
+      prompt: stylePrompt,
+      params: { prompt: stylePrompt, lyrics_prompt: lyrics },
+    });
     const r = result as Record<string, unknown>;
     const data = (r.data ?? r) as Record<string, unknown>;
     const audioUrl = (r.audio_url as string)
       ?? (data.audio as { url: string })?.url
-      ?? (data.audio_file as { url: string })?.url
-      ?? (data.output as string);
+      ?? (data.audio_file as { url: string })?.url;
     const falError = extractFalError(data);
+    if (falError) return `/music failed: ${falError}`;
+    if (!audioUrl) return "/music returned no audio.";
 
-    if (falError) return `${cmd} failed: ${falError}`;
-    if (!audioUrl) return `${cmd} returned no audio.`;
-
-    const refId = `${isSfx ? "sfx" : "music"}-${Date.now()}`;
-    const card = canvas.addCard({ type: "audio", title: `${isSfx ? "SFX" : "Music"}: ${args.slice(0, 30)}`, refId });
-    canvas.updateCard(card.id, { url: audioUrl, capability: cap });
-    return `${isSfx ? "Sound effect" : "Music"} created: ${refId}`;
+    const refId = `music-${Date.now()}`;
+    const card = canvas.addCard({ type: "audio", title: `Music: ${stylePrompt.slice(0, 25)}`, refId });
+    canvas.updateCard(card.id, { url: audioUrl, capability: "music" });
+    return `Music created: ${refId}`;
   } catch (e) {
-    return `${cmd} failed: ${e instanceof Error ? e.message : "unknown"}`;
+    return `/music failed: ${e instanceof Error ? e.message : "unknown"}`;
   }
 }
