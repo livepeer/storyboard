@@ -50,6 +50,7 @@ const ACTIONS: MenuAction[] = [
   { id: "talking-video", label: "Talking Video\u2026", icon: "\uD83D\uDDE3", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "analyze", label: "Analyze Media", icon: "\uD83D\uDD0D", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
   { id: "transform-video", label: "Transform Video\u2026", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true, mode: "direct" },
+  { id: "mix-audio", label: "Mix with Audio\u2026", icon: "\uD83C\uDFB5", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   // --- LV2V from card ---
   { id: "lv2v-from-card", label: "Start LV2V Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
   // --- Agent-assisted (routes to chat) ---
@@ -605,6 +606,36 @@ export function ContextMenu() {
           }
         } catch (e) {
           addMessage(`Talking video failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
+        }
+        return;
+      }
+
+      // --- Mix with Audio: combine video + audio card ---
+      if (action.id === "mix-audio") {
+        const audioRef = await styledPrompt("Mix with Audio", "Enter audio card name (e.g. music-1, aud-talk-2)");
+        if (!audioRef) return;
+        const allCards = useCanvasStore.getState().cards;
+        const audioCard = allCards.find((c) => c.refId === audioRef.trim());
+        if (!audioCard?.url) {
+          addMessage(`Card "${audioRef}" not found or has no audio.`, "system");
+          return;
+        }
+        addMessage(`Mixing "${targetCard.title}" + "${audioCard.title}"…`, "system");
+        try {
+          const { mixVideoAudio } = await import("@livepeer/creative-kit");
+          const blobUrl = await mixVideoAudio({
+            videoUrl: targetCard.url!,
+            audioUrl: audioCard.url!,
+            maxDuration: 60,
+          });
+          const refId = `mix-${Date.now()}`;
+          const card = addCard({ type: "video", title: `Mix: ${targetCard.title}`, refId });
+          updateCard(card.id, { url: blobUrl });
+          addEdge(targetCard.refId, refId, { action: "mix" });
+          addEdge(audioCard.refId, refId, { action: "mix" });
+          addMessage("Mix complete — video + audio combined!", "system");
+        } catch (e) {
+          addMessage(`Mix failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
         }
         return;
       }
