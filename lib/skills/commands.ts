@@ -1169,7 +1169,9 @@ async function handleMusic(args: string, isSfx = false): Promise<string> {
   say(`Generating ${isSfx ? "sound effect" : "music"}: "${args.slice(0, 50)}"…`);
 
   try {
-    const result = await runInference({ capability: cap, prompt: args, params: {} });
+    // minimax-music expects {prompt}, mmaudio-v2 expects {prompt} too
+    // but both may need the prompt in params.prompt as well as top-level
+    const result = await runInference({ capability: cap, prompt: args, params: { prompt: args } });
     const r = result as Record<string, unknown>;
     const data = (r.data ?? r) as Record<string, unknown>;
     const audioUrl = (r.audio_url as string)
