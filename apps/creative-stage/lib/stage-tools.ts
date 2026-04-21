@@ -23,6 +23,9 @@ export interface StageToolContext {
   streamId: string | null;
   setStreamId: (id: string | null) => void;
   controlStream: (params: Partial<ScopeParams>) => Promise<void>;
+  setScenes: (scenes: Array<{ title: string; prompt: string; preset: string; duration: number }>) => void;
+  playPerformance: () => void;
+  stopPerformance: () => void;
 }
 
 export function createStageTools(ctx: StageToolContext) {
@@ -179,6 +182,64 @@ export function createStageTools(ctx: StageToolContext) {
         if (!ctx.streamId) return JSON.stringify({ error: "No active stream" });
         await ctx.controlStream({ recording: args.action === "start" });
         return JSON.stringify({ status: args.action === "start" ? "recording" : "stopped" });
+      },
+    },
+
+    {
+      name: "stage_scene",
+      description: "Create a multi-scene performance timeline. Each scene has a title, prompt, visual preset, and duration. The stream will auto-transition through scenes using prompt traveling.",
+      parameters: {
+        type: "object",
+        properties: {
+          scenes: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "Short scene title" },
+                prompt: { type: "string", description: "Visual description for this scene" },
+                preset: { type: "string", description: "Visual preset: dreamy, cinematic, anime, abstract, faithful, painterly, psychedelic" },
+                duration: { type: "number", description: "Scene duration in seconds (10-120)" },
+              },
+              required: ["title", "prompt", "preset", "duration"],
+            },
+            description: "Array of scenes in performance order",
+          },
+        },
+        required: ["scenes"],
+      },
+      async execute(args: Record<string, unknown>) {
+        const scenes = args.scenes as Array<{ title: string; prompt: string; preset: string; duration: number }>;
+        if (!scenes || scenes.length === 0) return JSON.stringify({ error: "No scenes provided" });
+        ctx.setScenes(scenes);
+        const total = scenes.reduce((s, sc) => s + sc.duration, 0);
+        return JSON.stringify({
+          status: "scenes_loaded",
+          count: scenes.length,
+          total_duration: total,
+          message: `${scenes.length} scenes loaded (${total}s). Use stage_perform to start.`,
+        });
+      },
+    },
+
+    {
+      name: "stage_perform",
+      description: "Start or stop the performance — auto-plays through all loaded scenes with prompt traveling transitions",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["play", "stop"], description: "Play or stop the performance" },
+        },
+        required: ["action"],
+      },
+      async execute(args: Record<string, unknown>) {
+        if (args.action === "stop") {
+          ctx.stopPerformance();
+          return JSON.stringify({ status: "stopped" });
+        }
+        if (!ctx.streamId) return JSON.stringify({ error: "Start a stream first with stage_start, then play the performance" });
+        ctx.playPerformance();
+        return JSON.stringify({ status: "playing" });
       },
     },
   ];

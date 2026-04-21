@@ -12,6 +12,8 @@ import {
 import { ScopePlayer, type ScopeParams, type ScopeStreamState } from "@livepeer/scope-player";
 import { AgentRunner, ToolRegistry, WorkingMemoryStore, SessionMemoryStore } from "@livepeer/agent";
 import { createStageTools, type StageToolContext } from "../lib/stage-tools";
+import { PerformanceEngine, type PerformanceState, type Scene } from "../lib/performance";
+import { SceneStrip } from "../components/SceneStrip";
 
 // Stores
 const artifacts = createArtifactStore();
@@ -36,6 +38,8 @@ export default function Stage() {
   const controlRef = useRef<((params: Partial<ScopeParams>) => Promise<void>) | null>(null);
 
   const [messages, setMessages] = useState(chat.getState().messages);
+  const perfRef = useRef(new PerformanceEngine());
+  const [perfState, setPerfState] = useState<PerformanceState>({ scenes: [], currentScene: 0, isPlaying: false, elapsed: 0, totalDuration: 0 });
 
   useEffect(() => {
     setMounted(true);
@@ -69,6 +73,19 @@ export default function Stage() {
     const say = (msg: string) => chat.getState().addMessage(msg, "system");
 
     // Build agent with stage tools
+    const controlStreamFn = async (params: Record<string, unknown>) => {
+      if (!streamIdRef.current) return;
+      const cfg = getSdkConfig();
+      await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}),
+        },
+        body: JSON.stringify({ type: "parameters", params }),
+      });
+    };
+
     const toolCtx: StageToolContext = {
       sdkUrl: sdk.url,
       apiKey: sdk.key,
@@ -76,26 +93,29 @@ export default function Stage() {
       setStreamId: (id) => {
         streamIdRef.current = id;
         if (id) {
-          // Start the ScopePlayer by setting params
           setStreamParams({
-            prompts: text, // will be overridden by the tool's actual params
+            prompts: text,
           });
         }
       },
       controlStream: async (params) => {
-        if (!streamIdRef.current) return;
         try {
-          await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}),
-            },
-            body: JSON.stringify({ type: "parameters", params }),
-          });
+          await controlStreamFn(params as Record<string, unknown>);
         } catch (e) {
           say(`Control failed: ${(e as Error).message}`);
         }
+      },
+      setScenes: (scenes) => {
+        const indexed: Scene[] = scenes.map((s, i) => ({ ...s, index: i }));
+        perfRef.current.setScenes(indexed);
+        setPerfState(perfRef.current.getState());
+      },
+      playPerformance: () => {
+        perfRef.current.play(controlStreamFn, setPerfState);
+      },
+      stopPerformance: () => {
+        perfRef.current.stop();
+        setPerfState(perfRef.current.getState());
       },
     };
 
@@ -319,6 +339,46 @@ export default function Stage() {
             </ArtifactCard>
           ))}
         </InfiniteBoard>
+
+        {/* Scene Timeline Strip (bottom of canvas) */}
+        <SceneStrip
+          state={perfState}
+          onPlay={() => {
+            if (!streamIdRef.current) {
+              chat.getState().addMessage("Start a stream first, then play the performance.", "system");
+              return;
+            }
+            const sdk = getSdkConfig();
+            const controlFn = async (params: Record<string, unknown>) => {
+              await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}),
+                },
+                body: JSON.stringify({ type: "parameters", params }),
+              });
+            };
+            perfRef.current.play(controlFn, setPerfState);
+          }}
+          onStop={() => {
+            perfRef.current.stop();
+            setPerfState(perfRef.current.getState());
+          }}
+          onReorder={(from, to) => {
+            perfRef.current.reorderScenes(from, to);
+            setPerfState(perfRef.current.getState());
+          }}
+          onRemove={(idx) => {
+            perfRef.current.scenes.splice(idx, 1);
+            perfRef.current.scenes.forEach((s, i) => { s.index = i; });
+            setPerfState(perfRef.current.getState());
+          }}
+          onEditScene={(idx, updates) => {
+            Object.assign(perfRef.current.scenes[idx], updates);
+            setPerfState(perfRef.current.getState());
+          }}
+        />
 
         {/* Import + Settings buttons */}
         <button
