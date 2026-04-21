@@ -398,7 +398,7 @@ export function createStageTools(ctx: StageToolContext) {
         const data = await resp.json();
         // Extract audio URL from various response shapes
         const audioUrl = (data.audio_url as string)
-          ?? (data.data as Record<string, unknown>)?.audio && ((data.data as Record<string, unknown>).audio as { url: string })?.url
+          ?? ((data.data as Record<string, unknown>)?.audio ? ((data.data as Record<string, unknown>).audio as { url: string })?.url : undefined)
           ?? (data.url as string);
 
         if (!audioUrl) {
