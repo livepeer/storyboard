@@ -26,6 +26,8 @@ export interface StageToolContext {
   setScenes: (scenes: Array<{ title: string; prompt: string; preset: string; duration: number }>) => void;
   playPerformance: () => void;
   stopPerformance: () => void;
+  /** Queue performance to auto-play when stream becomes ready */
+  playWhenReady: () => void;
   setAudioUrl: (url: string) => void;
   setBpm: (bpm: number) => void;
 }
@@ -260,8 +262,8 @@ export function createStageTools(ctx: StageToolContext) {
               if (data.stream_id) {
                 console.log("[stage_scene] Stream started:", data.stream_id);
                 ctx.setStreamId(data.stream_id);
-                // Auto-play once stream is ready
-                setTimeout(() => ctx.playPerformance(), 500);
+                // Queue performance to auto-play when stream is ready (first frame)
+                ctx.playWhenReady();
               }
             } else {
               const text = await resp.text().catch(() => "");

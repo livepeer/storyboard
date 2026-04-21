@@ -135,6 +135,7 @@ export default function Stage() {
   const recorderRef = useRef(new StageRecorder());
   const [recState, setRecState] = useState<RecorderState>({ isRecording: false, duration: 0, blobUrl: null });
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pendingPlayRef = useRef(false);
 
   useEffect(() => {
     setMounted(true);
@@ -142,6 +143,23 @@ export default function Stage() {
     const unsubChat = chat.subscribe((s) => setMessages([...s.messages]));
     return () => { unsubArt(); unsubChat(); };
   }, []);
+
+  // Auto-play performance when stream becomes ready
+  useEffect(() => {
+    if (pendingPlayRef.current && streamState?.status === "streaming" && streamIdRef.current) {
+      pendingPlayRef.current = false;
+      const sdk = getSdkConfig();
+      const controlFn = async (params: Record<string, unknown>) => {
+        await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
+          body: JSON.stringify({ type: "parameters", params }),
+        });
+      };
+      perfRef.current.play(controlFn, setPerfState);
+      chat.getState().addMessage("Stream ready — performance playing!", "system");
+    }
+  }, [streamState?.status]);
 
   // Test hook for E2E
   useEffect(() => {
@@ -200,6 +218,7 @@ export default function Stage() {
       },
       playPerformance: () => { perfRef.current.play(controlStreamFn, setPerfState); },
       stopPerformance: () => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); },
+      playWhenReady: () => { pendingPlayRef.current = true; },
       setAudioUrl, setBpm,
     };
 
