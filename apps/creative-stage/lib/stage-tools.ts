@@ -26,6 +26,8 @@ export interface StageToolContext {
   setScenes: (scenes: Array<{ title: string; prompt: string; preset: string; duration: number }>) => void;
   playPerformance: () => void;
   stopPerformance: () => void;
+  setAudioUrl: (url: string) => void;
+  setBpm: (bpm: number) => void;
 }
 
 export function createStageTools(ctx: StageToolContext) {
@@ -240,6 +242,67 @@ export function createStageTools(ctx: StageToolContext) {
         if (!ctx.streamId) return JSON.stringify({ error: "Start a stream first with stage_start, then play the performance" });
         ctx.playPerformance();
         return JSON.stringify({ status: "playing" });
+      },
+    },
+
+    {
+      name: "stage_music",
+      description: "Generate background music for the performance, then sync visuals to its beat",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string", description: "Music description (mood, genre, tempo)" },
+          bpm: { type: "number", description: "Target BPM if known (60-200)" },
+          sync_param: { type: "string", description: "Visual parameter to modulate with the beat (default: noise_scale)" },
+          sync_depth: { type: "number", description: "Modulation depth 0.0-1.0 (default: 0.3)" },
+        },
+        required: ["prompt"],
+      },
+      async execute(args: Record<string, unknown>) {
+        const prompt = args.prompt as string;
+
+        // Generate music via SDK inference
+        const resp = await fetch(`${ctx.sdkUrl}/inference`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({
+            model_id: "music",
+            params: { prompt, duration: 30 },
+          }),
+        });
+
+        if (!resp.ok) {
+          return JSON.stringify({ error: `Music generation failed: ${resp.status}` });
+        }
+
+        const data = await resp.json();
+        const audioUrl = data.url || data.audio_url;
+        if (!audioUrl) return JSON.stringify({ error: "No audio URL returned" });
+
+        ctx.setAudioUrl(audioUrl);
+
+        // Apply beat sync if stream active
+        const targetBpm = args.bpm as number || 120;
+        ctx.setBpm(targetBpm);
+
+        if (ctx.streamId) {
+          const syncParam = (args.sync_param as string) || "noise_scale";
+          const depth = (args.sync_depth as number) ?? 0.3;
+          await ctx.controlStream({
+            modulation: {
+              [syncParam]: {
+                enabled: true, shape: "cosine", rate: "bar", depth,
+              },
+            },
+          });
+        }
+
+        return JSON.stringify({
+          status: "music_loaded",
+          audio_url: audioUrl,
+          bpm: targetBpm,
+          message: `Music generated and loaded. ${ctx.streamId ? "Beat sync active." : "Start a stream to enable beat sync."}`,
+        });
       },
     },
   ];

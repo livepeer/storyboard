@@ -14,6 +14,8 @@ import { AgentRunner, ToolRegistry, WorkingMemoryStore, SessionMemoryStore } fro
 import { createStageTools, type StageToolContext } from "../lib/stage-tools";
 import { PerformanceEngine, type PerformanceState, type Scene } from "../lib/performance";
 import { SceneStrip } from "../components/SceneStrip";
+import { WaveformBar } from "../components/WaveformBar";
+import { detectBpm } from "../lib/bpm-detect";
 
 // Stores
 const artifacts = createArtifactStore();
@@ -40,6 +42,8 @@ export default function Stage() {
   const [messages, setMessages] = useState(chat.getState().messages);
   const perfRef = useRef(new PerformanceEngine());
   const [perfState, setPerfState] = useState<PerformanceState>({ scenes: [], currentScene: 0, isPlaying: false, elapsed: 0, totalDuration: 0 });
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [bpm, setBpm] = useState<number | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -117,6 +121,8 @@ export default function Stage() {
         perfRef.current.stop();
         setPerfState(perfRef.current.getState());
       },
+      setAudioUrl,
+      setBpm,
     };
 
     const tools = new ToolRegistry();
@@ -194,6 +200,15 @@ export default function Stage() {
       const store = artifacts.getState();
       const refId = `${type}-${Date.now()}`;
       store.add({ type, title, refId, url: blobUrl, x: 50, y: 500 });
+
+      // Auto-detect BPM for audio files
+      if (isAudio) {
+        setAudioUrl(blobUrl);
+        detectBpm(file).then((result) => {
+          setBpm(result.bpm);
+          chat.getState().addMessage(`Audio loaded: ${title} — ${result.bpm} BPM (${Math.round(result.confidence * 100)}% confidence)`, "system");
+        }).catch(() => {});
+      }
 
       // Upload to GCS for public URL
       const reader = new FileReader();
@@ -339,6 +354,39 @@ export default function Stage() {
             </ArtifactCard>
           ))}
         </InfiniteBoard>
+
+        {/* Waveform Bar (above scene strip when audio loaded) */}
+        <WaveformBar
+          audioUrl={audioUrl}
+          bpm={bpm}
+          isPlaying={perfState.isPlaying}
+          currentTime={perfState.elapsed}
+          totalDuration={perfState.totalDuration}
+          onSync={(detectedBpm) => {
+            if (!streamIdRef.current) return;
+            const sdk = getSdkConfig();
+            fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}),
+              },
+              body: JSON.stringify({
+                type: "parameters",
+                params: {
+                  modulation: {
+                    noise_scale: {
+                      enabled: true, shape: "cosine", rate: "bar",
+                      depth: 0.3, bpm: detectedBpm,
+                    },
+                  },
+                },
+              }),
+            }).then(() => {
+              chat.getState().addMessage(`Beat sync enabled: ${detectedBpm} BPM → noise_scale modulation`, "system");
+            }).catch(() => {});
+          }}
+        />
 
         {/* Scene Timeline Strip (bottom of canvas) */}
         <SceneStrip
