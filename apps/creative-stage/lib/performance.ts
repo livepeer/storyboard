@@ -1,11 +1,14 @@
 /**
  * Performance Engine — sequences scenes over time with prompt traveling.
- * Each scene has a prompt, preset, duration. Transitions happen via
- * SDK /stream/{id}/control calls (seamless morph, no restart).
  *
- * Supports live editing: add, remove, reorder, or edit any scene
- * that hasn't been reached yet — even during playback. The engine
- * reschedules all future timers when the timeline changes.
+ * Each scene transition sends full Scope control params:
+ * - prompts + transition (slerp interpolation over N steps)
+ * - noise_scale (creativity) — higher during transformation scenes
+ * - kv_cache_attention_bias — lower during morphs (responsive), higher during stable shots (consistent)
+ * - denoising_step_list — fewer steps during rapid morphs for speed
+ * - reset_cache on dramatic transitions to break temporal persistence
+ *
+ * Supports live editing of future scenes during playback.
  */
 
 export interface Scene {
@@ -26,6 +29,51 @@ export interface PerformanceState {
 }
 
 type ControlFn = (params: Record<string, unknown>) => Promise<void>;
+
+/** Preset → full Scope param set optimized for morphing */
+const PRESET_PARAMS: Record<string, {
+  noise_scale: number;
+  kv_cache_attention_bias: number;
+  denoising_step_list: number[];
+  transition_steps: number;
+  reset_cache?: boolean;
+}> = {
+  dreamy:      { noise_scale: 0.7,  kv_cache_attention_bias: 0.3,  denoising_step_list: [1000, 500], transition_steps: 12 },
+  cinematic:   { noise_scale: 0.5,  kv_cache_attention_bias: 0.6,  denoising_step_list: [1000, 750, 500, 250], transition_steps: 16 },
+  anime:       { noise_scale: 0.6,  kv_cache_attention_bias: 0.4,  denoising_step_list: [1000, 750, 500], transition_steps: 12 },
+  abstract:    { noise_scale: 0.95, kv_cache_attention_bias: 0.08, denoising_step_list: [1000, 500], transition_steps: 8, reset_cache: true },
+  faithful:    { noise_scale: 0.2,  kv_cache_attention_bias: 0.85, denoising_step_list: [1000, 750, 500, 250], transition_steps: 20 },
+  painterly:   { noise_scale: 0.65, kv_cache_attention_bias: 0.4,  denoising_step_list: [1000, 750, 500], transition_steps: 14 },
+  psychedelic: { noise_scale: 0.9,  kv_cache_attention_bias: 0.05, denoising_step_list: [1000, 500], transition_steps: 6, reset_cache: true },
+};
+
+function buildControlParams(scene: Scene, prevScene?: Scene): Record<string, unknown> {
+  const params = PRESET_PARAMS[scene.preset] || PRESET_PARAMS.cinematic;
+  const noise = scene.noiseScale ?? params.noise_scale;
+
+  const control: Record<string, unknown> = {
+    prompts: scene.prompt,
+    noise_scale: noise,
+    kv_cache_attention_bias: params.kv_cache_attention_bias,
+    denoising_step_list: params.denoising_step_list,
+  };
+
+  // Use slerp transition for smooth morphing between scenes
+  if (prevScene) {
+    control.transition = {
+      target_prompts: [{ text: scene.prompt, weight: 1.0 }],
+      num_steps: params.transition_steps,
+      temporal_interpolation_method: "slerp",
+    };
+  }
+
+  // Reset cache on dramatic preset changes for clean break
+  if (params.reset_cache) {
+    control.reset_cache = true;
+  }
+
+  return control;
+}
 
 export class PerformanceEngine {
   scenes: Scene[] = [];
@@ -62,18 +110,12 @@ export class PerformanceEngine {
     this.currentScene = 0;
     this.startTime = Date.now();
 
-    // Apply first scene immediately
+    // Apply first scene with full Scope params (no transition — it's the starting state)
     const first = this.scenes[0];
-    await controlFn({
-      prompts: first.prompt,
-      noise_scale: first.noiseScale ?? 0.5,
-    });
+    await controlFn(buildControlParams(first));
     this.notify();
 
-    // Schedule future scenes
     this.scheduleFutureScenes();
-
-    // Progress updates every second
     this.progressTimer = setInterval(() => this.notify(), 1000);
   }
 
@@ -85,53 +127,40 @@ export class PerformanceEngine {
     this.notify();
   }
 
-  /** Add a scene at a position. If during playback, only allowed after currentScene. */
   addScene(scene: Omit<Scene, "index">, atIdx?: number) {
     const insertAt = atIdx ?? this.scenes.length;
-    // During playback, can only insert after current scene
     if (this.isPlaying && insertAt <= this.currentScene) return;
-
     const newScene: Scene = { ...scene, index: insertAt };
     this.scenes.splice(insertAt, 0, newScene);
     this.reindex();
-
     if (this.isPlaying) this.rescheduleFuture();
     this.notify();
   }
 
-  /** Remove a scene. During playback, only future scenes (after currentScene). */
   removeScene(idx: number) {
     if (this.isPlaying && idx <= this.currentScene) return;
     this.scenes.splice(idx, 1);
     this.reindex();
-
     if (this.isPlaying) this.rescheduleFuture();
     this.notify();
   }
 
-  /** Edit a scene's properties. During playback, only future scenes. */
   editScene(idx: number, updates: Partial<Scene>) {
     if (this.isPlaying && idx <= this.currentScene) return;
     if (!this.scenes[idx]) return;
     Object.assign(this.scenes[idx], updates);
-
     if (this.isPlaying) this.rescheduleFuture();
     this.notify();
   }
 
-  /** Reorder: move scene from one position to another. During playback, both must be future. */
   reorderScenes(fromIdx: number, toIdx: number) {
     if (this.isPlaying && (fromIdx <= this.currentScene || toIdx <= this.currentScene)) return;
-
     const scene = this.scenes.splice(fromIdx, 1)[0];
     this.scenes.splice(toIdx, 0, scene);
     this.reindex();
-
     if (this.isPlaying) this.rescheduleFuture();
     this.notify();
   }
-
-  // ─── Internals ───
 
   private reindex() {
     this.scenes.forEach((s, i) => { s.index = i; });
@@ -142,15 +171,12 @@ export class PerformanceEngine {
     this.timers = [];
   }
 
-  /** Cancel all future timers and reschedule from current position. */
   private rescheduleFuture() {
     this.clearFutureTimers();
     if (!this.controlFn || !this.isPlaying) return;
 
     const now = Date.now();
     const elapsedMs = now - this.startTime;
-
-    // Calculate when each future scene should start (absolute from startTime)
     let sceneStartMs = 0;
     for (let i = 0; i <= this.currentScene; i++) {
       sceneStartMs += (this.scenes[i]?.duration ?? 0) * 1000;
@@ -158,6 +184,7 @@ export class PerformanceEngine {
 
     for (let i = this.currentScene + 1; i < this.scenes.length; i++) {
       const scene = this.scenes[i];
+      const prevScene = this.scenes[i - 1];
       const sceneIdx = i;
       const delayMs = sceneStartMs - elapsedMs;
 
@@ -166,19 +193,14 @@ export class PerformanceEngine {
         const timer = setTimeout(async () => {
           if (!this.isPlaying) return;
           this.currentScene = sceneIdx;
-          await controlFn({
-            prompts: scene.prompt,
-            noise_scale: scene.noiseScale ?? 0.5,
-          });
+          await controlFn(buildControlParams(scene, prevScene));
           this.notify();
         }, delayMs);
         this.timers.push(timer);
       }
-
       sceneStartMs += scene.duration * 1000;
     }
 
-    // Schedule end
     const endDelayMs = sceneStartMs - elapsedMs;
     if (endDelayMs > 0) {
       this.timers.push(setTimeout(() => {
@@ -188,7 +210,6 @@ export class PerformanceEngine {
     }
   }
 
-  /** Schedule transitions for all scenes after the first (used at play start). */
   private scheduleFutureScenes() {
     if (!this.controlFn) return;
 
@@ -196,23 +217,20 @@ export class PerformanceEngine {
     for (let i = 1; i < this.scenes.length; i++) {
       elapsed += this.scenes[i - 1].duration;
       const scene = this.scenes[i];
+      const prevScene = this.scenes[i - 1];
       const sceneIdx = i;
       const controlFn = this.controlFn;
 
       const timer = setTimeout(async () => {
         if (!this.isPlaying) return;
         this.currentScene = sceneIdx;
-        await controlFn({
-          prompts: scene.prompt,
-          noise_scale: scene.noiseScale ?? 0.5,
-        });
+        await controlFn(buildControlParams(scene, prevScene));
         this.notify();
       }, elapsed * 1000);
 
       this.timers.push(timer);
     }
 
-    // Schedule end
     const totalDur = this.scenes.reduce((sum, s) => sum + s.duration, 0);
     this.timers.push(setTimeout(() => {
       this.isPlaying = false;
