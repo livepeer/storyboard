@@ -138,37 +138,37 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
     async function publishLoop() {
       while (runningRef.current && streamIdRef.current === streamId) {
         try {
+          // Use no-cors-like approach to suppress console 404 errors during warm-up
           const resp = await fetch(`${opts.sdkUrl}/stream/${streamId}/publish?seq=${seq}`, {
             method: "POST",
             headers: { "Content-Type": "image/jpeg", ...publishHeaders },
             body: blob,
-          });
+          }).catch(() => null);
 
-          if (resp.ok || resp.status === 200 || resp.status === 204) {
+          if (!resp) {
+            // Network error — continue silently
+          } else if (resp.ok) {
             seq++;
             consecutive404 = 0;
             if (!publishReady) {
               publishReady = true;
-              console.log("[ScopePlayer] Publish channel ready, ramping to 10fps");
+              console.log("[ScopePlayer] Publish channel ready");
             }
           } else if (resp.status === 404) {
+            seq++; // increment to avoid repeated seq=0
             consecutive404++;
-            // During warm-up, 404 is expected (session not initialized yet)
-            // After publish was working, 404 means stream died
-            if (publishReady && consecutive404 > 5) {
-              console.log("[ScopePlayer] Publish 404 after ready — stream gone");
+            if (publishReady && consecutive404 > 10) {
+              console.log("[ScopePlayer] Stream gone (publish 404)");
               return;
             }
           } else if (resp.status === 410) {
-            console.log("[ScopePlayer] Publish 410 — stream ended");
-            return;
+            return; // stream ended
           }
         } catch {
-          // Network error — continue
+          // silently continue
         }
 
-        // Slow poll during warm-up, fast during streaming
-        const delay = publishReady ? 100 : 2000;
+        const delay = publishReady ? 100 : 3000; // 3s during warm-up to reduce 404 spam
         await new Promise((r) => setTimeout(r, delay));
       }
     }

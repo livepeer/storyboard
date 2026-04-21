@@ -214,11 +214,25 @@ export default function Stage() {
     const controlStreamFn = async (params: Record<string, unknown>) => {
       if (!streamIdRef.current) return;
       const cfg = getSdkConfig();
-      await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
-        body: JSON.stringify({ type: "parameters", params }),
-      });
+      // Retry on 404 — the SDK session's control channel may not be ready yet
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          const resp = await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
+            body: JSON.stringify({ type: "parameters", params }),
+          });
+          if (resp.ok) return;
+          if (resp.status === 404 && attempt < 4) {
+            await new Promise((r) => setTimeout(r, 3000)); // wait 3s and retry
+            continue;
+          }
+          console.log(`[control] Failed: ${resp.status}`);
+          return;
+        } catch {
+          if (attempt < 4) await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
     };
 
     const toolCtx: StageToolContext = {
