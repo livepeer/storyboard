@@ -13,6 +13,7 @@ import { ScopePlayer, type ScopeParams, type ScopeStreamState } from "@livepeer/
 import { AgentRunner, ToolRegistry, WorkingMemoryStore, SessionMemoryStore } from "@livepeer/agent";
 import { createStageTools, type StageToolContext } from "../lib/stage-tools";
 import { PerformanceEngine, type PerformanceState, type Scene } from "../lib/performance";
+import { STAGE_SYSTEM_PROMPT } from "../lib/stage-prompt";
 import { SceneStrip } from "../components/SceneStrip";
 import { WaveformBar } from "../components/WaveformBar";
 import { RecordBar } from "../components/RecordBar";
@@ -149,17 +150,20 @@ export default function Stage() {
     const { LivepeerProvider } = await import("../lib/livepeer-provider");
     const provider = new LivepeerProvider({ proxyUrl: "/api/llm/chat" });
 
+    const working = new WorkingMemoryStore();
+    working.setCriticalConstraints([STAGE_SYSTEM_PROMPT]);
+
     const runner = new AgentRunner(
       provider,
       tools,
-      new WorkingMemoryStore(),
+      working,
       new SessionMemoryStore(),
     );
 
     chat.getState().setProcessing(true);
 
     try {
-      for await (const event of runner.runStream({ user: text, maxIterations: 5 })) {
+      for await (const event of runner.runStream({ user: text, maxIterations: 8 })) {
         switch (event.kind) {
           case "text":
             if (event.text) {
@@ -288,6 +292,44 @@ export default function Stage() {
       if (!cfg.key) setShowSettings(true); // auto-show if no key
     }
   }, [mounted]);
+
+  // Keyboard shortcuts: Space = play/stop performance, R = record
+  useEffect(() => {
+    if (!mounted) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (e.code === "Space" && perfState.scenes.length > 0) {
+        e.preventDefault();
+        if (perfState.isPlaying) {
+          perfRef.current.stop();
+          setPerfState(perfRef.current.getState());
+        } else if (streamIdRef.current) {
+          const cfg = getSdkConfig();
+          const fn = async (params: Record<string, unknown>) => {
+            await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
+              body: JSON.stringify({ type: "parameters", params }),
+            });
+          };
+          perfRef.current.play(fn, setPerfState);
+        }
+      }
+      if (e.code === "KeyR" && !e.metaKey && !e.ctrlKey && streamState?.status === "streaming") {
+        e.preventDefault();
+        if (recorderRef.current.isRecording) {
+          recorderRef.current.stop();
+          setTimeout(() => setRecState(recorderRef.current.getState()), 500);
+        } else {
+          const canvas = document.querySelector("canvas[data-scope-player]") as HTMLCanvasElement;
+          if (canvas) recorderRef.current.start(canvas, undefined, setRecState);
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [mounted, perfState.scenes.length, perfState.isPlaying, streamState?.status]);
 
   const saveSettings = () => {
     localStorage.setItem("sdk_service_url", sdkUrl);
