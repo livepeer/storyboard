@@ -11,7 +11,7 @@
 export interface MixOptions {
   videoUrl: string;
   audioUrl: string;
-  /** Max output duration in seconds. Default: 60 */
+  /** Max output duration in seconds. Default: 300 (5 min) */
   maxDuration?: number;
   /** Output width. Default: from video */
   width?: number;
@@ -22,7 +22,7 @@ export interface MixOptions {
 }
 
 export async function mixVideoAudio(opts: MixOptions): Promise<string> {
-  const maxDuration = opts.maxDuration ?? 60;
+  const maxDuration = opts.maxDuration ?? 300;
 
   // Load video
   const video = document.createElement("video");

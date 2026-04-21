@@ -627,7 +627,7 @@ export function ContextMenu() {
           const blobUrl = await mixVideoAudio({
             videoUrl: targetCard.url!,
             audioUrl: audioCard.url!,
-            maxDuration: 60,
+            maxDuration: 300,
             onProgress: (pct) => {
               if (pct > 0 && pct < 1 && Math.round(pct * 100) % 25 === 0) {
                 addMessage(`Mixing… ${Math.round(pct * 100)}%`, "system");

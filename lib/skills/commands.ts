@@ -1282,7 +1282,7 @@ async function handleMix(args: string): Promise<string> {
     const blobUrl = await mixVideoAudio({
       videoUrl: videoCard.url,
       audioUrl: audioCard.url,
-      maxDuration: 60,
+      maxDuration: 300,
       onProgress: (pct) => {
         if (Math.round(pct * 100) % 25 === 0 && pct > 0 && pct < 1) {
           say(`Mixing… ${Math.round(pct * 100)}%`);
