@@ -60,36 +60,36 @@ export function createStageTools(ctx: StageToolContext) {
           return JSON.stringify({ error: "No Daydream API key — open Settings and enter your sk_... key" });
         }
 
-        let resp: Response;
-        try {
-          resp = await fetch(`${ctx.sdkUrl}/stream/start`, {
-            method: "POST",
-            headers: headers(),
-            body: JSON.stringify({
-              model_id: "scope",
-              params: {
-                prompt: prompt,
-                prompts: prompt,
-                pipeline_ids: ["longlive"],
-                noise_scale: noise,
-                denoising_step_list: [1000, 750, 500, 250],
-              },
-            }),
-          });
-        } catch (e) {
-          return JSON.stringify({ error: `SDK unreachable: ${(e as Error).message}` });
-        }
-        if (!resp.ok) {
-          const text = await resp.text().catch(() => "");
-          return JSON.stringify({ error: `Start failed (${resp.status}): ${text.slice(0, 200)}` });
-        }
-        const data = await resp.json();
-        const streamId = data.stream_id;
-        if (!streamId) {
-          return JSON.stringify({ error: "SDK returned no stream_id", data });
-        }
-        ctx.setStreamId(streamId);
-        return JSON.stringify({ stream_id: streamId, status: "started", prompt });
+        // Fire-and-forget — don't block the agent on SDK cold start
+        fetch(`${ctx.sdkUrl}/stream/start`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({
+            model_id: "scope",
+            params: {
+              prompt: prompt,
+              prompts: prompt,
+              pipeline_ids: ["longlive"],
+              noise_scale: noise,
+              denoising_step_list: [1000, 750, 500, 250],
+            },
+          }),
+        }).then(async (resp) => {
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data.stream_id) {
+              console.log("[stage_start] Stream started:", data.stream_id);
+              ctx.setStreamId(data.stream_id);
+            }
+          } else {
+            const text = await resp.text().catch(() => "");
+            console.error("[stage_start] Failed:", resp.status, text.slice(0, 100));
+          }
+        }).catch((e) => {
+          console.error("[stage_start] SDK unreachable:", e);
+        });
+
+        return JSON.stringify({ status: "starting", prompt, message: "Stream starting — warming up GPU (~30-90s). The Live Output will show frames when ready." });
       },
     },
 
@@ -227,62 +227,59 @@ export function createStageTools(ctx: StageToolContext) {
         const scenes = args.scenes as Array<{ title: string; prompt: string; preset: string; duration: number }>;
         if (!scenes || scenes.length === 0) return JSON.stringify({ error: "No scenes provided" });
 
-        // Auto-start a stream with Scene 1's prompt if no stream is active
-        let autoStarted = false;
-        if (!ctx.streamId) {
-          if (!ctx.apiKey) {
-            return JSON.stringify({ error: "No Daydream API key — open Settings and enter your sk_... key" });
-          }
+        // Load scenes into timeline immediately (non-blocking)
+        ctx.setScenes(scenes);
+        const total = scenes.reduce((s, sc) => s + sc.duration, 0);
+
+        // Auto-start stream in the background — don't block the agent
+        if (!ctx.streamId && ctx.apiKey) {
           const first = scenes[0];
           const presetMap: Record<string, number> = {
             dreamy: 0.7, cinematic: 0.5, anime: 0.6, abstract: 0.95,
             faithful: 0.2, painterly: 0.65, psychedelic: 0.9,
           };
           const noise = presetMap[first.preset] ?? 0.5;
-          try {
-            const resp = await fetch(`${ctx.sdkUrl}/stream/start`, {
-              method: "POST",
-              headers: headers(),
-              body: JSON.stringify({
-                model_id: "scope",
-                params: {
-                  prompt: first.prompt,
-                  prompts: first.prompt,
-                  pipeline_ids: ["longlive"],
-                  noise_scale: noise,
-                  denoising_step_list: [1000, 750, 500, 250],
-                },
-              }),
-            });
+
+          // Fire-and-forget: start stream in background
+          fetch(`${ctx.sdkUrl}/stream/start`, {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              model_id: "scope",
+              params: {
+                prompt: first.prompt,
+                prompts: first.prompt,
+                pipeline_ids: ["longlive"],
+                noise_scale: noise,
+                denoising_step_list: [1000, 750, 500, 250],
+              },
+            }),
+          }).then(async (resp) => {
             if (resp.ok) {
               const data = await resp.json();
               if (data.stream_id) {
+                console.log("[stage_scene] Stream started:", data.stream_id);
                 ctx.setStreamId(data.stream_id);
-                autoStarted = true;
+                // Auto-play once stream is ready
+                setTimeout(() => ctx.playPerformance(), 500);
               }
             } else {
               const text = await resp.text().catch(() => "");
-              return JSON.stringify({ error: `Stream start failed (${resp.status}): ${text.slice(0, 200)}` });
+              console.error("[stage_scene] Stream start failed:", resp.status, text.slice(0, 100));
             }
-          } catch (e) {
-            return JSON.stringify({ error: `SDK unreachable: ${(e as Error).message}` });
-          }
-        }
-
-        ctx.setScenes(scenes);
-        const total = scenes.reduce((s, sc) => s + sc.duration, 0);
-
-        // Auto-play the performance
-        if (ctx.streamId) {
+          }).catch((e) => {
+            console.error("[stage_scene] SDK unreachable:", e);
+          });
+        } else if (ctx.streamId) {
+          // Stream already running — just play
           ctx.playPerformance();
         }
 
         return JSON.stringify({
-          status: autoStarted ? "stream_started_and_scenes_loaded" : "scenes_loaded",
+          status: "scenes_loaded",
           count: scenes.length,
           total_duration: total,
-          stream_id: ctx.streamId || null,
-          message: `${scenes.length} scenes loaded (${total}s).${autoStarted ? " Stream started and performance playing." : " Performance playing."}`,
+          message: `${scenes.length} scenes loaded (${total}s). Stream starting in background — warming up GPU (~30-90s).`,
         });
       },
     },
