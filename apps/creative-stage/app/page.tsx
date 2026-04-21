@@ -158,6 +158,83 @@ export default function Stage() {
     }
   }, []);
 
+  // Import media — file picker
+  const handleImportFile = useCallback(() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*,video/*,audio/*";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const isVideo = file.type.startsWith("video");
+      const isAudio = file.type.startsWith("audio");
+      const type = isAudio ? "audio" : isVideo ? "video" : "image";
+      const blobUrl = URL.createObjectURL(file);
+      const title = file.name.replace(/\.[^.]+$/, "").slice(0, 30);
+      const store = artifacts.getState();
+      const refId = `${type}-${Date.now()}`;
+      store.add({ type, title, refId, url: blobUrl, x: 50, y: 500 });
+
+      // Upload to GCS for public URL
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const resp = await fetch("/api/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dataUrl: reader.result, fileName: file.name }),
+          });
+          if (resp.ok) {
+            const { url: publicUrl } = await resp.json();
+            if (publicUrl?.startsWith("https://")) {
+              const a = store.getByRefId(refId);
+              if (a) store.update(a.id, { url: publicUrl });
+            }
+          }
+        } catch { /* keep blob url */ }
+      };
+      reader.readAsDataURL(file);
+      chat.getState().addMessage(`Imported: ${refId} — drag near Live Output to use as reference`, "system");
+    };
+    input.click();
+  }, []);
+
+  // Drag-drop near LiveOutput → apply as VACE reference
+  const handleCardDrop = useCallback((droppedId: string) => {
+    const store = artifacts.getState();
+    const dropped = store.artifacts.find((a) => a.id === droppedId);
+    const live = store.getByRefId("live-output");
+    if (!dropped || !live || dropped.refId === "live-output") return;
+    if (dropped.type !== "image") return; // only images for VACE
+
+    // Check if dropped card is near the LiveOutput
+    const dx = Math.abs((dropped.x + dropped.w / 2) - (live.x + live.w / 2));
+    const dy = Math.abs((dropped.y + dropped.h / 2) - (live.y + live.h / 2));
+    const isNear = dx < live.w && dy < live.h;
+
+    if (isNear && dropped.url && streamIdRef.current) {
+      const sdk = getSdkConfig();
+      // Apply as VACE reference
+      fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}),
+        },
+        body: JSON.stringify({
+          type: "parameters",
+          params: { vace_enabled: true, vace_ref_images: [dropped.url], vace_context_scale: 0.8 },
+        }),
+      }).then(() => {
+        // Connect edge
+        store.connect(dropped.refId, "live-output", { action: "vace-reference" });
+        chat.getState().addMessage(`Reference applied: "${dropped.title}" → Live Output`, "system");
+      }).catch((e) => {
+        chat.getState().addMessage(`Reference failed: ${(e as Error).message}`, "system");
+      });
+    }
+  }, []);
+
   // Settings dialog
   const [showSettings, setShowSettings] = useState(false);
   const [sdkUrl, setSdkUrl] = useState("");
@@ -227,7 +304,11 @@ export default function Stage() {
               key={a.id}
               artifact={a}
               viewportScale={viewport.scale}
-              onMove={(id, x, y) => artifacts.getState().update(id, { x, y })}
+              onMove={(id, x, y) => {
+                artifacts.getState().update(id, { x, y });
+                // Check proximity to LiveOutput on every move — apply VACE when near
+                handleCardDrop(id);
+              }}
               onResize={(id, w, h) => artifacts.getState().update(id, { w, h })}
             >
               <div style={{ width: "100%", height: "100%", background: "#111", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6, overflow: "hidden" }}>
@@ -239,7 +320,17 @@ export default function Stage() {
           ))}
         </InfiniteBoard>
 
-        {/* Settings button */}
+        {/* Import + Settings buttons */}
+        <button
+          onClick={handleImportFile}
+          style={{
+            position: "absolute", top: 12, right: 80, zIndex: 100,
+            background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
+            color: "#aaa", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13,
+          }}
+        >
+          + Import
+        </button>
         <button
           onClick={() => setShowSettings(true)}
           style={{
