@@ -488,7 +488,23 @@ export default function Stage() {
             >
               <div style={S.cardContent}>
                 {a.url && a.type === "image" && <img src={a.url} alt={a.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
-                {a.url && a.type === "video" && <video src={a.url} controls muted style={{ width: "100%", height: "100%" }} />}
+                {a.url && a.type === "video" && (
+                  <video
+                    src={a.url}
+                    controls
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  />
+                )}
+                {a.url && a.type === "audio" && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", background: "rgba(129,140,248,0.05)" }}>
+                    <audio src={a.url} controls autoPlay loop style={{ width: "90%" }} onPointerDown={(e) => e.stopPropagation()} />
+                  </div>
+                )}
                 {!a.url && <span style={{ color: "#555570", fontSize: 12, fontWeight: 500 }}>{a.title}</span>}
               </div>
             </ArtifactCard>
