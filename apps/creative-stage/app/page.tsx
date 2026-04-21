@@ -58,6 +58,16 @@ export default function Stage() {
     return () => { unsubArt(); unsubChat(); };
   }, []);
 
+  // Test hook: allow E2E tests to inject scenes directly
+  useEffect(() => {
+    if (!mounted) return;
+    (window as unknown as Record<string, unknown>).__testInjectScenes = (scenes: Array<{ title: string; prompt: string; preset: string; duration: number }>) => {
+      const indexed: Scene[] = scenes.map((s, i) => ({ ...s, index: i }));
+      perfRef.current.setScenes(indexed);
+      setPerfState(perfRef.current.getState());
+    };
+  }, [mounted]);
+
   // Create the live output card (center of canvas)
   useEffect(() => {
     if (!mounted) return;
