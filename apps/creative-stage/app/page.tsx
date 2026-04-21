@@ -9,7 +9,8 @@ import {
   createChatStore,
   type Artifact,
 } from "@livepeer/creative-kit";
-import { ScopePlayer, type ScopeParams, type ScopeStreamState } from "@livepeer/scope-player";
+import { ScopePlayer, type ScopeStreamState } from "@livepeer/scope-player";
+import type { ScopeParams } from "@livepeer/scope-player";
 import { AgentRunner, ToolRegistry, WorkingMemoryStore, SessionMemoryStore } from "@livepeer/agent";
 import { createStageTools, type StageToolContext } from "../lib/stage-tools";
 import { PerformanceEngine, type PerformanceState, type Scene } from "../lib/performance";
@@ -123,9 +124,8 @@ export default function Stage() {
   const [viewport, setViewport] = useState({ x: 0, y: 0, scale: 1 });
   const [arts, setArts] = useState<Artifact[]>([]);
   const [streamState, setStreamState] = useState<ScopeStreamState | null>(null);
-  const [streamParams, setStreamParams] = useState<ScopeParams | null>(null);
+  const [activeStreamId, setActiveStreamId] = useState<string | null>(null);
   const streamIdRef = useRef<string | null>(null);
-  const controlRef = useRef<((params: Partial<ScopeParams>) => Promise<void>) | null>(null);
 
   const [messages, setMessages] = useState(chat.getState().messages);
   const perfRef = useRef(new PerformanceEngine());
@@ -187,7 +187,7 @@ export default function Stage() {
       streamId: streamIdRef.current,
       setStreamId: (id) => {
         streamIdRef.current = id;
-        if (id) setStreamParams({ prompts: text });
+        if (id) setActiveStreamId(id);
       },
       controlStream: async (params) => {
         try { await controlStreamFn(params as Record<string, unknown>); }
@@ -394,7 +394,7 @@ export default function Stage() {
             >
               <ScopePlayer
                 sdkUrl={sdk.url} apiKey={sdk.key}
-                initialParams={streamParams ?? undefined}
+                externalStreamId={activeStreamId ?? undefined}
                 onStateChange={setStreamState} showFps={true}
               >
                 {isStreaming && (

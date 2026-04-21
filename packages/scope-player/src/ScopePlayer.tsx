@@ -19,8 +19,10 @@ export interface ScopePlayerProps {
   sdkUrl: string;
   /** Daydream API key */
   apiKey?: string;
-  /** Initial params — if provided, auto-starts the stream */
+  /** Initial params — if provided, auto-starts a NEW stream */
   initialParams?: ScopeParams;
+  /** Attach to an already-started stream (skip start, just poll frames) */
+  externalStreamId?: string;
   /** Called when state changes */
   onStateChange?: (state: ScopeStreamState) => void;
   /** CSS class */
@@ -35,6 +37,7 @@ export function ScopePlayer({
   sdkUrl,
   apiKey,
   initialParams,
+  externalStreamId,
   onStateChange,
   className,
   children,
@@ -48,7 +51,7 @@ export function ScopePlayer({
     lastBitmapRef.current = bitmap;
   }, []);
 
-  const { state, start, stop, control } = useSdkStream({
+  const { state, start, attach, stop, control } = useSdkStream({
     sdkUrl,
     apiKey,
     onFrame: handleFrame,
@@ -65,7 +68,6 @@ export function ScopePlayer({
     function renderLoop() {
       if (lastBitmapRef.current && ctx) {
         const bm = lastBitmapRef.current;
-        // Resize canvas to match bitmap (only if changed)
         if (canvas!.width !== bm.width || canvas!.height !== bm.height) {
           canvas!.width = bm.width;
           canvas!.height = bm.height;
@@ -78,12 +80,19 @@ export function ScopePlayer({
     return () => cancelAnimationFrame(animFrameRef.current);
   }, []);
 
-  // Auto-start if initialParams provided
+  // Attach to external stream (started by agent tool)
   useEffect(() => {
-    if (initialParams && state.status === "idle") {
+    if (externalStreamId && state.status === "idle") {
+      attach(externalStreamId);
+    }
+  }, [externalStreamId, state.status, attach]);
+
+  // Auto-start if initialParams provided (standalone mode)
+  useEffect(() => {
+    if (initialParams && !externalStreamId && state.status === "idle") {
       start(initialParams);
     }
-  }, [initialParams, state.status, start]);
+  }, [initialParams, externalStreamId, state.status, start]);
 
   // Status overlay
   const statusOverlay = state.status !== "streaming" && (

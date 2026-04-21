@@ -1,6 +1,6 @@
 /**
  * LLM proxy — routes to Gemini API for agent reasoning.
- * Same pattern as storyboard's /api/llm/chat.
+ * Translates OpenAI chat format ↔ Gemini generateContent format.
  */
 export async function POST(req: Request) {
   const body = await req.json();
@@ -10,37 +10,79 @@ export async function POST(req: Request) {
   }
 
   const model = (body.model as string) || "gemini-2.5-flash";
-  const messages = body.messages as Array<{ role: string; content: string | null; tool_calls?: unknown[] }>;
+  const messages = body.messages as Array<{
+    role: string;
+    content: string | null;
+    tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+    tool_call_id?: string;
+    name?: string;
+  }>;
   const tools = body.tools as Array<{ type: string; function: { name: string; description: string; parameters: unknown } }> | undefined;
+
+  // Build a map of tool_call_id → function name from assistant messages
+  const callIdToName = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role === "assistant" && m.tool_calls) {
+      for (const tc of m.tool_calls) {
+        callIdToName.set(tc.id, tc.function.name);
+      }
+    }
+  }
 
   // Translate OpenAI → Gemini
   const contents: unknown[] = [];
   let systemText = "";
+
   for (const m of messages) {
-    if (m.role === "system") { systemText += (systemText ? "\n" : "") + (m.content || ""); continue; }
+    if (m.role === "system") {
+      systemText += (systemText ? "\n" : "") + (m.content || "");
+      continue;
+    }
+
     if (m.role === "assistant") {
       const parts: unknown[] = [];
       if (m.content) parts.push({ text: m.content });
       if (m.tool_calls) {
-        for (const tc of m.tool_calls as Array<{ function: { name: string; arguments: string } }>) {
+        for (const tc of m.tool_calls) {
           parts.push({ functionCall: { name: tc.function.name, args: JSON.parse(tc.function.arguments || "{}") } });
         }
       }
       if (parts.length > 0) contents.push({ role: "model", parts });
       continue;
     }
+
     if (m.role === "tool") {
-      const raw = m as Record<string, unknown>;
+      // Resolve function name from tool_call_id or explicit name field
+      const funcName = m.name || (m.tool_call_id ? callIdToName.get(m.tool_call_id) : null) || "unknown_tool";
+
       let respObj: Record<string, unknown>;
-      try { respObj = JSON.parse((m.content || "{}") as string); if (typeof respObj !== "object") respObj = { result: respObj }; }
-      catch { respObj = { content: m.content }; }
-      contents.push({ role: "user", parts: [{ functionResponse: { name: (raw.name as string) || "", response: respObj } }] });
+      try {
+        respObj = JSON.parse((m.content || "{}") as string);
+        if (typeof respObj !== "object" || respObj === null) respObj = { result: respObj };
+      } catch {
+        respObj = { content: m.content };
+      }
+
+      contents.push({ role: "user", parts: [{ functionResponse: { name: funcName, response: respObj } }] });
       continue;
     }
+
+    // user messages
     contents.push({ role: "user", parts: [{ text: m.content || "" }] });
   }
 
-  const geminiBody: Record<string, unknown> = { contents };
+  // Gemini requires alternating user/model turns — merge consecutive same-role turns
+  const merged: Array<{ role: string; parts: unknown[] }> = [];
+  for (const c of contents as Array<{ role: string; parts: unknown[] }>) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.role === c.role) {
+      prev.parts.push(...c.parts);
+    } else {
+      merged.push({ role: c.role, parts: [...c.parts] });
+    }
+  }
+
+  const geminiBody: Record<string, unknown> = { contents: merged };
   if (systemText) geminiBody.system_instruction = { parts: [{ text: systemText }] };
   if (tools && tools.length > 0) {
     geminiBody.tools = [{ functionDeclarations: tools.map((t) => ({

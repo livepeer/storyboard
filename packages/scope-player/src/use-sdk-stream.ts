@@ -114,46 +114,86 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
     // Proceed even if not "ready" — frames may start appearing
   }, [opts.sdkUrl, headers, updateState]);
 
-  // Poll frames
+  // Poll frames — fast loop with minimal sleep between fetches
   const pollFrames = useCallback(async (streamId: string) => {
-    const interval = opts.pollInterval ?? 100;
+    // Target ~30fps: fetch as fast as possible, sleep only 16ms between frames
+    // The SDK returns the latest frame immediately (no long-poll), so the
+    // bottleneck is network round-trip (~50-100ms). Two concurrent fetchers
+    // interleave to keep the pipeline full.
+    const CONCURRENCY = 2;
+    let stopped = false;
+    let fpsWindowStart = performance.now();
+    let fpsWindowFrames = 0;
 
-    while (runningRef.current && streamIdRef.current === streamId) {
-      try {
-        const resp = await fetch(`${opts.sdkUrl}/stream/${streamId}/frame`, {
-          headers: opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {},
-        });
+    async function fetcher() {
+      while (!stopped && runningRef.current && streamIdRef.current === streamId) {
+        try {
+          const resp = await fetch(`${opts.sdkUrl}/stream/${streamId}/frame`, {
+            headers: opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {},
+          });
 
-        if (resp.ok) {
-          const contentType = resp.headers.get("content-type") || "";
-          if (contentType.includes("image")) {
-            const blob = await resp.blob();
-            if (blob.size > 0) {
-              const bitmap = await createImageBitmap(blob);
-              opts.onFrame?.(bitmap);
-              frameCountRef.current++;
+          if (resp.ok) {
+            const contentType = resp.headers.get("content-type") || "";
+            if (contentType.includes("image")) {
+              const blob = await resp.blob();
+              if (blob.size > 0) {
+                const bitmap = await createImageBitmap(blob);
+                opts.onFrame?.(bitmap);
+                frameCountRef.current++;
+                fpsWindowFrames++;
 
-              // Update FPS
-              const elapsed = (performance.now() - fpsStartRef.current) / 1000;
-              if (elapsed > 1) {
-                updateState({
-                  fps: Math.round(frameCountRef.current / elapsed),
-                  framesReceived: frameCountRef.current,
-                });
+                // Rolling FPS over 2-second window
+                const now = performance.now();
+                const elapsed = (now - fpsWindowStart) / 1000;
+                if (elapsed >= 2) {
+                  updateState({
+                    fps: Math.round(fpsWindowFrames / elapsed),
+                    framesReceived: frameCountRef.current,
+                  });
+                  fpsWindowStart = now;
+                  fpsWindowFrames = 0;
+                }
               }
             }
+          } else if (resp.status === 410) {
+            updateState({ status: "error", error: "Stream ended (410)", phase: null });
+            runningRef.current = false;
+            stopped = true;
+            return;
+          } else if (resp.status === 204 || resp.status === 404) {
+            // No new frame yet — brief pause
+            await new Promise((r) => setTimeout(r, 50));
           }
-        } else if (resp.status === 410) {
-          // Stream gone (SDK restarted)
-          updateState({ status: "error", error: "Stream ended (410)", phase: null });
-          runningRef.current = false;
-          return;
+        } catch {
+          // Network hiccup — hold last frame, brief pause
+          await new Promise((r) => setTimeout(r, 100));
         }
-      } catch { /* network hiccup — hold last frame */ }
 
-      await new Promise((r) => setTimeout(r, interval));
+        // Minimal sleep to yield to the event loop
+        await new Promise((r) => setTimeout(r, 16));
+      }
     }
-  }, [opts.sdkUrl, opts.apiKey, opts.pollInterval, opts.onFrame, updateState]);
+
+    // Launch concurrent fetchers
+    const fetchers = Array.from({ length: CONCURRENCY }, () => fetcher());
+    await Promise.all(fetchers);
+  }, [opts.sdkUrl, opts.apiKey, opts.onFrame, updateState]);
+
+  // Attach to an already-started stream (skip start, go straight to polling)
+  const attach = useCallback(async (streamId: string) => {
+    if (runningRef.current) return;
+    streamIdRef.current = streamId;
+    runningRef.current = true;
+
+    updateState({ status: "warming", streamId, phase: "attaching to stream…" });
+
+    await waitForReady(streamId);
+    updateState({ status: "streaming", phase: null });
+
+    frameCountRef.current = 0;
+    fpsStartRef.current = performance.now();
+    pollFrames(streamId);
+  }, [waitForReady, pollFrames, updateState]);
 
   // Control (update params mid-stream)
   const control = useCallback(async (params: Partial<ScopeParams>) => {
@@ -196,5 +236,5 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
     };
   }, [opts.sdkUrl, headers]);
 
-  return { state, start, stop, control, streamId: streamIdRef.current };
+  return { state, start, attach, stop, control, streamId: streamIdRef.current };
 }
