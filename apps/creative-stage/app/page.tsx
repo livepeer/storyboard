@@ -132,6 +132,7 @@ export default function Stage() {
   const [perfState, setPerfState] = useState<PerformanceState>({ scenes: [], currentScene: 0, isPlaying: false, elapsed: 0, totalDuration: 0 });
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [bpm, setBpm] = useState<number | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const recorderRef = useRef(new StageRecorder());
   const [recState, setRecState] = useState<RecorderState>({ isRecording: false, duration: 0, blobUrl: null });
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -143,6 +144,17 @@ export default function Stage() {
     const unsubChat = chat.subscribe((s) => setMessages([...s.messages]));
     return () => { unsubArt(); unsubChat(); };
   }, []);
+
+  // Play audio when URL changes
+  useEffect(() => {
+    if (!audioUrl) return;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = audioUrl;
+      audioRef.current.loop = true;
+      audioRef.current.play().catch(() => {});
+    }
+  }, [audioUrl]);
 
   // Auto-play performance when stream becomes ready
   useEffect(() => {
@@ -463,6 +475,9 @@ export default function Stage() {
             </ArtifactCard>
           ))}
         </InfiniteBoard>
+
+        {/* Hidden audio player */}
+        <audio ref={audioRef} style={{ display: "none" }} />
 
         {/* Waveform */}
         <WaveformBar
