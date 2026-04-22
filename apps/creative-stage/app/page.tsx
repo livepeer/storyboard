@@ -128,6 +128,7 @@ export default function Stage() {
   const streamIdRef = useRef<string | null>(null);
 
   const [messages, setMessages] = useState(chat.getState().messages);
+  const [, forceChat] = useState(0);
   const perfRef = useRef(new PerformanceEngine());
   const [perfState, setPerfState] = useState<PerformanceState>({ scenes: [], currentScene: 0, isPlaying: false, elapsed: 0, totalDuration: 0 });
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -147,7 +148,7 @@ export default function Stage() {
   useEffect(() => {
     setMounted(true);
     const unsubArt = artifacts.subscribe((s) => setArts([...s.artifacts]));
-    const unsubChat = chat.subscribe((s) => setMessages([...s.messages]));
+    const unsubChat = chat.subscribe((s) => { setMessages([...s.messages]); forceChat((n) => n + 1); });
     return () => { unsubArt(); unsubChat(); };
   }, []);
 
@@ -156,15 +157,16 @@ export default function Stage() {
     setSceneSets(sceneSetsRef.current.map((s) => ({ id: s.id, title: s.title, sceneCount: s.scenes.length })));
   }, []);
 
-  // Play audio when URL changes
+  // Play/pause audio when URL changes
   useEffect(() => {
-    if (!audioUrl) return;
-    if (audioRef.current) {
+    if (!audioRef.current) return;
+    if (!audioUrl) {
       audioRef.current.pause();
-      audioRef.current.src = audioUrl;
-      audioRef.current.loop = true;
-      audioRef.current.play().catch(() => {});
+      return;
     }
+    audioRef.current.src = audioUrl;
+    audioRef.current.loop = true;
+    audioRef.current.play().catch(() => {});
   }, [audioUrl]);
 
   // Auto-play performance when stream becomes ready
@@ -666,9 +668,13 @@ export default function Stage() {
             setActiveSetId(target.id);
             syncSceneSets();
 
-            // Restore audio
-            if (target.audioUrl) { setAudioUrl(target.audioUrl); }
-            else { setAudioUrl(null); }
+            // Switch audio — pause current, play target's
+            if (audioRef.current) audioRef.current.pause();
+            if (target.audioUrl) {
+              setAudioUrl(target.audioUrl);
+            } else {
+              setAudioUrl(null);
+            }
 
             // Auto-play if stream is running
             if (streamIdRef.current) {
