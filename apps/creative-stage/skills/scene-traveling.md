@@ -249,13 +249,40 @@ With VACE key frames:
 - Background structure follows the key frame
 - The prompt still controls the generation, but VACE adds spatial/color conditioning
 
-### VACE Parameters
+### VACE Parameters (confirmed from Scope source: pipeline_processor.py:563)
+
+VACE reference images are **one-shot** — Scope clears them after use. They must be resent in each control message to persist.
 
 | Parameter | Value | Effect |
 |-----------|-------|--------|
+| vace_ref_images | [url] | One-shot reference image. Sent via control channel. |
 | vace_context_scale | 0.8-1.0 | Moderate reference influence — lets prompt drive content |
 | vace_context_scale | 1.2-1.5 | Strong reference — composition/colors closely match key frame |
 | vace_context_scale | 1.8-2.0 | Very strong — almost reproduces the key frame with minor variation |
+
+**Important:** `vace_enabled` must be set at **stream start** (pipeline load time). It cannot be toggled mid-stream. But `vace_ref_images` and `vace_context_scale` CAN be changed at runtime.
+
+### Transition Parameters (confirmed from Scope source: schema.py:49-68)
+
+The `transition` field enables smooth prompt morphing over N frames using slerp interpolation:
+
+```json
+{
+  "transition": {
+    "target_prompts": [{ "text": "new scene prompt", "weight": 1.0 }],
+    "num_steps": 12,
+    "temporal_interpolation_method": "slerp"
+  }
+}
+```
+
+When `transition` is provided, it takes **precedence over `prompts`** — the pipeline smoothly interpolates from the current prompt to the target over `num_steps` frames.
+
+- **num_steps=4**: Fast snap (abstract/psychedelic presets)
+- **num_steps=12**: Smooth glide (cinematic preset)
+- **num_steps=16**: Very gradual (faithful preset)
+- **slerp**: Spherical interpolation through latent space (preferred, smoother arc)
+- **linear**: Straight line interpolation (can look abrupt)
 
 For transformations, use **1.2** — strong enough to anchor composition but loose enough for Scope to morph between scenes.
 

@@ -1,14 +1,17 @@
 /**
  * Performance Engine — sequences scenes over time with prompt traveling.
  *
- * Each scene transition sends full Scope control params:
- * - prompts + transition (slerp interpolation over N steps)
- * - noise_scale (creativity) — higher during transformation scenes
- * - kv_cache_attention_bias — lower during morphs (responsive), higher during stable shots (consistent)
- * - denoising_step_list — fewer steps during rapid morphs for speed
- * - reset_cache on dramatic transitions to break temporal persistence
+ * Scope runtime params (confirmed from source code):
+ * - prompts (string | PromptItem[]) — YES runtime
+ * - noise_scale (0-1) — YES runtime
+ * - kv_cache_attention_bias (0.01-1) — YES runtime
+ * - reset_cache (bool) — YES runtime, one-shot
+ * - transition (PromptTransition) — YES runtime, smooth morphing
+ * - vace_ref_images (string[]) — YES runtime, one-shot (cleared after use)
+ * - vace_context_scale (0-2) — YES runtime
  *
- * Supports live editing of future scenes during playback.
+ * The events loop crash (1MB trickle limit) was from fal runner log events,
+ * not from our control messages. Our params are small and safe.
  */
 
 export interface Scene {
@@ -17,8 +20,7 @@ export interface Scene {
   prompt: string;
   preset: string;
   noiseScale?: number;
-  duration: number; // seconds
-  /** VACE reference image URL — used by cinematic mode to anchor visuals */
+  duration: number;
   vaceRef?: string;
 }
 
@@ -32,44 +34,50 @@ export interface PerformanceState {
 
 type ControlFn = (params: Record<string, unknown>) => Promise<void>;
 
-/** Preset → full Scope param set optimized for morphing */
 const PRESET_PARAMS: Record<string, {
   noise_scale: number;
   kv_cache_attention_bias: number;
-  denoising_step_list: number[];
   transition_steps: number;
   reset_cache?: boolean;
 }> = {
-  dreamy:      { noise_scale: 0.7,  kv_cache_attention_bias: 0.3,  denoising_step_list: [1000, 500], transition_steps: 12 },
-  cinematic:   { noise_scale: 0.5,  kv_cache_attention_bias: 0.6,  denoising_step_list: [1000, 750, 500, 250], transition_steps: 16 },
-  anime:       { noise_scale: 0.6,  kv_cache_attention_bias: 0.4,  denoising_step_list: [1000, 750, 500], transition_steps: 12 },
-  abstract:    { noise_scale: 0.95, kv_cache_attention_bias: 0.08, denoising_step_list: [1000, 500], transition_steps: 8, reset_cache: true },
-  faithful:    { noise_scale: 0.2,  kv_cache_attention_bias: 0.85, denoising_step_list: [1000, 750, 500, 250], transition_steps: 20 },
-  painterly:   { noise_scale: 0.65, kv_cache_attention_bias: 0.4,  denoising_step_list: [1000, 750, 500], transition_steps: 14 },
-  psychedelic: { noise_scale: 0.9,  kv_cache_attention_bias: 0.05, denoising_step_list: [1000, 500], transition_steps: 6, reset_cache: true },
+  dreamy:      { noise_scale: 0.7,  kv_cache_attention_bias: 0.3,  transition_steps: 8 },
+  cinematic:   { noise_scale: 0.5,  kv_cache_attention_bias: 0.6,  transition_steps: 12 },
+  anime:       { noise_scale: 0.6,  kv_cache_attention_bias: 0.4,  transition_steps: 8 },
+  abstract:    { noise_scale: 0.95, kv_cache_attention_bias: 0.08, transition_steps: 4, reset_cache: true },
+  faithful:    { noise_scale: 0.2,  kv_cache_attention_bias: 0.85, transition_steps: 16 },
+  painterly:   { noise_scale: 0.65, kv_cache_attention_bias: 0.4,  transition_steps: 10 },
+  psychedelic: { noise_scale: 0.9,  kv_cache_attention_bias: 0.05, transition_steps: 4, reset_cache: true },
 };
 
-function buildControlParams(scene: Scene, _prevScene?: Scene): Record<string, unknown> {
+function buildControlParams(scene: Scene, prevScene?: Scene): Record<string, unknown> {
   const params = PRESET_PARAMS[scene.preset] || PRESET_PARAMS.cinematic;
   const noise = scene.noiseScale ?? params.noise_scale;
 
-  // Keep control messages minimal — Scope's control channel via trickle has a
-  // 1MB segment limit. Large payloads (VACE URLs, transition objects) can crash
-  // the events loop. Only send what Scope's longlive pipeline actually reads
-  // from a parameters update.
   const control: Record<string, unknown> = {
-    prompts: scene.prompt,
     noise_scale: noise,
+    kv_cache_attention_bias: params.kv_cache_attention_bias,
   };
 
-  // kv_cache controls temporal consistency — critical for morphing quality
-  if (params.kv_cache_attention_bias !== undefined) {
-    control.kv_cache_attention_bias = params.kv_cache_attention_bias;
+  // Use transition for smooth prompt morphing (slerp interpolation)
+  if (prevScene && params.transition_steps > 0) {
+    control.transition = {
+      target_prompts: [{ text: scene.prompt, weight: 1.0 }],
+      num_steps: params.transition_steps,
+      temporal_interpolation_method: "slerp",
+    };
+    // Don't also set prompts — transition.target_prompts takes precedence
+  } else {
+    control.prompts = scene.prompt;
   }
 
-  // Reset cache for dramatic visual breaks (abstract/psychedelic presets)
   if (params.reset_cache) {
     control.reset_cache = true;
+  }
+
+  // VACE reference — one-shot, Scope clears it after use
+  if (scene.vaceRef) {
+    control.vace_ref_images = [scene.vaceRef];
+    control.vace_context_scale = 1.2;
   }
 
   return control;
@@ -110,11 +118,9 @@ export class PerformanceEngine {
     this.currentScene = 0;
     this.startTime = Date.now();
 
-    // Apply first scene with full Scope params (no transition — it's the starting state)
     const first = this.scenes[0];
     await controlFn(buildControlParams(first));
     this.notify();
-
     this.scheduleFutureScenes();
     this.progressTimer = setInterval(() => this.notify(), 1000);
   }
@@ -130,8 +136,7 @@ export class PerformanceEngine {
   addScene(scene: Omit<Scene, "index">, atIdx?: number) {
     const insertAt = atIdx ?? this.scenes.length;
     if (this.isPlaying && insertAt <= this.currentScene) return;
-    const newScene: Scene = { ...scene, index: insertAt };
-    this.scenes.splice(insertAt, 0, newScene);
+    this.scenes.splice(insertAt, 0, { ...scene, index: insertAt });
     this.reindex();
     if (this.isPlaying) this.rescheduleFuture();
     this.notify();
@@ -162,83 +167,54 @@ export class PerformanceEngine {
     this.notify();
   }
 
-  private reindex() {
-    this.scenes.forEach((s, i) => { s.index = i; });
-  }
-
-  private clearFutureTimers() {
-    this.timers.forEach(clearTimeout);
-    this.timers = [];
-  }
+  private reindex() { this.scenes.forEach((s, i) => { s.index = i; }); }
+  private clearFutureTimers() { this.timers.forEach(clearTimeout); this.timers = []; }
 
   private rescheduleFuture() {
     this.clearFutureTimers();
     if (!this.controlFn || !this.isPlaying) return;
-
-    const now = Date.now();
-    const elapsedMs = now - this.startTime;
+    const elapsedMs = Date.now() - this.startTime;
     let sceneStartMs = 0;
-    for (let i = 0; i <= this.currentScene; i++) {
-      sceneStartMs += (this.scenes[i]?.duration ?? 0) * 1000;
-    }
-
+    for (let i = 0; i <= this.currentScene; i++) sceneStartMs += (this.scenes[i]?.duration ?? 0) * 1000;
     for (let i = this.currentScene + 1; i < this.scenes.length; i++) {
       const scene = this.scenes[i];
-      const prevScene = this.scenes[i - 1];
-      const sceneIdx = i;
-      const delayMs = sceneStartMs - elapsedMs;
-
-      if (delayMs > 0) {
-        const controlFn = this.controlFn;
-        const timer = setTimeout(async () => {
+      const prev = this.scenes[i - 1];
+      const idx = i;
+      const delay = sceneStartMs - elapsedMs;
+      if (delay > 0) {
+        const fn = this.controlFn;
+        this.timers.push(setTimeout(async () => {
           if (!this.isPlaying) return;
-          this.currentScene = sceneIdx;
-          await controlFn(buildControlParams(scene, prevScene));
+          this.currentScene = idx;
+          await fn(buildControlParams(scene, prev));
           this.notify();
-        }, delayMs);
-        this.timers.push(timer);
+        }, delay));
       }
       sceneStartMs += scene.duration * 1000;
     }
-
-    const endDelayMs = sceneStartMs - elapsedMs;
-    if (endDelayMs > 0) {
-      this.timers.push(setTimeout(() => {
-        this.isPlaying = false;
-        this.notify();
-      }, endDelayMs));
-    }
+    const endDelay = sceneStartMs - elapsedMs;
+    if (endDelay > 0) this.timers.push(setTimeout(() => { this.isPlaying = false; this.notify(); }, endDelay));
   }
 
   private scheduleFutureScenes() {
     if (!this.controlFn) return;
-
     let elapsed = 0;
     for (let i = 1; i < this.scenes.length; i++) {
       elapsed += this.scenes[i - 1].duration;
       const scene = this.scenes[i];
-      const prevScene = this.scenes[i - 1];
-      const sceneIdx = i;
-      const controlFn = this.controlFn;
-
-      const timer = setTimeout(async () => {
+      const prev = this.scenes[i - 1];
+      const idx = i;
+      const fn = this.controlFn;
+      this.timers.push(setTimeout(async () => {
         if (!this.isPlaying) return;
-        this.currentScene = sceneIdx;
-        await controlFn(buildControlParams(scene, prevScene));
+        this.currentScene = idx;
+        await fn(buildControlParams(scene, prev));
         this.notify();
-      }, elapsed * 1000);
-
-      this.timers.push(timer);
+      }, elapsed * 1000));
     }
-
-    const totalDur = this.scenes.reduce((sum, s) => sum + s.duration, 0);
-    this.timers.push(setTimeout(() => {
-      this.isPlaying = false;
-      this.notify();
-    }, totalDur * 1000));
+    const total = this.scenes.reduce((s, sc) => s + sc.duration, 0);
+    this.timers.push(setTimeout(() => { this.isPlaying = false; this.notify(); }, total * 1000));
   }
 
-  private notify() {
-    this.onUpdate?.(this.getState());
-  }
+  private notify() { this.onUpdate?.(this.getState()); }
 }
