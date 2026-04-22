@@ -9,7 +9,7 @@ import {
   createChatStore,
   type Artifact,
 } from "@livepeer/creative-kit";
-import { ScopePlayer, type ScopeStreamState } from "@livepeer/scope-player";
+import { ScopePlayer, type ScopeStreamState, type StreamSource } from "@livepeer/scope-player";
 import type { ScopeParams } from "@livepeer/scope-player";
 import { AgentRunner, ToolRegistry, WorkingMemoryStore, SessionMemoryStore } from "@livepeer/agent";
 import { createStageTools, type StageToolContext } from "../lib/stage-tools";
@@ -137,6 +137,8 @@ export default function Stage() {
   const [audioPaused, setAudioPaused] = useState(false);
   const [musicPrompt, setMusicPrompt] = useState<string | null>(null);
   const [musicRegenerating, setMusicRegenerating] = useState(false);
+  const setSourceFnRef = useRef<((source: StreamSource) => void) | null>(null);
+  const [streamSource, setStreamSource] = useState<StreamSource>({ type: "blank" });
   const recorderRef = useRef(new StageRecorder());
   const [recState, setRecState] = useState<RecorderState>({ isRecording: false, duration: 0, blobUrl: null });
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -279,6 +281,11 @@ export default function Stage() {
       stopPerformance: () => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); },
       playWhenReady: () => { pendingPlayRef.current = true; },
       setAudioUrl, setBpm, setMusicPrompt,
+      setStreamSource: (type: "blank" | "image" | "video", url?: string, label?: string) => {
+        const src = { type, url, label } as StreamSource;
+        if (setSourceFnRef.current) setSourceFnRef.current(src);
+        setStreamSource(src);
+      },
       getSceneCount: () => perfRef.current.scenes.length,
       saveSceneSet: () => {
         if (perfRef.current.scenes.length === 0) return;
@@ -406,34 +413,40 @@ export default function Stage() {
     input.click();
   }, []);
 
-  // ─── VACE Proximity ───
+  // ─── Source + VACE Proximity Drop ───
   const vaceAppliedRef = useRef(new Set<string>());
   const handleCardDrop = useCallback((droppedId: string) => {
     const store = artifacts.getState();
     const dropped = store.artifacts.find((a) => a.id === droppedId);
     const live = store.getByRefId("live-output");
     if (!dropped || !live || dropped.refId === "live-output") return;
-    if (dropped.type !== "image") return;
-    // Skip key frame cards — they're managed by the performance engine via vaceRef
+    if (dropped.type !== "image" && dropped.type !== "video") return;
     if (dropped.refId.startsWith("kf-")) return;
-    // Prevent repeated VACE applications for the same card
     if (vaceAppliedRef.current.has(dropped.refId)) return;
 
     const dx = Math.abs((dropped.x + dropped.w / 2) - (live.x + live.w / 2));
     const dy = Math.abs((dropped.y + dropped.h / 2) - (live.y + live.h / 2));
     if (dx < live.w && dy < live.h && dropped.url && streamIdRef.current) {
-      const sdk = getSdkConfig();
-      fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
-        body: JSON.stringify({ type: "parameters", params: { vace_enabled: true, vace_ref_images: [dropped.url], vace_context_scale: 0.8 } }),
-      }).then(() => {
-        vaceAppliedRef.current.add(dropped.refId);
-        store.connect(dropped.refId, "live-output", { action: "vace-reference" });
-        chat.getState().addMessage(`Reference applied: "${dropped.title}" → Live Output`, "system");
-      }).catch((e) => {
-        chat.getState().addMessage(`Reference failed: ${(e as Error).message}`, "system");
-      });
+      // Set as publish source — real content instead of blank frames
+      const srcType = dropped.type === "video" ? "video" as const : "image" as const;
+      if (setSourceFnRef.current) {
+        setSourceFnRef.current({ type: srcType, url: dropped.url, label: dropped.title });
+        setStreamSource({ type: srcType, url: dropped.url, label: dropped.title });
+      }
+
+      // Also apply VACE for images (structural guidance)
+      if (dropped.type === "image") {
+        const sdk = getSdkConfig();
+        fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
+          body: JSON.stringify({ type: "parameters", params: { vace_enabled: true, vace_ref_images: [dropped.url], vace_context_scale: 0.8 } }),
+        }).catch(() => {});
+      }
+
+      vaceAppliedRef.current.add(dropped.refId);
+      store.connect(dropped.refId, "live-output", { action: srcType === "video" ? "video-source" : "image-source" });
+      chat.getState().addMessage(`${srcType === "video" ? "Video" : "Image"} source set: "${dropped.title}" → Live Output. Adjust noise_scale to control blend.`, "system");
     }
   }, []);
 
@@ -531,11 +544,41 @@ export default function Stage() {
                 sdkUrl={sdk.url} apiKey={sdk.key}
                 externalStreamId={activeStreamId ?? undefined}
                 onStateChange={setStreamState} showFps={true}
+                onSourceReady={(fn) => { setSourceFnRef.current = fn; }}
               >
                 {isStreaming && (
                   <div style={S.streamOverlay}>
                     <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#f87171", animation: "pulse-dot 1.5s ease-in-out infinite" }} />
                     <span>Live</span>
+                  </div>
+                )}
+                {/* Source indicator — shows when image/video is feeding the stream */}
+                {streamSource.type !== "blank" && (
+                  <div style={{
+                    position: "absolute", bottom: 6, left: 8, right: 8,
+                    display: "flex", alignItems: "center", gap: 6,
+                    background: "rgba(0,0,0,0.7)", borderRadius: 6,
+                    padding: "4px 8px", fontSize: 10,
+                  }}>
+                    <span style={{ color: "#6366f1" }}>
+                      {streamSource.type === "video" ? "🎬" : "🖼"} Source: {streamSource.label?.slice(0, 25) || streamSource.type}
+                    </span>
+                    <button
+                      onClick={() => {
+                        if (setSourceFnRef.current) {
+                          setSourceFnRef.current({ type: "blank" });
+                          setStreamSource({ type: "blank" });
+                          chat.getState().addMessage("Source cleared — back to blank frames.", "system");
+                        }
+                      }}
+                      style={{
+                        marginLeft: "auto", fontSize: 9, color: "#888",
+                        background: "rgba(255,255,255,0.08)", border: "none",
+                        borderRadius: 4, padding: "2px 6px", cursor: "pointer",
+                      }}
+                    >
+                      Clear
+                    </button>
                   </div>
                 )}
               </ScopePlayer>

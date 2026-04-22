@@ -11,6 +11,15 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { ScopeStreamState, ScopeParams } from "./types";
 
+/** A source that produces JPEG blobs for publishing to the stream. */
+export interface StreamSource {
+  type: "blank" | "image" | "video";
+  /** For image/video: the URL to extract frames from */
+  url?: string;
+  /** Label shown in UI */
+  label?: string;
+}
+
 export interface UseSdkStreamOptions {
   sdkUrl: string;
   apiKey?: string;
@@ -34,6 +43,9 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
   const runningRef = useRef(false);
   const frameCountRef = useRef(0);
   const fpsStartRef = useRef(0);
+  const sourceRef = useRef<StreamSource>({ type: "blank" });
+  const sourceVideoRef = useRef<HTMLVideoElement | null>(null);
+  const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const headers = useCallback(() => {
     const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -51,6 +63,77 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
       return next;
     });
   }, [opts.onStateChange]);
+
+  /** Set the publish source. Switches what gets sent to the pipeline mid-stream. */
+  const setSource = useCallback((source: StreamSource) => {
+    const prev = sourceRef.current;
+    sourceRef.current = source;
+
+    // Cleanup previous video source
+    if (prev.type === "video" && sourceVideoRef.current) {
+      sourceVideoRef.current.pause();
+      sourceVideoRef.current.src = "";
+      sourceVideoRef.current = null;
+    }
+
+    // Initialize new source
+    if (source.type === "video" && source.url && typeof document !== "undefined") {
+      const video = document.createElement("video");
+      video.crossOrigin = "anonymous";
+      video.src = source.url;
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.play().catch(() => {});
+      sourceVideoRef.current = video;
+    } else if (source.type === "image" && source.url && typeof document !== "undefined") {
+      // For images, draw once to the source canvas
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        if (!sourceCanvasRef.current) {
+          sourceCanvasRef.current = document.createElement("canvas");
+        }
+        sourceCanvasRef.current.width = img.naturalWidth || 512;
+        sourceCanvasRef.current.height = img.naturalHeight || 512;
+        const ctx = sourceCanvasRef.current.getContext("2d");
+        if (ctx) ctx.drawImage(img, 0, 0);
+      };
+      img.src = source.url;
+    }
+  }, []);
+
+  /** Capture a JPEG blob from the current source. */
+  const captureSourceFrame = useCallback(async (blankBlob: Blob): Promise<Blob> => {
+    const src = sourceRef.current;
+    if (src.type === "blank") return blankBlob;
+
+    if (src.type === "image" && sourceCanvasRef.current) {
+      const canvas = sourceCanvasRef.current;
+      return new Promise<Blob>((resolve) =>
+        canvas.toBlob((b) => resolve(b || blankBlob), "image/jpeg", 0.7)
+      );
+    }
+
+    if (src.type === "video" && sourceVideoRef.current) {
+      const video = sourceVideoRef.current;
+      if (video.readyState < 2) return blankBlob; // not ready yet
+      if (!sourceCanvasRef.current) {
+        sourceCanvasRef.current = document.createElement("canvas");
+      }
+      const canvas = sourceCanvasRef.current;
+      canvas.width = video.videoWidth || 512;
+      canvas.height = video.videoHeight || 512;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return blankBlob;
+      ctx.drawImage(video, 0, 0);
+      return new Promise<Blob>((resolve) =>
+        canvas.toBlob((b) => resolve(b || blankBlob), "image/jpeg", 0.7)
+      );
+    }
+
+    return blankBlob;
+  }, []);
 
   // Start a new stream
   const start = useCallback(async (params: ScopeParams) => {
@@ -147,13 +230,14 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
         }
       }
 
-      // Now publish frames
+      // Now publish frames — use source content if available, blank otherwise
       while (runningRef.current && streamIdRef.current === streamId) {
         try {
+          const frameBlob = await captureSourceFrame(blob);
           const resp = await fetch(`${opts.sdkUrl}/stream/${streamId}/publish?seq=${seq}`, {
             method: "POST",
             headers: { "Content-Type": "image/jpeg", ...publishHeaders },
-            body: blob,
+            body: frameBlob,
           }).catch(() => null);
 
           if (resp?.ok) {
@@ -171,7 +255,7 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
       }
     }
     publishLoop();
-  }, [opts.sdkUrl, opts.apiKey]);
+  }, [opts.sdkUrl, opts.apiKey, captureSourceFrame]);
 
   // Poll frames — dual-fetcher for higher throughput
   const pollFrames = useCallback(async (streamId: string) => {
@@ -298,5 +382,5 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
     };
   }, [opts.sdkUrl, headers]);
 
-  return { state, start, attach, stop, control, streamId: streamIdRef.current };
+  return { state, start, attach, stop, control, setSource, streamId: streamIdRef.current };
 }

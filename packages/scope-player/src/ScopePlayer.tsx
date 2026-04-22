@@ -11,7 +11,7 @@
  */
 
 import React, { useRef, useEffect, useCallback, type ReactNode } from "react";
-import { useSdkStream } from "./use-sdk-stream";
+import { useSdkStream, type StreamSource } from "./use-sdk-stream";
 import type { ScopeParams, ScopeStreamState } from "./types";
 
 export interface ScopePlayerProps {
@@ -31,6 +31,8 @@ export interface ScopePlayerProps {
   children?: ReactNode;
   /** Show FPS counter. Default: true */
   showFps?: boolean;
+  /** Called once with setSource, so the parent can switch publish input mid-stream */
+  onSourceReady?: (setSource: (source: StreamSource) => void) => void;
 }
 
 export function ScopePlayer({
@@ -42,6 +44,7 @@ export function ScopePlayer({
   className,
   children,
   showFps = true,
+  onSourceReady,
 }: ScopePlayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const lastBitmapRef = useRef<ImageBitmap | null>(null);
@@ -51,12 +54,17 @@ export function ScopePlayer({
     lastBitmapRef.current = bitmap;
   }, []);
 
-  const { state, start, attach, stop, control } = useSdkStream({
+  const { state, start, attach, stop, control, setSource } = useSdkStream({
     sdkUrl,
     apiKey,
     onFrame: handleFrame,
     onStateChange,
   });
+
+  // Expose setSource to parent
+  useEffect(() => {
+    onSourceReady?.(setSource);
+  }, [onSourceReady, setSource]);
 
   // Render loop — draws latest frame to canvas at display refresh rate
   useEffect(() => {

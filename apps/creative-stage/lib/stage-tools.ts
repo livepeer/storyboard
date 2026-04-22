@@ -95,6 +95,8 @@ export interface StageToolContext {
   setAudioUrl: (url: string) => void;
   setBpm: (bpm: number) => void;
   setMusicPrompt?: (prompt: string) => void;
+  /** Set the publish source for the live stream (image/video replaces blank frames) */
+  setStreamSource?: (type: "blank" | "image" | "video", url?: string, label?: string) => void;
   /** Add an artifact card to the canvas */
   addArtifact: (artifact: { type: string; title: string; url: string; refId: string; x?: number; y?: number }) => void;
   /** Attach a VACE reference image to a scene by index */
@@ -654,6 +656,45 @@ export function createStageTools(ctx: StageToolContext) {
           key_frames: imageUrls.length,
           morphs: videoUrls.length,
           message: `${imageUrls.length} key frames + ${videoUrls.length} morph videos on canvas.`,
+        });
+      },
+    },
+
+    {
+      name: "stage_source",
+      description: "Set the video/image input source for the live stream. The source content is published to the pipeline instead of blank frames, enabling real video-to-video transformation. Use noise_scale to control how much the AI transforms the input (0.2=faithful, 0.8=creative). Drag an image/video card onto the Live Output for the same effect.",
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["image", "video", "blank"], description: "Source type. 'blank' clears the source back to black frames." },
+          url: { type: "string", description: "URL of the image or video to use as input" },
+          noise_scale: { type: "number", description: "How much to transform the input. 0.0=carbon copy, 0.5=blend, 1.0=ignore input. Recommended: 0.3-0.6 for video-to-video" },
+        },
+        required: ["type"],
+      },
+      async execute(args: Record<string, unknown>) {
+        const type = args.type as "image" | "video" | "blank";
+
+        if (type === "blank") {
+          ctx.setStreamSource?.("blank");
+          return JSON.stringify({ status: "source_cleared", message: "Source cleared — publishing blank frames." });
+        }
+
+        // Resolve URL from direct url param
+        const url = args.url as string | undefined;
+        if (!url) return JSON.stringify({ error: "No URL provided. Pass the image or video URL." });
+
+        ctx.setStreamSource?.(type, url, url.split("/").pop()?.slice(0, 25));
+
+        // Also set noise_scale if provided
+        if (args.noise_scale !== undefined && ctx.streamId) {
+          await ctx.controlStream({ noise_scale: args.noise_scale as number });
+        }
+
+        return JSON.stringify({
+          status: "source_set",
+          type,
+          message: `${type} source set. ${args.noise_scale !== undefined ? `noise_scale=${args.noise_scale}` : "Use noise_scale 0.3-0.6 for best video-to-video results."}`,
         });
       },
     },
