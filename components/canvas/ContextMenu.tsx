@@ -49,6 +49,8 @@ const ACTIONS: MenuAction[] = [
   { id: "iso-style", label: "Isometric SVG Style", icon: "\u25C6", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "talking-video", label: "Talking Video\u2026", icon: "\uD83D\uDDE3", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "analyze", label: "Analyze Media", icon: "\uD83D\uDD0D", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
+  { id: "gpt-image-edit", label: "Edit with GPT Image\u2026", icon: "\u270F\uFE0F", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "product-briefing", label: "Product Briefing (GPT)\u2026", icon: "\uD83D\uDCCB", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "transform-video", label: "Transform Video\u2026", icon: "\uD83D\uDD04", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   { id: "mix-audio", label: "Mix with Audio\u2026", icon: "\uD83C\uDFB5", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   // --- LV2V from card ---
@@ -70,6 +72,8 @@ const DIRECT_CONFIG: Record<string, { capability: string; newType: string; defau
   "transform-video": { capability: "ltx-t2v", newType: "video" },
   "lego-style": { capability: "kontext-edit", newType: "image", defaultPrompt: "Convert to LEGO minifigure style, plastic bricks, yellow skin, brick studs background, toy photography, vibrant colors" },
   "iso-style": { capability: "kontext-edit", newType: "image", defaultPrompt: "Convert to minimalist isometric illustration, clean black lines on white background, simple geometric 3D perspective, SVG-style vector art, no shading" },
+  "gpt-image-edit": { capability: "gpt-image-edit", newType: "image" },
+  "product-briefing": { capability: "gpt-image-edit", newType: "image", defaultPrompt: "Transform this into a professional product briefing card: clean white background, product centered, add specification callouts with clean typography, price tag, feature highlights with icons, modern minimal marketing layout" },
 };
 
 export function ContextMenu() {
@@ -1026,6 +1030,40 @@ export function ContextMenu() {
           onClick={handleImportUrl}
         >
           <span className="w-4 text-center">🔗</span> From Internet (URL)
+        </button>
+        <div className="mx-2 my-1 h-px bg-white/[0.05]" />
+        <div className="px-3 py-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
+          Generate
+        </div>
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={async () => {
+            setVisible(false);
+            const prompt = await styledPrompt("GPT Image 2", "Describe what to generate (best for text, logos, product shots, infographics)…");
+            if (!prompt) return;
+            const store = useCanvasStore.getState();
+            const refId = `gpt-${store.cards.length + 1}`;
+            const card = store.addCard({ type: "image", title: prompt.slice(0, 40), refId });
+            addMessage(`Generating with GPT Image: "${prompt.slice(0, 50)}"…`, "system");
+            try {
+              const result = await runInference({ capability: "gpt-image", prompt, params: { size: "1024x1024" } });
+              const r = result as Record<string, unknown>;
+              const data = (r.data ?? r) as Record<string, unknown>;
+              const url = (r.image_url as string) ?? (data.images as Array<{ url: string }>)?.[0]?.url ?? (data.url as string);
+              if (url) {
+                store.updateCard(card.id, { url });
+                addMessage(`${refId} ready — GPT Image`, "system");
+              } else {
+                store.updateCard(card.id, { error: "No URL returned" });
+                addMessage(`${refId} failed — no URL in response`, "system");
+              }
+            } catch (e) {
+              store.updateCard(card.id, { error: (e as Error).message });
+              addMessage(`${refId} failed: ${(e as Error).message}`, "system");
+            }
+          }}
+        >
+          <span className="w-4 text-center">🎨</span> GPT Image 2 (text, logos, products)
         </button>
       </div>
       {/* Prompt dialog renders here too so URL import can use it */}

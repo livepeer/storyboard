@@ -711,6 +711,9 @@ Files: `lib/stream-cmd/graph-store.ts`, `lib/stream-cmd/commands.ts`, `lib/strea
 | Weather Effect | ⛅ right-click card | — | kontext-edit → kling-i2v |
 | Cinematic Video | 🎬 right-click card | — | seedance-i2v (up to 15s + audio) |
 | Analyze Media | 🔍 right-click card | `/analyze <card>` | Gemini Vision |
+| Edit with GPT Image | ✏️ right-click card | — | gpt-image-edit |
+| Product Briefing | 📋 right-click card | — | gpt-image-edit |
+| GPT Image 2 | 🎨 right-click canvas | — | gpt-image (text, logos, products) |
 | Convert to 3D | 🖥 right-click card | — | tripo-i3d |
 | Import Media | 📁/🔗 right-click canvas | — | image/video/audio (GCS upload) |
 
@@ -722,6 +725,7 @@ Video I2V: veo-i2v, ltx-i2v, pixverse-i2v, kling-i2v, seedance-i2v, seedance-i2v
 Video misc: veo-transition, pixverse-transition, pixverse-ref2v, void-inpaint
 TTS: chatterbox-tts, gemini-tts, inworld-tts, grok-tts
 3D: tripo-t3d, tripo-i3d, tripo-mv3d, tripo-p1-t3d, tripo-p1-i3d
+GPT: gpt-image, gpt-image-edit
 Other: bg-remove, topaz-upscale, lipsync, music, sfx, face-swap, sam3, talking-head, fashn-tryon
 Fallback chains: all video/image/TTS models have 2-4 siblings for automatic retry on failure.
 Seedance 2.0: primary i2v model for /film and context menu animate. Up to 15s cinematic video with audio.
