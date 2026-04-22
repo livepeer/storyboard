@@ -251,36 +251,47 @@ export function createStageTools(ctx: StageToolContext) {
 
     {
       name: "stage_scene",
-      description: "Create a LIVE STREAM with multi-scene timeline. Use for ANY request containing 'stream', 'live', or 'real-time'. The stream morphs between scenes via prompt traveling — no cuts, continuous visual evolution.",
+      description: "Create a LIVE STREAM with multi-scene timeline. Use for ANY request containing 'stream', 'live', or 'real-time'. The stream morphs between scenes via prompt traveling.",
       parameters: {
         type: "object",
         properties: {
+          style_prefix: {
+            type: "string",
+            description: "A style prefix prepended to EVERY scene prompt for visual consistency. Include: camera angle, lighting mood, color grading, art style. E.g. 'low-angle cinematic tracking shot, warm golden light, film grain, shallow depth of field'",
+          },
           scenes: {
             type: "array",
             items: {
               type: "object",
               properties: {
                 title: { type: "string", description: "Short scene title" },
-                prompt: { type: "string", description: "30-40 words. MUST start with camera angle (same in every scene). Include: subject position, motion direction, background, lighting, colors, textures. Between consecutive scenes share at least 2 colors and 1 material." },
-                preset: { type: "string", description: "cinematic=stable hold(0.5), abstract=dramatic morph(0.95), psychedelic=extreme morph+cache reset(0.9), dreamy=soft transition(0.7), faithful=frozen(0.2), painterly=artistic(0.65)" },
-                duration: { type: "number", description: "25-40s for stable shots, 10-15s for transformation bridges" },
+                prompt: { type: "string", description: "20-35 words describing THIS scene only (style_prefix handles the rest). Focus on: subject, action, unique colors, unique textures. Share visual anchors with neighboring scenes." },
+                preset: { type: "string", description: "cinematic=stable(0.5), abstract=dramatic morph(0.95), psychedelic=extreme morph(0.9), dreamy=soft(0.7), faithful=frozen(0.2), painterly=artistic(0.65)" },
+                duration: { type: "number", description: "25-40s for beauty shots, 10-15s for morph bridges" },
               },
               required: ["title", "prompt", "preset", "duration"],
             },
-            description: "SCENE TRAVELING PATTERN: alternate stable→bridge→stable. Stable scenes (cinematic preset, 25-40s) hold the subject clearly. Bridge scenes (abstract/psychedelic preset, 10-15s) describe the MID-TRANSFORMATION state between two subjects — e.g. 'wooden frame cracking as brass gears push through, wheels thickening from wood to metal'. Every scene MUST use the same camera angle. Background must evolve gradually (autumn trees→pine trees→palm trees, never jump). For transformations: use at least 2x as many scenes as subjects (1 stable + 1 bridge per subject).",
+            description: "PATTERN: alternate stable→bridge→stable. Bridge scenes describe the MID-TRANSFORMATION between two subjects. Every scene inherits style_prefix for consistency.",
           },
         },
         required: ["scenes"],
       },
       async execute(args: Record<string, unknown>) {
-        const scenes = args.scenes as Array<{ title: string; prompt: string; preset: string; duration: number }>;
-        if (!scenes || scenes.length === 0) return JSON.stringify({ error: "No scenes provided" });
+        const rawScenes = args.scenes as Array<{ title: string; prompt: string; preset: string; duration: number }>;
+        if (!rawScenes || rawScenes.length === 0) return JSON.stringify({ error: "No scenes provided" });
 
-        // Guard: don't recreate if scenes already loaded (Gemini sometimes double-calls)
+        // Guard: don't recreate if scenes already loaded
         const existing = ctx.getSceneCount?.() ?? 0;
         if (existing > 0 && ctx.streamId) {
-          return JSON.stringify({ status: "already_loaded", message: `${existing} scenes already loaded and stream running. Use stage_prompt to change the current scene.` });
+          return JSON.stringify({ status: "already_loaded", message: `${existing} scenes already loaded and stream running.` });
         }
+
+        // Prepend style_prefix to every scene prompt for consistent look
+        const stylePrefix = (args.style_prefix as string) || "";
+        const scenes = rawScenes.map((s) => ({
+          ...s,
+          prompt: stylePrefix ? `${stylePrefix}, ${s.prompt}` : s.prompt,
+        }));
 
         // ── Step 1: Load scenes into timeline immediately ──
         ctx.setScenes(scenes);
@@ -314,7 +325,6 @@ export function createStageTools(ctx: StageToolContext) {
                   noise_scale: noise,
                   kv_cache_attention_bias: 0.5,
                   denoising_step_list: [1000, 750, 500, 250],
-                  vace_enabled: true,
                 },
               }),
             }).then(async (resp) => {
@@ -334,34 +344,7 @@ export function createStageTools(ctx: StageToolContext) {
             ctx.playPerformance();
           }
 
-          // ── Key frame generation (fire-and-forget, concurrent with stream) ──
-          (async () => {
-            ctx.say("Generating VACE key frames…");
-            let generated = 0;
-            for (let i = 0; i < scenes.length; i++) {
-              try {
-                const resp = await fetch(`${ctx.sdkUrl}/inference`, {
-                  method: "POST",
-                  headers: headers(),
-                  body: JSON.stringify({
-                    capability: "flux-dev",
-                    prompt: scenes[i].prompt,
-                    params: { width: 1280, height: 720, num_inference_steps: 20 },
-                  }),
-                });
-                if (resp.ok) {
-                  const data = await resp.json();
-                  const url = extractUrl(data);
-                  if (url) {
-                    ctx.setSceneVaceRef(i, url);
-                    ctx.addArtifact({ type: "image", title: `KF: ${scenes[i].title}`, url, refId: `kf-${i}`, x: 900 + i * 220, y: 500 });
-                    generated++;
-                  }
-                }
-              } catch { /* continue to next */ }
-            }
-            ctx.say(`${generated}/${scenes.length} VACE key frames ready`);
-          })();
+          // No key frame generation — keep it simple, just prompt traveling
         }
 
         return JSON.stringify({

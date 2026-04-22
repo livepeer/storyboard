@@ -58,26 +58,11 @@ function buildControlParams(scene: Scene, prevScene?: Scene): Record<string, unk
     kv_cache_attention_bias: params.kv_cache_attention_bias,
   };
 
-  // Use transition for smooth prompt morphing (slerp interpolation)
-  if (prevScene && params.transition_steps > 0) {
-    control.transition = {
-      target_prompts: [{ text: scene.prompt, weight: 1.0 }],
-      num_steps: params.transition_steps,
-      temporal_interpolation_method: "slerp",
-    };
-    // Don't also set prompts — transition.target_prompts takes precedence
-  } else {
-    control.prompts = scene.prompt;
-  }
+  // Always send prompts directly — simple and reliable
+  control.prompts = scene.prompt;
 
   if (params.reset_cache) {
     control.reset_cache = true;
-  }
-
-  // VACE reference — one-shot, Scope clears it after use
-  if (scene.vaceRef) {
-    control.vace_ref_images = [scene.vaceRef];
-    control.vace_context_scale = 1.2;
   }
 
   return control;
