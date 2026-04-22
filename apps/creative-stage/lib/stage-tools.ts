@@ -94,6 +94,7 @@ export interface StageToolContext {
   playWhenReady: () => void;
   setAudioUrl: (url: string) => void;
   setBpm: (bpm: number) => void;
+  setMusicPrompt?: (prompt: string) => void;
   /** Add an artifact card to the canvas */
   addArtifact: (artifact: { type: string; title: string; url: string; refId: string; x?: number; y?: number }) => void;
   /** Attach a VACE reference image to a scene by index */
@@ -465,6 +466,7 @@ export function createStageTools(ctx: StageToolContext) {
         }
 
         ctx.setAudioUrl(audioUrl);
+        ctx.setMusicPrompt?.(description);
 
         // Estimate BPM from description
         const bpmMatch = description.match(/(\d{2,3})\s*bpm/i);

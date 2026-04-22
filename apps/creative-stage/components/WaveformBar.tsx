@@ -21,15 +21,24 @@ interface WaveformBarProps {
   onTogglePlay?: () => void;
   /** Whether audio is currently paused (distinct from performance isPlaying) */
   audioPaused?: boolean;
+  /** The prompt used to generate the current music */
+  musicPrompt?: string | null;
+  /** Called when user edits prompt and clicks regenerate */
+  onRegenerate?: (newPrompt: string) => void;
+  /** Whether music is currently regenerating */
+  regenerating?: boolean;
 }
 
 export function WaveformBar({
   audioUrl, bpm, isPlaying, currentTime, totalDuration, onSeek, onSync,
-  onTogglePlay, audioPaused,
+  onTogglePlay, audioPaused, musicPrompt, onRegenerate, regenerating,
 }: WaveformBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const waveformData = useRef<Float32Array | null>(null);
   const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Load and analyze audio waveform
   useEffect(() => {
@@ -173,20 +182,84 @@ export function WaveformBar({
         </button>
       )}
 
-      {/* Waveform canvas */}
-      <canvas
-        ref={canvasRef}
-        width={600}
-        height={32}
-        onClick={handleClick}
-        style={{
-          flex: 1, height: 32, cursor: onSeek ? "pointer" : "default",
-          borderRadius: 4,
-        }}
-      />
+      {/* Music prompt label — click to edit */}
+      {musicPrompt && onRegenerate && !editing && (
+        <button
+          onClick={() => { setEditText(musicPrompt); setEditing(true); setTimeout(() => inputRef.current?.focus(), 50); }}
+          style={{
+            fontSize: 10, color: "#888", background: "none", border: "none",
+            cursor: "pointer", flexShrink: 1, minWidth: 0, overflow: "hidden",
+            textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 160,
+            padding: "2px 4px", borderRadius: 3,
+          }}
+          title="Click to edit music prompt"
+        >
+          {regenerating ? "Regenerating…" : `♪ ${musicPrompt.slice(0, 30)}${musicPrompt.length > 30 ? "…" : ""}`}
+        </button>
+      )}
+
+      {/* Inline edit form */}
+      {editing && onRegenerate && (
+        <div style={{ display: "flex", gap: 4, flex: 1, minWidth: 0 }}>
+          <input
+            ref={inputRef}
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && editText.trim()) {
+                onRegenerate(editText.trim());
+                setEditing(false);
+              }
+              if (e.key === "Escape") setEditing(false);
+            }}
+            style={{
+              flex: 1, fontSize: 11, background: "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(99,102,241,0.3)", borderRadius: 4,
+              color: "#e2e8f0", padding: "3px 8px", outline: "none",
+              minWidth: 0,
+            }}
+            placeholder="Describe music mood..."
+          />
+          <button
+            onClick={() => { if (editText.trim()) { onRegenerate(editText.trim()); setEditing(false); } }}
+            disabled={!editText.trim() || regenerating}
+            style={{
+              fontSize: 10, fontWeight: 600, color: regenerating ? "#555" : "#6366f1",
+              background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.2)",
+              borderRadius: 5, padding: "3px 8px", cursor: regenerating ? "default" : "pointer",
+              flexShrink: 0,
+            }}
+          >
+            {regenerating ? "…" : "Regen"}
+          </button>
+          <button
+            onClick={() => setEditing(false)}
+            style={{
+              fontSize: 10, color: "#666", background: "none", border: "none",
+              cursor: "pointer", padding: "3px 4px", flexShrink: 0,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Waveform canvas — only show when not editing */}
+      {!editing && (
+        <canvas
+          ref={canvasRef}
+          width={600}
+          height={32}
+          onClick={handleClick}
+          style={{
+            flex: 1, height: 32, cursor: onSeek ? "pointer" : "default",
+            borderRadius: 4,
+          }}
+        />
+      )}
 
       {/* Sync button */}
-      {bpm && onSync && (
+      {bpm && onSync && !editing && (
         <button
           onClick={() => onSync(bpm)}
           style={{
@@ -200,7 +273,7 @@ export function WaveformBar({
         </button>
       )}
 
-      {loading && (
+      {loading && !editing && (
         <span style={{ fontSize: 10, color: "#555" }}>Analyzing…</span>
       )}
     </div>

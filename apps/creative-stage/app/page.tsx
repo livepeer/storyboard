@@ -135,6 +135,8 @@ export default function Stage() {
   const [bpm, setBpm] = useState<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [audioPaused, setAudioPaused] = useState(false);
+  const [musicPrompt, setMusicPrompt] = useState<string | null>(null);
+  const [musicRegenerating, setMusicRegenerating] = useState(false);
   const recorderRef = useRef(new StageRecorder());
   const [recState, setRecState] = useState<RecorderState>({ isRecording: false, duration: 0, blobUrl: null });
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -271,11 +273,12 @@ export default function Stage() {
         // Stop playing old set's music — new set has none yet
         if (audioRef.current) audioRef.current.pause();
         setAudioUrl(null);
+        setMusicPrompt(null);
       },
       playPerformance: () => { perfRef.current.play(controlStreamFn, setPerfState); },
       stopPerformance: () => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); },
       playWhenReady: () => { pendingPlayRef.current = true; },
-      setAudioUrl, setBpm,
+      setAudioUrl, setBpm, setMusicPrompt,
       getSceneCount: () => perfRef.current.scenes.length,
       saveSceneSet: () => {
         if (perfRef.current.scenes.length === 0) return;
@@ -615,6 +618,8 @@ export default function Stage() {
           isPlaying={perfState.isPlaying} currentTime={perfState.elapsed}
           totalDuration={perfState.totalDuration}
           audioPaused={audioPaused}
+          musicPrompt={musicPrompt}
+          regenerating={musicRegenerating}
           onTogglePlay={() => {
             if (!audioRef.current || !audioUrl) return;
             if (audioPaused) {
@@ -623,6 +628,46 @@ export default function Stage() {
             } else {
               audioRef.current.pause();
               setAudioPaused(true);
+            }
+          }}
+          onRegenerate={async (newPrompt) => {
+            setMusicRegenerating(true);
+            chat.getState().addMessage(`Regenerating music: "${newPrompt.slice(0, 50)}"…`, "system");
+            try {
+              const cfg = getSdkConfig();
+              const enriched = newPrompt;
+              const lyrics = `[Intro]\n[Verse]\n${enriched}\n[Chorus]\n${enriched}\n[Outro]`;
+              const resp = await fetch(`${cfg.url}/inference`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
+                body: JSON.stringify({
+                  capability: "music",
+                  prompt: enriched,
+                  params: { prompt: enriched, lyrics_prompt: lyrics },
+                }),
+              });
+              if (!resp.ok) {
+                chat.getState().addMessage(`Music regen failed (${resp.status})`, "system");
+                return;
+              }
+              const data = await resp.json();
+              const newUrl = (data.audio_url as string)
+                ?? ((data.data as Record<string, unknown>)?.audio ? ((data.data as Record<string, unknown>).audio as { url: string })?.url : undefined)
+                ?? (data.url as string);
+              if (newUrl) {
+                setAudioUrl(newUrl);
+                setMusicPrompt(newPrompt);
+                setAudioPaused(false);
+                const bpmMatch = newPrompt.match(/(\d{2,3})\s*bpm/i);
+                if (bpmMatch) setBpm(parseInt(bpmMatch[1]));
+                chat.getState().addMessage("Music regenerated!", "system");
+              } else {
+                chat.getState().addMessage("Music regen: no audio URL in response", "system");
+              }
+            } catch (e) {
+              chat.getState().addMessage(`Music regen error: ${(e as Error).message}`, "system");
+            } finally {
+              setMusicRegenerating(false);
             }
           }}
           onSync={(detectedBpm) => {
