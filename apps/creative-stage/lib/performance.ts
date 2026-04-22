@@ -49,36 +49,27 @@ const PRESET_PARAMS: Record<string, {
   psychedelic: { noise_scale: 0.9,  kv_cache_attention_bias: 0.05, denoising_step_list: [1000, 500], transition_steps: 6, reset_cache: true },
 };
 
-function buildControlParams(scene: Scene, prevScene?: Scene): Record<string, unknown> {
+function buildControlParams(scene: Scene, _prevScene?: Scene): Record<string, unknown> {
   const params = PRESET_PARAMS[scene.preset] || PRESET_PARAMS.cinematic;
   const noise = scene.noiseScale ?? params.noise_scale;
 
+  // Keep control messages minimal — Scope's control channel via trickle has a
+  // 1MB segment limit. Large payloads (VACE URLs, transition objects) can crash
+  // the events loop. Only send what Scope's longlive pipeline actually reads
+  // from a parameters update.
   const control: Record<string, unknown> = {
     prompts: scene.prompt,
     noise_scale: noise,
-    kv_cache_attention_bias: params.kv_cache_attention_bias,
-    denoising_step_list: params.denoising_step_list,
   };
 
-  // Use slerp transition for smooth morphing between scenes
-  if (prevScene) {
-    control.transition = {
-      target_prompts: [{ text: scene.prompt, weight: 1.0 }],
-      num_steps: params.transition_steps,
-      temporal_interpolation_method: "slerp",
-    };
+  // kv_cache controls temporal consistency — critical for morphing quality
+  if (params.kv_cache_attention_bias !== undefined) {
+    control.kv_cache_attention_bias = params.kv_cache_attention_bias;
   }
 
-  // Reset cache on dramatic preset changes for clean break
+  // Reset cache for dramatic visual breaks (abstract/psychedelic presets)
   if (params.reset_cache) {
     control.reset_cache = true;
-  }
-
-  // Apply VACE reference image if scene has one (cinematic mode key frames)
-  if (scene.vaceRef) {
-    control.vace_enabled = true;
-    control.vace_ref_images = [scene.vaceRef];
-    control.vace_context_scale = 1.2; // strong visual anchor
   }
 
   return control;
