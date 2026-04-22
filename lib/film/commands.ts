@@ -1,6 +1,6 @@
 import { useFilmStore } from "./store";
 import { generateFilm } from "./generator";
-import { FILM_SKILLS, setActiveFilmSkill, getActiveFilmSkill } from "./film-prompt";
+import { FILM_SKILLS, setActiveFilmSkill, getActiveFilmSkill, detectFilmSkill } from "./film-prompt";
 import type { Film } from "./types";
 import { createTracker } from "@/lib/utils/execution-tracker";
 
@@ -51,9 +51,13 @@ function filmHelp(): string {
     "  /film list              — show your recent films",
     "  /film show <id>         — re-display a saved film",
     "  /film apply [id]        — apply: generate images → animate each to video",
+    "  /film/load hifi         — use HiFi pipeline (GPT Image 2 → Seedance 2.0)",
+    "  /film/load auto         — reset to auto-detect mode",
+    "  /film skills            — list available film styles",
     "  /film remove <id>       — delete a film",
     "",
     "After /film generates shots, type \"apply them\" or click Apply.",
+    "HiFi mode auto-activates for cartoon/anime/illustration styles.",
   ].join("\n");
 }
 
@@ -115,11 +119,26 @@ async function filmGenerate(prompt: string): Promise<string> {
   return renderFilmEnvelope(film);
 }
 
+/** Detect whether to use the hifi pipeline (GPT Image 2 → Seedance 2.0). */
+function isHifiMode(film: Film): boolean {
+  const skill = getActiveFilmSkill();
+  if (skill === "hifi") return true;
+  // Auto-detect from film prompt or style
+  const detected = detectFilmSkill(film.originalPrompt);
+  if (detected === "hifi") return true;
+  // Also detect from style keywords
+  const style = film.style.toLowerCase();
+  return /\b(cartoon|anime|illustration|comic|children|pixar|ghibli|cel.shad|manga)\b/.test(style);
+}
+
 async function filmApply(idOrEmpty: string): Promise<string> {
   const tracker = createTracker("/film apply");
   const store = useFilmStore.getState();
   const film = idOrEmpty ? store.getById(idOrEmpty) : store.getPending();
   if (!film) return idOrEmpty ? `No film "${idOrEmpty}".` : "No pending film. Try /film <idea> first.";
+
+  const hifi = isHifiMode(film);
+  const pipelineLabel = hifi ? "HiFi (GPT Image → Seedance)" : "Standard (flux-dev → Seedance)";
 
   // 1. Set CreativeContext
   try {
@@ -130,65 +149,112 @@ async function filmApply(idOrEmpty: string): Promise<string> {
     }
   } catch { /* non-fatal */ }
 
-  // 2. Create project with image scenes (key frames)
-  const scenes = film.shots.map((s) => ({
-    index: s.index - 1,
-    title: s.title.slice(0, 50),
-    prompt: `${film.characterLock}, ${s.description}, ${film.style}`.slice(0, 400),
-    action: "generate" as const,
-  }));
+  // 2. Generate key frames
+  //    HiFi mode: use gpt-image for each shot (better text, character consistency)
+  //    Standard:  use project_create + project_generate (flux-dev batch)
+  const keyFrameCards: Array<{ refId: string; url: string }> = [];
 
-  let projectId: string | undefined;
-  try {
-    const { listTools } = await import("@/lib/tools/registry");
-    const tools = listTools();
-    const createTool = tools.find((t) => t.name === "project_create");
-    const genTool = tools.find((t) => t.name === "project_generate");
-    if (!createTool || !genTool) return "Apply failed: project tools not registered.";
+  if (hifi) {
+    // HiFi pipeline: GPT Image 2 per shot — sequential for consistency
+    const { runInference } = await import("@/lib/sdk/client");
+    const { useCanvasStore } = await import("@/lib/canvas/store");
+    const canvas = useCanvasStore.getState();
 
-    tracker.trackTool("project_create", true);
-    const createResult = await createTool.execute({
-      brief: `Film: ${film.title} — ${film.style}`,
-      scenes,
-      style_guide: {
-        visual_style: film.style,
-        prompt_prefix: `${film.style}, ${film.characterLock}, `,
-        mood: film.context.mood,
-      },
-    });
-    if (!createResult.success) return `Apply failed: ${createResult.error}`;
-    projectId = (createResult.data as Record<string, unknown>)?.project_id as string;
-    if (!projectId) return "Apply failed: no project ID returned.";
+    for (const shot of film.shots) {
+      const prompt = `${film.characterLock}, ${shot.description}, ${film.style}, single frame, no text overlay, composition ready for animation`.slice(0, 500);
+      const refId = `hifi-${film.id.slice(0, 8)}-${shot.index}`;
+      const card = canvas.addCard({ type: "image", title: shot.title, refId });
 
-    tracker.trackTool("project_generate", true);
-    await genTool.execute({ project_id: projectId });
-  } catch (e) {
-    return `Apply failed: ${e instanceof Error ? e.message : "unknown"}`;
+      try {
+        tracker.trackTool("gpt-image", true);
+        const result = await runInference({
+          capability: "gpt-image",
+          prompt,
+          params: { size: "1024x1024" },
+        });
+        const r = result as Record<string, unknown>;
+        const data = (r.data ?? r) as Record<string, unknown>;
+        const images = data.images as Array<{ url: string }> | undefined;
+        const url = (r.image_url as string) ?? images?.[0]?.url ?? (data.url as string);
+        if (url) {
+          canvas.updateCard(card.id, { url, capability: "gpt-image" });
+          keyFrameCards.push({ refId: card.refId, url });
+        } else {
+          canvas.updateCard(card.id, { error: "GPT Image returned no URL" });
+        }
+      } catch (e) {
+        canvas.updateCard(card.id, { error: `GPT Image failed: ${(e as Error).message?.slice(0, 80)}` });
+      }
+    }
+  } else {
+    // Standard pipeline: project_create + project_generate (flux-dev batch)
+    const scenes = film.shots.map((s) => ({
+      index: s.index - 1,
+      title: s.title.slice(0, 50),
+      prompt: `${film.characterLock}, ${s.description}, ${film.style}`.slice(0, 400),
+      action: "generate" as const,
+    }));
+
+    try {
+      const { listTools } = await import("@/lib/tools/registry");
+      const tools = listTools();
+      const createTool = tools.find((t) => t.name === "project_create");
+      const genTool = tools.find((t) => t.name === "project_generate");
+      if (!createTool || !genTool) return "Apply failed: project tools not registered.";
+
+      tracker.trackTool("project_create", true);
+      const createResult = await createTool.execute({
+        brief: `Film: ${film.title} — ${film.style}`,
+        scenes,
+        style_guide: {
+          visual_style: film.style,
+          prompt_prefix: `${film.style}, ${film.characterLock}, `,
+          mood: film.context.mood,
+        },
+      });
+      if (!createResult.success) return `Apply failed: ${createResult.error}`;
+      const projectId = (createResult.data as Record<string, unknown>)?.project_id as string;
+      if (!projectId) return "Apply failed: no project ID returned.";
+
+      tracker.trackTool("project_generate", true);
+      await genTool.execute({ project_id: projectId });
+
+      // Collect generated card URLs for animation step
+      const { useProjectStore } = await import("@/lib/projects/store");
+      const { useCanvasStore } = await import("@/lib/canvas/store");
+      const proj = useProjectStore.getState().getProject(projectId);
+      if (proj) {
+        const canvasState = useCanvasStore.getState();
+        for (const scene of proj.scenes) {
+          const card = canvasState.cards.find((c) => c.refId === scene.cardRefId);
+          if (card?.url) keyFrameCards.push({ refId: card.refId, url: card.url });
+        }
+      }
+    } catch (e) {
+      return `Apply failed: ${e instanceof Error ? e.message : "unknown"}`;
+    }
   }
 
-  // 3. Animate each scene card to video via Seedance 2.0 (cinematic i2v).
-  //    Seedance produces up to 15s clips with synchronized audio —
-  //    ideal for film-style shots with camera directions.
+  // 3. Animate each key frame to video via Seedance 2.0.
+  //    Seedance produces up to 15s clips with synchronized audio.
   let animatedCount = 0;
   try {
-    const { useProjectStore } = await import("@/lib/projects/store");
-    const { useCanvasStore } = await import("@/lib/canvas/store");
     const { listTools } = await import("@/lib/tools/registry");
-    const proj = useProjectStore.getState().getProject(projectId);
     const createMediaTool = listTools().find((t) => t.name === "create_media");
-    if (proj && createMediaTool) {
-      const canvasState = useCanvasStore.getState();
-      for (let si = 0; si < proj.scenes.length && si < film.shots.length; si++) {
-        const scene = proj.scenes[si];
-        const card = canvasState.cards.find((c) => c.refId === scene.cardRefId);
-        if (!card?.url) continue;
+    if (createMediaTool) {
+      for (let si = 0; si < keyFrameCards.length && si < film.shots.length; si++) {
+        const kf = keyFrameCards[si];
+        if (!kf.url) continue;
         const shot = film.shots[si];
+        const motionPrompt = hifi
+          ? `${shot.camera}, subtle cinematic motion, ${film.style}`.slice(0, 200)
+          : `${shot.camera}, ${shot.description}, ${film.style}`.slice(0, 300);
         try {
           await createMediaTool.execute({
             steps: [{
               action: "animate",
-              source_url: card.url,
-              prompt: `${shot.camera}, ${shot.description}, ${film.style}`.slice(0, 300),
+              source_url: kf.url,
+              prompt: motionPrompt,
               duration: shot.duration || 10,
             }],
           });
@@ -196,7 +262,7 @@ async function filmApply(idOrEmpty: string): Promise<string> {
         } catch { /* individual animation failure — continue */ }
       }
     }
-  } catch { /* animation phase failure — images still created */ }
+  } catch { /* animation phase failure — key frames still created */ }
 
   // 4. Organize
   try {
@@ -210,7 +276,7 @@ async function filmApply(idOrEmpty: string): Promise<string> {
   tracker.announce();
 
   const shotSummary = film.shots.map((s) => `${s.index}. **${s.title}** [${s.camera}]`).join("\n");
-  return `🎬 "${film.title}" applied — ${scenes.length} key frames + ${animatedCount} video clips on the canvas.\n\n${shotSummary}`;
+  return `🎬 "${film.title}" applied (${pipelineLabel}) — ${keyFrameCards.length} key frames + ${animatedCount} video clips on the canvas.\n\n${shotSummary}`;
 }
 
 // Natural-language apply detection

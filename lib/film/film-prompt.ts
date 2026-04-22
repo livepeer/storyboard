@@ -29,11 +29,18 @@ export const FILM_SKILLS: Record<string, { name: string; file: string; styleHint
     file: "film-scifi.md",
     styleHint: "cyberpunk neon or clean futurism, volumetric lighting, vast scale, holographic elements",
   },
+  hifi: {
+    name: "HiFi Video (GPT Image 2 → Seedance 2.0)",
+    file: "film-hifi.md",
+    styleHint: "GPT Image 2 key frame → Seedance 2.0 animation. Best for cartoon, anime, illustration, product, children's content, text-heavy scenes",
+  },
 };
 
 /** Auto-detect the best film skill from user prompt keywords. */
 export function detectFilmSkill(prompt: string): string | null {
   const lower = prompt.toLowerCase();
+  // hifi triggers — check first because it overlaps with animation keywords
+  if (/\b(hifi|hi.fi|high.fidelity|gpt.?image|two.?step|illustration.?video)\b/.test(lower)) return "hifi";
   if (/\b(anime|ghibli|pixar|cartoon|animated|animation)\b/.test(lower)) return "animation";
   if (/\b(action|fight|explosion|chase|battle|combat|war)\b/.test(lower)) return "action";
   if (/\b(documentary|real|interview|observe|nature|wildlife)\b/.test(lower)) return "documentary";
