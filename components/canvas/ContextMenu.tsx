@@ -1046,8 +1046,97 @@ export function ContextMenu() {
         </button>
         <div className="mx-2 my-1 h-px bg-white/[0.05]" />
         <div className="px-3 py-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
-          Generate
+          Create
         </div>
+        {/* Image — direct inference via flux-dev */}
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={async () => {
+            setVisible(false);
+            const prompt = await styledPrompt("Create Image", "Describe the image…");
+            if (!prompt) return;
+            sendToAgent(`generate an image: ${prompt}`);
+          }}
+        >
+          <span className="w-4 text-center">🖼</span> Image
+        </button>
+        {/* Video — direct via agent */}
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={async () => {
+            setVisible(false);
+            const prompt = await styledPrompt("Create Video", "Describe the video scene…");
+            if (!prompt) return;
+            sendToAgent(`create a video: ${prompt}`);
+          }}
+        >
+          <span className="w-4 text-center">🎬</span> Video
+        </button>
+        {/* Story — /story command */}
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={async () => {
+            setVisible(false);
+            const prompt = await styledPrompt("Create Story", "Describe the story concept…");
+            if (!prompt) return;
+            sendToAgent(`/story ${prompt}`);
+          }}
+        >
+          <span className="w-4 text-center">📖</span> Story
+        </button>
+        {/* Film — /film command */}
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={async () => {
+            setVisible(false);
+            const prompt = await styledPrompt("Create Film", "Describe the film concept…");
+            if (!prompt) return;
+            sendToAgent(`/film ${prompt}`);
+          }}
+        >
+          <span className="w-4 text-center">🎞</span> Film
+        </button>
+        {/* Music — /music command */}
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={async () => {
+            setVisible(false);
+            const prompt = await styledPrompt("Create Music", "Describe mood, genre, tempo…");
+            if (!prompt) return;
+            sendToAgent(`/music ${prompt}`);
+          }}
+        >
+          <span className="w-4 text-center">🎵</span> Music
+        </button>
+        {/* Talking Video — /talk command */}
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={async () => {
+            setVisible(false);
+            const prompt = await styledPrompt("Create Talking Video", "What should the character say?");
+            if (!prompt) return;
+            prefillChat(`/talk ${prompt} --face `);
+          }}
+        >
+          <span className="w-4 text-center">🗣</span> Talking Video
+        </button>
+        {/* Logo — /logo command */}
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
+          onClick={async () => {
+            setVisible(false);
+            const prompt = await styledPrompt("Create Logo", "Brand name + style description…");
+            if (!prompt) return;
+            sendToAgent(`/logo ${prompt}`);
+          }}
+        >
+          <span className="w-4 text-center">✦</span> Logo
+        </button>
+        <div className="mx-2 my-1 h-px bg-white/[0.05]" />
+        <div className="px-3 py-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
+          Advanced
+        </div>
+        {/* GPT Image 2 — direct inference */}
         <button
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--text-muted)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)]"
           onClick={async () => {
