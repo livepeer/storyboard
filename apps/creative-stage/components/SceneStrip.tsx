@@ -318,10 +318,15 @@ function Tooltip({ scene, idx, locked, isCurrent }: { scene: Scene; idx: number;
       </div>
 
       {/* Config row */}
-      <div style={{ display: "flex", gap: 8, fontSize: 9, color: "#888" }}>
+      <div style={{ display: "flex", gap: 8, fontSize: 9, color: "#888", flexWrap: "wrap" }}>
         <span>🎨 {scene.preset}</span>
         <span>⏱ {scene.duration}s</span>
         {scene.noiseScale !== undefined && <span>🎚 noise {scene.noiseScale}</span>}
+        {scene.vaceRef ? (
+          <span style={{ color: "#4ade80" }}>✦ VACE</span>
+        ) : (
+          <span style={{ color: "#555570" }}>○ no VACE</span>
+        )}
       </div>
 
       {/* Edit hint */}

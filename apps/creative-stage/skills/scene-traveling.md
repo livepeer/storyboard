@@ -208,6 +208,67 @@ Before finalizing scenes, verify each consecutive pair shares:
 - Background evolves gradually: autumn → pine → palm (never jumps)
 - Motion constant: always "toward camera" with wheel spin
 
+## VACE-Enhanced Scene Traveling
+
+The performance engine automatically generates VACE key frame images for each scene in the background. This dramatically improves morphing quality.
+
+### How It Works
+
+```
+User sends prompt → stage_scene fires
+  │
+  ├── Scenes load into timeline immediately
+  ├── Scope stream starts (shows "warming up GPU…")
+  │
+  └── Background: flux-dev generates key frame images
+        ├── Scene 1 key frame → attached as vaceRef
+        ├── Scene 2 key frame → attached as vaceRef
+        └── Scene N key frame → attached as vaceRef
+              │
+              ▼
+        When performance transitions to Scene N:
+          control message includes:
+            prompts: "scene N prompt"
+            vace_enabled: true
+            vace_ref_images: [keyframe_N_url]
+            vace_context_scale: 1.2
+```
+
+### Why VACE Key Frames Matter
+
+Without VACE:
+- Scope generates from text prompt + noise on black input frames
+- Composition is unpredictable — the "car" might appear anywhere in frame
+- Colors and lighting vary wildly between frames
+- Background is inconsistent
+
+With VACE key frames:
+- Scope uses the pre-generated image as a visual anchor
+- Composition matches the key frame — subject position is locked
+- Colors and lighting are guided by the reference
+- Background structure follows the key frame
+- The prompt still controls the generation, but VACE adds spatial/color conditioning
+
+### VACE Parameters
+
+| Parameter | Value | Effect |
+|-----------|-------|--------|
+| vace_context_scale | 0.8-1.0 | Moderate reference influence — lets prompt drive content |
+| vace_context_scale | 1.2-1.5 | Strong reference — composition/colors closely match key frame |
+| vace_context_scale | 1.8-2.0 | Very strong — almost reproduces the key frame with minor variation |
+
+For transformations, use **1.2** — strong enough to anchor composition but loose enough for Scope to morph between scenes.
+
+### Key Frame Timing
+
+Key frames generate at ~5-8s each via flux-dev. For a 10-scene performance:
+- Total key frame generation: ~50-80s
+- Stream starts immediately (doesn't wait)
+- First key frames arrive during warm-up phase
+- By the time the stream produces frames, most key frames are ready
+
+If a scene transition happens before its key frame is ready, the transition works normally (text-only prompt) — VACE enhances it once the key frame arrives for subsequent transitions.
+
 ## Anti-Patterns
 
 **DON'T: Jump between unrelated scenes**

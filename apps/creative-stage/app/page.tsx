@@ -255,6 +255,12 @@ export default function Stage() {
       stopPerformance: () => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); },
       playWhenReady: () => { pendingPlayRef.current = true; },
       setAudioUrl, setBpm,
+      setSceneVaceRef: (idx, url) => {
+        if (perfRef.current.scenes[idx]) {
+          perfRef.current.scenes[idx].vaceRef = url;
+          setPerfState(perfRef.current.getState());
+        }
+      },
       addArtifact: (a) => {
         const isVideo = a.type === "video";
         artifacts.getState().add({
