@@ -139,6 +139,9 @@ export default function Stage() {
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pendingPlayRef = useRef(false);
 
+  // Right-click context menu
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; artifactId: string } | null>(null);
+
   // Scene set tabs — each prompt creates a scene set, tabs let you switch
   interface SceneSet { id: string; title: string; scenes: Scene[]; audioUrl?: string | null }
   const sceneSetsRef = useRef<SceneSet[]>([]);
@@ -522,7 +525,10 @@ export default function Stage() {
               onMove={(id, x, y) => { artifacts.getState().update(id, { x, y }); handleCardDrop(id); }}
               onResize={(id, w, h) => artifacts.getState().update(id, { w, h })}
             >
-              <div style={S.cardContent}>
+              <div
+                style={S.cardContent}
+                onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, artifactId: a.id }); }}
+              >
                 {a.url && a.type === "image" && <img src={a.url} alt={a.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 {a.url && a.type === "video" && (
                   <video
@@ -755,6 +761,85 @@ export default function Stage() {
           </div>
         </div>
       )}
+      {/* ─── Right-click Context Menu ─── */}
+      {ctxMenu && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 10000 }}
+          onClick={() => setCtxMenu(null)}
+          onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null); }}
+        >
+          <div
+            style={{
+              position: "absolute", left: ctxMenu.x, top: ctxMenu.y,
+              background: "rgba(16,16,22,0.95)", backdropFilter: "blur(16px)",
+              border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10,
+              padding: "4px 0", minWidth: 180, boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+              animation: "fadeIn 0.15s ease-out",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(() => {
+              const art = arts.find((a) => a.id === ctxMenu.artifactId);
+              if (!art) return null;
+              const isImage = art.type === "image" && art.url;
+              return (
+                <>
+                  {isImage && (
+                    <>
+                      <CtxMenuItem label="Product Briefing (GPT Image)" icon="📋" onClick={() => {
+                        setCtxMenu(null);
+                        chat.getState().addMessage(`Create a professional product briefing using this image: ${art.url}`, "user");
+                        handleSend(`Create a product briefing card using gpt-image-edit for this image: ${art.url}. Add price, specs, and callouts.`);
+                      }} />
+                      <CtxMenuItem label="Edit with GPT Image" icon="✏️" onClick={() => {
+                        setCtxMenu(null);
+                        const prompt = window.prompt("What would you like to change?");
+                        if (prompt) handleSend(`Use gpt-image-edit to edit this image: ${art.url}. Change: ${prompt}`);
+                      }} />
+                      <div style={{ height: 1, background: "rgba(255,255,255,0.05)", margin: "3px 8px" }} />
+                    </>
+                  )}
+                  <CtxMenuItem label="Generate with GPT Image" icon="🎨" onClick={() => {
+                    setCtxMenu(null);
+                    const prompt = window.prompt("Describe what to generate:");
+                    if (prompt) handleSend(`Generate an image using gpt-image: ${prompt}`);
+                  }} />
+                  {isImage && (
+                    <CtxMenuItem label="Animate (seedance)" icon="🎬" onClick={() => {
+                      setCtxMenu(null);
+                      handleSend(`Animate this image into a 5-second video using seedance-i2v: ${art.url}`);
+                    }} />
+                  )}
+                  <div style={{ height: 1, background: "rgba(255,255,255,0.05)", margin: "3px 8px" }} />
+                  <CtxMenuItem label="Delete" icon="🗑" danger onClick={() => {
+                    setCtxMenu(null);
+                    artifacts.getState().remove(art.id);
+                  }} />
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function CtxMenuItem({ label, icon, danger, onClick }: { label: string; icon: string; danger?: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: "flex", alignItems: "center", gap: 8, width: "100%",
+        padding: "7px 14px", border: "none", background: "transparent",
+        color: danger ? "#f87171" : "#ccc", fontSize: 12, fontFamily: "inherit",
+        cursor: "pointer", textAlign: "left", transition: "background 100ms",
+      }}
+      onMouseEnter={(e) => { (e.target as HTMLElement).style.background = danger ? "rgba(248,113,113,0.1)" : "rgba(255,255,255,0.06)"; }}
+      onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
+    >
+      <span style={{ fontSize: 14 }}>{icon}</span>
+      {label}
+    </button>
   );
 }
