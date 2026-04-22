@@ -173,25 +173,16 @@ export default function Stage() {
   useEffect(() => {
     if (pendingPlayRef.current && streamState?.status === "streaming" && streamIdRef.current) {
       pendingPlayRef.current = false;
-      // Create a controlFn with retry — /control may 404 if SDK session is still initializing
       const controlFn = async (params: Record<string, unknown>) => {
+        if (!streamIdRef.current) return;
         const cfg = getSdkConfig();
-        for (let attempt = 0; attempt < 5; attempt++) {
-          try {
-            const resp = await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
-              body: JSON.stringify({ type: "parameters", params }),
-            });
-            if (resp.ok) return;
-            if (resp.status === 404 && attempt < 4) {
-              await new Promise((r) => setTimeout(r, 3000));
-              continue;
-            }
-          } catch {
-            if (attempt < 4) await new Promise((r) => setTimeout(r, 3000));
-          }
-        }
+        try {
+          await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
+            body: JSON.stringify({ type: "parameters", params }),
+          });
+        } catch { /* fire and forget */ }
       };
       perfRef.current.play(controlFn, setPerfState);
       chat.getState().addMessage("Stream ready — performance playing!", "system");
@@ -230,25 +221,13 @@ export default function Stage() {
     const controlStreamFn = async (params: Record<string, unknown>) => {
       if (!streamIdRef.current) return;
       const cfg = getSdkConfig();
-      // Retry on 404 — the SDK session's control channel may not be ready yet
-      for (let attempt = 0; attempt < 5; attempt++) {
-        try {
-          const resp = await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
-            body: JSON.stringify({ type: "parameters", params }),
-          });
-          if (resp.ok) return;
-          if (resp.status === 404 && attempt < 4) {
-            await new Promise((r) => setTimeout(r, 3000)); // wait 3s and retry
-            continue;
-          }
-          console.log(`[control] Failed: ${resp.status}`);
-          return;
-        } catch {
-          if (attempt < 4) await new Promise((r) => setTimeout(r, 3000));
-        }
-      }
+      try {
+        await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
+          body: JSON.stringify({ type: "parameters", params }),
+        });
+      } catch { /* fire and forget */ }
     };
 
     const toolCtx: StageToolContext = {
@@ -668,19 +647,16 @@ export default function Stage() {
 
             // Auto-play if stream is running
             if (streamIdRef.current) {
-              const sdk = getSdkConfig();
+              const cfg = getSdkConfig();
               const fn = async (params: Record<string, unknown>) => {
-                for (let a = 0; a < 5; a++) {
-                  try {
-                    const r = await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
-                      body: JSON.stringify({ type: "parameters", params }),
-                    });
-                    if (r.ok) return;
-                    if (r.status === 404) { await new Promise((r) => setTimeout(r, 3000)); continue; }
-                  } catch { await new Promise((r) => setTimeout(r, 3000)); }
-                }
+                if (!streamIdRef.current) return;
+                try {
+                  await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
+                    body: JSON.stringify({ type: "parameters", params }),
+                  });
+                } catch { /* fire and forget */ }
               };
               perfRef.current.play(fn, setPerfState);
             }
