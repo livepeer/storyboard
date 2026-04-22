@@ -136,40 +136,38 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
     );
 
     async function publishLoop() {
+      // Wait for first output frame before publishing — the SDK's trickle
+      // publish channel returns 404 until _init_stream_session completes
+      // (30-90s). Polling during warm-up just spams the console.
+      while (runningRef.current && streamIdRef.current === streamId && !publishReady) {
+        await new Promise((r) => setTimeout(r, 2000));
+        // Check if we've received any frames yet (set by pollFrames)
+        if (frameCountRef.current > 0) {
+          publishReady = true;
+        }
+      }
+
+      // Now publish frames
       while (runningRef.current && streamIdRef.current === streamId) {
         try {
-          // Use no-cors-like approach to suppress console 404 errors during warm-up
           const resp = await fetch(`${opts.sdkUrl}/stream/${streamId}/publish?seq=${seq}`, {
             method: "POST",
             headers: { "Content-Type": "image/jpeg", ...publishHeaders },
             body: blob,
           }).catch(() => null);
 
-          if (!resp) {
-            // Network error — continue silently
-          } else if (resp.ok) {
+          if (resp?.ok) {
             seq++;
             consecutive404 = 0;
-            if (!publishReady) {
-              publishReady = true;
-              console.log("[ScopePlayer] Publish channel ready");
-            }
-          } else if (resp.status === 404) {
-            seq++; // increment to avoid repeated seq=0
+          } else if (resp?.status === 404) {
             consecutive404++;
-            if (publishReady && consecutive404 > 10) {
-              console.log("[ScopePlayer] Stream gone (publish 404)");
-              return;
-            }
-          } else if (resp.status === 410) {
-            return; // stream ended
+            if (consecutive404 > 10) return; // stream gone
+          } else if (resp?.status === 410) {
+            return;
           }
-        } catch {
-          // silently continue
-        }
+        } catch { /* continue */ }
 
-        const delay = publishReady ? 100 : 3000; // 3s during warm-up to reduce 404 spam
-        await new Promise((r) => setTimeout(r, delay));
+        await new Promise((r) => setTimeout(r, 100));
       }
     }
     publishLoop();
