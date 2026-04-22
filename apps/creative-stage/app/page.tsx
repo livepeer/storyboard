@@ -697,6 +697,13 @@ export default function Stage() {
 
             chat.getState().addMessage(`Switched to: "${target.title}"`, "system");
           }}
+          onRenameTab={(idx, name) => {
+            const target = sceneSetsRef.current[idx];
+            if (target) {
+              target.title = name;
+              syncSceneSets();
+            }
+          }}
         />
 
         {/* Record */}

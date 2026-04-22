@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import type { Scene, PerformanceState } from "../lib/performance";
 
 export interface SavedStreamInfo {
@@ -17,12 +17,10 @@ interface SceneStripProps {
   onRemove: (idx: number) => void;
   onEditScene: (idx: number, updates: Partial<Scene>) => void;
   onAddScene?: (scene: Omit<Scene, "index">) => void;
-  /** Saved streams for the switcher */
   savedStreams?: SavedStreamInfo[];
-  /** Current active stream ID */
   activeStreamId?: string | null;
-  /** Switch to a saved stream */
   onSwitchStream?: (idx: number) => void;
+  onRenameTab?: (idx: number, name: string) => void;
 }
 
 const PRESET_COLORS: Record<string, string> = {
@@ -37,7 +35,7 @@ const PRESET_COLORS: Record<string, string> = {
 
 const PRESETS = Object.keys(PRESET_COLORS);
 
-export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditScene, onAddScene, savedStreams, activeStreamId, onSwitchStream }: SceneStripProps) {
+export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditScene, onAddScene, savedStreams, activeStreamId, onSwitchStream, onRenameTab }: SceneStripProps) {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
@@ -121,35 +119,22 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
         </div>
       )}
 
-      {/* Stream switcher tabs — only show when 2+ streams exist */}
+      {/* Scene set tabs — double-click to rename */}
       {savedStreams && savedStreams.length >= 2 && (
         <div style={{
           display: "flex", gap: 3, padding: "4px 12px 0",
           overflowX: "auto", scrollbarWidth: "none",
         }}>
-          {savedStreams.map((s, i) => {
-            const isActive = s.streamId === activeStreamId;
-            const label = s.title || `Stream ${i + 1}`;
-            return (
-              <button
-                key={s.streamId}
-                onClick={() => onSwitchStream?.(i)}
-                style={{
-                  padding: "3px 10px", borderRadius: "6px 6px 0 0",
-                  border: `1px solid ${isActive ? "rgba(129,140,248,0.3)" : "rgba(255,255,255,0.04)"}`,
-                  borderBottom: "none",
-                  background: isActive ? "rgba(129,140,248,0.12)" : "transparent",
-                  color: isActive ? "#a5b4fc" : "#555570",
-                  fontSize: 10, fontWeight: 600, fontFamily: "inherit",
-                  cursor: "pointer", transition: "all 150ms",
-                  whiteSpace: "nowrap", flexShrink: 0,
-                }}
-              >
-                <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: isActive ? "#4ade80" : "#333", marginRight: 5, verticalAlign: "middle" }} />
-                {label.slice(0, 20)} · {s.sceneCount}
-              </button>
-            );
-          })}
+          {savedStreams.map((s, i) => (
+            <TabButton
+              key={s.streamId}
+              label={s.title || `Set ${i + 1}`}
+              count={s.sceneCount}
+              isActive={s.streamId === activeStreamId}
+              onClick={() => onSwitchStream?.(i)}
+              onRename={(name) => onRenameTab?.(i, name)}
+            />
+          ))}
         </div>
       )}
 
@@ -501,6 +486,63 @@ function btnStyle(color: string): React.CSSProperties {
     cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit",
     transition: "all 150ms ease",
   };
+}
+
+// ─── Tab Button (double-click to rename) ───
+function TabButton({ label, count, isActive, onClick, onRename }: {
+  label: string; count: number; isActive: boolean;
+  onClick: () => void; onRename: (name: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(label);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => { if (draft.trim()) onRename(draft.trim()); setEditing(false); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { if (draft.trim()) onRename(draft.trim()); setEditing(false); }
+          if (e.key === "Escape") { setDraft(label); setEditing(false); }
+        }}
+        style={{
+          padding: "2px 8px", borderRadius: "6px 6px 0 0",
+          border: "1px solid rgba(129,140,248,0.4)", borderBottom: "none",
+          background: "rgba(129,140,248,0.15)", color: "#e4e4f0",
+          fontSize: 10, fontWeight: 600, fontFamily: "inherit",
+          width: 100, outline: "none",
+        }}
+      />
+    );
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      onDoubleClick={(e) => { e.stopPropagation(); setDraft(label); setEditing(true); }}
+      title="Double-click to rename"
+      style={{
+        padding: "3px 10px", borderRadius: "6px 6px 0 0",
+        border: `1px solid ${isActive ? "rgba(129,140,248,0.3)" : "rgba(255,255,255,0.04)"}`,
+        borderBottom: "none",
+        background: isActive ? "rgba(129,140,248,0.12)" : "transparent",
+        color: isActive ? "#a5b4fc" : "#555570",
+        fontSize: 10, fontWeight: 600, fontFamily: "inherit",
+        cursor: "pointer", transition: "all 150ms",
+        whiteSpace: "nowrap", flexShrink: 0,
+      }}
+    >
+      <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: isActive ? "#4ade80" : "#333", marginRight: 5, verticalAlign: "middle" }} />
+      {label.slice(0, 20)} · {count}
+    </button>
+  );
 }
 
 function formatTime(seconds: number): string {
