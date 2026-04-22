@@ -3,16 +3,42 @@
  */
 
 import type { ScopeParams } from "@livepeer/scope-player";
+import { createPipelineRegistry } from "@livepeer/creative-kit";
+
+/** Shared pipeline registry — single source of truth for recipes across all apps. */
+const registry = createPipelineRegistry();
+
+interface ResolvedRecipe {
+  pipeline: string;
+  kv_cache: number;
+  denoising: number[];
+  extras?: Record<string, unknown>;
+}
+
+function resolveStageRecipe(recipeId?: string): ResolvedRecipe {
+  const recipe = recipeId ? registry.getRecipe(recipeId) : undefined;
+  if (recipe) {
+    const d = recipe.defaults as Record<string, unknown>;
+    const { kv_cache_attention_bias, denoising_step_list, ...extras } = d;
+    return {
+      pipeline: recipe.pipeline,
+      kv_cache: (kv_cache_attention_bias as number) ?? 0.5,
+      denoising: (denoising_step_list as number[]) ?? [1000, 750, 500, 250],
+      extras: Object.keys(extras).length > 0 ? extras : undefined,
+    };
+  }
+  return { pipeline: "longlive", kv_cache: 0.5, denoising: [1000, 750, 500, 250] };
+}
 
 // Default text-only graph (no video input needed)
-function textOnlyGraph() {
+function textOnlyGraph(pipelineId = "longlive") {
   return {
     nodes: [
-      { id: "longlive", type: "pipeline", pipeline_id: "longlive" },
+      { id: pipelineId, type: "pipeline", pipeline_id: pipelineId },
       { id: "output", type: "sink" },
     ],
     edges: [
-      { from: "longlive", from_port: "video", to_node: "output", to_port: "video", kind: "stream" },
+      { from: pipelineId, from_port: "video", to_node: "output", to_port: "video", kind: "stream" },
     ],
   };
 }
@@ -95,6 +121,7 @@ export function createStageTools(ctx: StageToolContext) {
         properties: {
           prompt: { type: "string", description: "Scene description" },
           preset: { type: "string", description: "Visual preset: dreamy, cinematic, anime, abstract, faithful, painterly, psychedelic" },
+          recipe: { type: "string", description: "Stream recipe: classic, ltx-responsive, ltx-smooth, fast-preview, krea-hq, memflow-consistent. Default: classic" },
         },
         required: ["prompt"],
       },
@@ -105,6 +132,7 @@ export function createStageTools(ctx: StageToolContext) {
           faithful: 0.2, painterly: 0.65, psychedelic: 0.9,
         };
         const noise = presetMap[(args.preset as string) || "cinematic"] ?? 0.5;
+        const recipe = resolveStageRecipe(args.recipe as string | undefined);
 
         if (!ctx.apiKey) {
           return JSON.stringify({ error: "No Daydream API key — open Settings and enter your sk_... key" });
@@ -119,10 +147,11 @@ export function createStageTools(ctx: StageToolContext) {
             params: {
               prompt: prompt,
               prompts: prompt,
-              pipeline_ids: ["longlive"],
+              pipeline_ids: [recipe.pipeline],
               noise_scale: noise,
-              kv_cache_attention_bias: 0.5,
-              denoising_step_list: [1000, 750, 500, 250],
+              kv_cache_attention_bias: recipe.kv_cache,
+              denoising_step_list: recipe.denoising,
+              ...recipe.extras,
             },
           }),
         }).then(async (resp) => {
@@ -257,6 +286,10 @@ export function createStageTools(ctx: StageToolContext) {
       parameters: {
         type: "object",
         properties: {
+          recipe: {
+            type: "string",
+            description: "Stream recipe: classic, ltx-responsive, ltx-smooth, fast-preview, krea-hq, memflow-consistent. Controls pipeline and quality. Default: classic",
+          },
           style_prefix: {
             type: "string",
             description: "A style prefix prepended to EVERY scene prompt for visual consistency. Include: camera angle, lighting mood, color grading, art style.",
@@ -283,6 +316,7 @@ export function createStageTools(ctx: StageToolContext) {
         if (!rawScenes || rawScenes.length === 0) return JSON.stringify({ error: "No scenes provided" });
 
         const stylePrefix = (args.style_prefix as string) || "";
+        const recipe = resolveStageRecipe(args.recipe as string | undefined);
         const scenes = rawScenes.map((s) => ({
           ...s,
           prompt: stylePrefix ? `${stylePrefix}, ${s.prompt}` : s.prompt,
@@ -315,10 +349,11 @@ export function createStageTools(ctx: StageToolContext) {
               params: {
                 prompt: first.prompt,
                 prompts: first.prompt,
-                pipeline_ids: ["longlive"],
+                pipeline_ids: [recipe.pipeline],
                 noise_scale: noise,
-                kv_cache_attention_bias: 0.5,
-                denoising_step_list: [1000, 750, 500, 250],
+                kv_cache_attention_bias: recipe.kv_cache,
+                denoising_step_list: recipe.denoising,
+                ...recipe.extras,
               },
             }),
           }).then(async (resp) => {

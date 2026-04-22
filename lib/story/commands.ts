@@ -102,7 +102,13 @@ export async function handleStoryCommand(args: string): Promise<string> {
 
   // Otherwise: treat the whole args as the story prompt.
   //   /story a cat and dog friendship for 10-year-olds
-  return storyGenerate(trimmed);
+  //   /story give me a campaign for ev bikes targeting young people
+  // Strip common meta-prefixes so the storyteller sees the actual concept.
+  const concept = trimmed.replace(
+    /^(?:give\s+me\s+(?:a\s+)?|create\s+(?:a\s+)?|make\s+(?:a\s+)?|generate\s+(?:a\s+)?|write\s+(?:a\s+)?|(?:a\s+)?(?:story|storyboard|campaign|narrative|film|video)\s+(?:about|for|on)\s+)/i,
+    ""
+  ).trim() || trimmed;
+  return storyGenerate(concept);
 }
 
 // ----------------------------------------------------------------------

@@ -13,6 +13,8 @@ interface SceneStripProps {
   state: PerformanceState;
   onPlay: () => void;
   onStop: () => void;
+  onPause?: () => void;
+  onResume?: () => void;
   onReorder: (fromIdx: number, toIdx: number) => void;
   onRemove: (idx: number) => void;
   onEditScene: (idx: number, updates: Partial<Scene>) => void;
@@ -35,7 +37,7 @@ const PRESET_COLORS: Record<string, string> = {
 
 const PRESETS = Object.keys(PRESET_COLORS);
 
-export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditScene, onAddScene, savedStreams, activeStreamId, onSwitchStream, onRenameTab }: SceneStripProps) {
+export function SceneStrip({ state, onPlay, onStop, onPause, onResume, onReorder, onRemove, onEditScene, onAddScene, savedStreams, activeStreamId, onSwitchStream, onRenameTab }: SceneStripProps) {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
@@ -140,24 +142,47 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
 
       {/* Controls + scene cards */}
       <div style={{ display: "flex", alignItems: "center", padding: "8px 12px", gap: 8 }}>
-        {/* Play/Stop button */}
-        <button
-          onClick={isPlaying ? onStop : onPlay}
-          style={{
-            width: 34, height: 34, borderRadius: "50%", border: "1px solid transparent",
-            background: isPlaying
-              ? "rgba(248,113,113,0.15)"
-              : "linear-gradient(135deg, rgba(129,140,248,0.2), rgba(192,132,252,0.15))",
-            color: isPlaying ? "#f87171" : "#818cf8",
-            cursor: "pointer", fontSize: 14, flexShrink: 0,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            transition: "all 150ms ease",
-            boxShadow: isPlaying ? "none" : "0 0 12px rgba(129,140,248,0.15)",
-          }}
-          title={isPlaying ? "Stop" : "Play"}
-        >
-          {isPlaying ? "■" : "▶"}
-        </button>
+        {/* Play / Pause / Stop controls */}
+        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          {/* Play or Pause button */}
+          <button
+            onClick={
+              !isPlaying ? onPlay :
+              state.isPaused ? (onResume ?? onPlay) :
+              (onPause ?? onStop)
+            }
+            style={{
+              width: 34, height: 34, borderRadius: "50%", border: "1px solid transparent",
+              background: isPlaying && !state.isPaused
+                ? "rgba(250,204,21,0.15)"
+                : "linear-gradient(135deg, rgba(129,140,248,0.2), rgba(192,132,252,0.15))",
+              color: isPlaying && !state.isPaused ? "#facc15" : "#818cf8",
+              cursor: "pointer", fontSize: 14,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              transition: "all 150ms ease",
+              boxShadow: isPlaying ? "none" : "0 0 12px rgba(129,140,248,0.15)",
+            }}
+            title={!isPlaying ? "Play" : state.isPaused ? "Resume" : "Pause"}
+          >
+            {!isPlaying || state.isPaused ? "\u25B6" : "\u23F8"}
+          </button>
+          {/* Stop button — only visible when playing */}
+          {isPlaying && (
+            <button
+              onClick={onStop}
+              style={{
+                width: 34, height: 34, borderRadius: "50%", border: "1px solid transparent",
+                background: "rgba(248,113,113,0.15)",
+                color: "#f87171", cursor: "pointer", fontSize: 12,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "all 150ms ease",
+              }}
+              title="Stop"
+            >
+              ■
+            </button>
+          )}
+        </div>
 
         {/* Time display */}
         <span style={{ fontSize: 11, color: "#888", fontVariantNumeric: "tabular-nums", flexShrink: 0, width: 60, textAlign: "center" }}>

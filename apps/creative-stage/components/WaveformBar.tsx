@@ -17,10 +17,15 @@ interface WaveformBarProps {
   onSeek?: (time: number) => void;
   /** Called when user clicks "Sync" to enable beat-sync modulation */
   onSync?: (bpm: number) => void;
+  /** Called when user toggles play/pause */
+  onTogglePlay?: () => void;
+  /** Whether audio is currently paused (distinct from performance isPlaying) */
+  audioPaused?: boolean;
 }
 
 export function WaveformBar({
   audioUrl, bpm, isPlaying, currentTime, totalDuration, onSeek, onSync,
+  onTogglePlay, audioPaused,
 }: WaveformBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const waveformData = useRef<Float32Array | null>(null);
@@ -148,6 +153,24 @@ export function WaveformBar({
         }}>
           {bpm} BPM
         </div>
+      )}
+
+      {/* Play/Pause button */}
+      {onTogglePlay && (
+        <button
+          onClick={onTogglePlay}
+          style={{
+            width: 28, height: 28, borderRadius: "50%",
+            background: audioPaused ? "rgba(99,102,241,0.2)" : "rgba(255,255,255,0.08)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            color: "#e2e8f0", cursor: "pointer", flexShrink: 0,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 12, lineHeight: 1, padding: 0,
+          }}
+          title={audioPaused ? "Play" : "Pause"}
+        >
+          {audioPaused ? "\u25B6" : "\u23F8"}
+        </button>
       )}
 
       {/* Waveform canvas */}

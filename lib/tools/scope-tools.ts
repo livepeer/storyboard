@@ -29,6 +29,39 @@ import {
   getActiveSession,
 } from "@/lib/stream/session";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { createPipelineRegistry } from "@livepeer/creative-kit";
+
+/** Shared pipeline registry instance. */
+const registry = createPipelineRegistry();
+
+/** Map recipe graph template names to storyboard's existing template IDs. */
+const RECIPE_TEMPLATE_MAP: Record<string, string> = {
+  longlive: "simple-lv2v",
+  ltx2: "simple-lv2v",
+  krea_realtime_video: "simple-lv2v",
+  memflow: "simple-lv2v",
+};
+
+/** Resolve recipe → pipeline + template + defaults. Explicit overrides win. */
+function resolveRecipe(
+  recipeId?: string,
+  explicitPipeline?: string,
+  explicitTemplate?: string,
+): { pipeline: string; template: string; defaults: Partial<ScopeStreamParams> } {
+  const recipe = recipeId ? registry.getRecipe(recipeId) : undefined;
+  if (recipe) {
+    return {
+      pipeline: explicitPipeline || recipe.pipeline,
+      template: explicitTemplate || RECIPE_TEMPLATE_MAP[recipe.pipeline] || "simple-lv2v",
+      defaults: recipe.defaults as Partial<ScopeStreamParams>,
+    };
+  }
+  return {
+    pipeline: explicitPipeline || "longlive",
+    template: explicitTemplate || "simple-lv2v",
+    defaults: { kv_cache_attention_bias: 0.5, denoising_steps: [1000, 750, 500, 250] },
+  };
+}
 
 /**
  * scope_start — Start an LV2V stream with full Scope configuration.
@@ -44,10 +77,15 @@ export const scopeStartTool: ToolDefinition = {
         type: "string",
         description: "Style prompt for the transformation",
       },
+      recipe: {
+        type: "string",
+        enum: ["classic", "ltx-responsive", "ltx-smooth", "depth-lock", "scribble-guide", "interpolated", "fast-preview", "krea-hq", "memflow-consistent"],
+        description: "Stream recipe — bundles pipeline + graph + defaults. See scope-pipelines skill. Default: classic",
+      },
       graph_template: {
         type: "string",
         enum: ["simple-lv2v", "depth-guided", "scribble-guided", "interpolated", "text-only", "multi-pipeline"],
-        description: "Graph template to use. Default: simple-lv2v",
+        description: "Graph template to use. Default: simple-lv2v. Overridden by recipe if specified.",
       },
       preset: {
         type: "string",
@@ -56,7 +94,7 @@ export const scopeStartTool: ToolDefinition = {
       },
       pipeline_id: {
         type: "string",
-        description: "Override the main pipeline (default: longlive). Options: longlive, streamdiffusionv2, krea_realtime_video, memflow",
+        description: "Override the main pipeline (default: longlive). Options: longlive, ltx2, krea_realtime_video, memflow. Overridden by recipe if specified.",
       },
       noise_scale: {
         type: "number",
@@ -104,9 +142,13 @@ export const scopeStartTool: ToolDefinition = {
   },
   execute: async (input) => {
     const prompt = input.prompt as string;
-    const templateId = (input.graph_template as string) || "simple-lv2v";
+    const recipeId = input.recipe as string | undefined;
     const presetId = input.preset as string | undefined;
-    const pipelineId = (input.pipeline_id as string) || "longlive";
+
+    // Recipe resolution — recipe overrides pipeline_id and graph_template
+    const resolved = resolveRecipe(recipeId, input.pipeline_id as string | undefined, input.graph_template as string | undefined);
+    const templateId = resolved.template;
+    const pipelineId = resolved.pipeline;
 
     // Build graph from template
     const graph = buildGraph(templateId, pipelineId);
@@ -120,8 +162,9 @@ export const scopeStartTool: ToolDefinition = {
       ? presetData.prompt_prefix + prompt
       : prompt;
 
-    // Merge user overrides
+    // Merge: recipe defaults → preset → user overrides
     const params: Partial<ScopeStreamParams> = {
+      ...resolved.defaults,
       ...baseParams,
       pipeline_ids: [pipelineId],
       prompts: finalPrompt,
@@ -167,7 +210,8 @@ export const scopeStartTool: ToolDefinition = {
         return {
           success: true,
           data: {
-            message: `Scope LV2V starting: template=${templateId}, pipeline=${pipelineId}${presetId ? ", preset=" + presetId : ""}`,
+            message: `Scope LV2V starting: ${recipeId ? "recipe=" + recipeId : "template=" + templateId}, pipeline=${pipelineId}${presetId ? ", preset=" + presetId : ""}`,
+            recipe: recipeId,
             graph_template: templateId,
             pipeline: pipelineId,
             preset: presetId,

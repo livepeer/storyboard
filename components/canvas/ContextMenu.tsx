@@ -735,6 +735,9 @@ export function ContextMenu() {
         if (targetCard.url) {
           if (targetCard.type === "video" || action.id === "transform-video") {
             params.video_url = targetCard.url;
+          } else if (action.id === "gpt-image-edit" || action.id === "product-briefing") {
+            // gpt-image-2/edit requires image_urls (array), not image_url
+            params.image_urls = [targetCard.url];
           } else {
             params.image_url = targetCard.url;
           }
@@ -752,21 +755,31 @@ export function ContextMenu() {
           }
         }
 
-        // Ensure image_url is a fetchable HTTP URL for fal.ai.
+        // Ensure image URLs are fetchable HTTP URLs for fal.ai.
         // HTTP fal CDN URLs (https://v3b.fal.media/...) → pass through (fal can download its own CDN)
         // blob:/data: URLs → resize + upload to GCS to get a public HTTPS URL
-        if (isVideoAction && params.image_url && typeof params.image_url === "string") {
+        const needsHttpUrl = isVideoAction || action.id === "gpt-image-edit" || action.id === "product-briefing";
+        if (needsHttpUrl && params.image_url && typeof params.image_url === "string") {
           const imgUrl = params.image_url as string;
           const isHttp = imgUrl.startsWith("http://") || imgUrl.startsWith("https://");
           if (!isHttp) {
-            // Non-HTTP URL (blob: or data:) — must convert to public HTTPS
             try {
               params.image_url = await resizeImageForModel(imgUrl);
             } catch (e) {
               console.warn("[ContextMenu] Image prep failed:", (e as Error).message);
             }
           }
-          // HTTP URLs pass through — fal.ai fetches them directly
+        }
+        // gpt-image-edit: also ensure image_urls array items are HTTP
+        if (needsHttpUrl && Array.isArray(params.image_urls)) {
+          params.image_urls = await Promise.all(
+            (params.image_urls as string[]).map(async (u) => {
+              if (!u.startsWith("http://") && !u.startsWith("https://")) {
+                try { return await resizeImageForModel(u); } catch { return u; }
+              }
+              return u;
+            })
+          );
         }
 
         // Build fallback chain so content-policy rejections from one

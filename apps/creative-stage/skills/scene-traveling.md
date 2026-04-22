@@ -318,3 +318,26 @@ Vary it: 30s establish → 12s morph → 25s hold → 15s morph → 35s finale. 
 
 **DON'T: Forget the background**
 If Scene 1 has "autumn forest" and Scene 3 has "palm trees" but Scene 2 (bridge) doesn't mention trees at all, the background will glitch. Always describe the background evolution in bridge scenes.
+
+## Pipeline-Specific Notes
+
+### LTX 2.3 (`ltx-responsive` / `ltx-smooth` recipes)
+
+LTX 2.3 differs from LongLive in important ways for scene traveling:
+
+- **kv_cache_attention_bias defaults to 0.3** (not 1.0). This makes LTX more responsive to prompt changes — morphing starts faster. Reduce bridge scene durations by ~30% (8-12s instead of 12-18s).
+- **Native 24fps** gives smoother visual transitions. The `ltx-smooth` recipe adds RIFE for 48fps.
+- **Prompt interpolation is faster** — the low kv_cache means less temporal inertia. You may need to increase kv_cache to 0.5-0.6 for stable holding scenes.
+- **For stable scenes on LTX**: use `kv_cache_attention_bias: 0.6` (not 0.85 like longlive's faithful preset). LTX at 0.85 becomes overly static.
+
+### MemFlow (`memflow-consistent` recipe)
+
+- **Best for character consistency** — the memory bank preserves character identity across scenes.
+- **Use when the story follows a specific character** that must look the same throughout.
+- Higher kv_cache (0.7) by default for stability. Lower for morph bridges.
+
+### Krea Realtime Video (`krea-hq` recipe)
+
+- **14B model — highest visual quality** but slower (6-8fps).
+- **Use for final performances** when quality matters more than responsiveness.
+- Supports LoRA and VACE like longlive.

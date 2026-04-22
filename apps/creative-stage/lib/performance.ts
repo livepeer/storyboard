@@ -28,6 +28,7 @@ export interface PerformanceState {
   scenes: Scene[];
   currentScene: number;
   isPlaying: boolean;
+  isPaused: boolean;
   elapsed: number;
   totalDuration: number;
 }
@@ -72,8 +73,10 @@ export class PerformanceEngine {
   scenes: Scene[] = [];
   currentScene = 0;
   isPlaying = false;
+  isPaused = false;
   private timers: ReturnType<typeof setTimeout>[] = [];
   private startTime = 0;
+  private pausedElapsed = 0;
   private controlFn: ControlFn | null = null;
   private onUpdate: ((state: PerformanceState) => void) | null = null;
   private progressTimer: ReturnType<typeof setInterval> | null = null;
@@ -84,11 +87,18 @@ export class PerformanceEngine {
   }
 
   getState(): PerformanceState {
+    let elapsed = 0;
+    if (this.isPaused) {
+      elapsed = this.pausedElapsed;
+    } else if (this.isPlaying) {
+      elapsed = (Date.now() - this.startTime) / 1000;
+    }
     return {
       scenes: this.scenes,
       currentScene: this.currentScene,
       isPlaying: this.isPlaying,
-      elapsed: this.isPlaying ? (Date.now() - this.startTime) / 1000 : 0,
+      isPaused: this.isPaused,
+      elapsed,
       totalDuration: this.scenes.reduce((sum, s) => sum + s.duration, 0),
     };
   }
@@ -100,8 +110,10 @@ export class PerformanceEngine {
     this.controlFn = controlFn;
     this.onUpdate = onUpdate || null;
     this.isPlaying = true;
+    this.isPaused = false;
     this.currentScene = 0;
     this.startTime = Date.now();
+    this.pausedElapsed = 0;
 
     const first = this.scenes[0];
     await controlFn(buildControlParams(first));
@@ -110,8 +122,35 @@ export class PerformanceEngine {
     this.progressTimer = setInterval(() => this.notify(), 1000);
   }
 
+  pause() {
+    if (!this.isPlaying || this.isPaused) return;
+    this.isPaused = true;
+    this.pausedElapsed = (Date.now() - this.startTime) / 1000;
+    this.clearFutureTimers();
+    if (this.progressTimer) clearInterval(this.progressTimer);
+    this.progressTimer = null;
+    this.notify();
+  }
+
+  resume() {
+    if (!this.isPlaying || !this.isPaused || !this.controlFn) return;
+    this.isPaused = false;
+    // Shift startTime so elapsed picks up where we left off
+    this.startTime = Date.now() - this.pausedElapsed * 1000;
+    // Re-send current scene's control params to resume the stream content
+    const current = this.scenes[this.currentScene];
+    if (current) {
+      this.controlFn(buildControlParams(current));
+    }
+    this.rescheduleFuture();
+    this.progressTimer = setInterval(() => this.notify(), 1000);
+    this.notify();
+  }
+
   stop() {
     this.isPlaying = false;
+    this.isPaused = false;
+    this.pausedElapsed = 0;
     this.clearFutureTimers();
     if (this.progressTimer) clearInterval(this.progressTimer);
     this.progressTimer = null;

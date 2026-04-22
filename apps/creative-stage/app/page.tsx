@@ -130,10 +130,11 @@ export default function Stage() {
   const [messages, setMessages] = useState(chat.getState().messages);
   const [, forceChat] = useState(0);
   const perfRef = useRef(new PerformanceEngine());
-  const [perfState, setPerfState] = useState<PerformanceState>({ scenes: [], currentScene: 0, isPlaying: false, elapsed: 0, totalDuration: 0 });
+  const [perfState, setPerfState] = useState<PerformanceState>({ scenes: [], currentScene: 0, isPlaying: false, isPaused: false, elapsed: 0, totalDuration: 0 });
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [bpm, setBpm] = useState<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [audioPaused, setAudioPaused] = useState(false);
   const recorderRef = useRef(new StageRecorder());
   const [recState, setRecState] = useState<RecorderState>({ isRecording: false, duration: 0, blobUrl: null });
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -169,6 +170,7 @@ export default function Stage() {
     }
     audioRef.current.src = audioUrl;
     audioRef.current.loop = true;
+    setAudioPaused(false);
     audioRef.current.play().catch(() => {});
   }, [audioUrl]);
 
@@ -246,10 +248,17 @@ export default function Stage() {
       },
       setScenes: (scenes) => {
         const indexed: Scene[] = scenes.map((s, i) => ({ ...s, index: i }));
+
+        // Save audio to the CURRENT set before switching away
+        if (activeSetId) {
+          const cur = sceneSetsRef.current.find((s) => s.id === activeSetId);
+          if (cur) { cur.audioUrl = audioUrl; }
+        }
+
         perfRef.current.setScenes(indexed);
         setPerfState(perfRef.current.getState());
 
-        // Create a new scene set tab
+        // Create a new scene set tab — no audio (music belongs to the set that generated it)
         const firstScene = scenes[0];
         const name = (firstScene?.title || firstScene?.prompt || "")
           .replace(/^[^,]*,\s*/, "").split(/[,.]/).at(0)?.trim().slice(0, 25)
@@ -258,6 +267,10 @@ export default function Stage() {
         sceneSetsRef.current.push({ id: setId, title: name, scenes: indexed, audioUrl: null });
         setActiveSetId(setId);
         syncSceneSets();
+
+        // Stop playing old set's music — new set has none yet
+        if (audioRef.current) audioRef.current.pause();
+        setAudioUrl(null);
       },
       playPerformance: () => { perfRef.current.play(controlStreamFn, setPerfState); },
       stopPerformance: () => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); },
@@ -443,10 +456,18 @@ export default function Stage() {
 
       if (e.code === "Space" && perfState.scenes.length > 0) {
         e.preventDefault();
-        if (perfState.isPlaying) {
-          perfRef.current.stop();
+        if (perfState.isPlaying && !perfState.isPaused) {
+          // Playing → pause
+          perfRef.current.pause();
           setPerfState(perfRef.current.getState());
+          if (audioRef.current) { audioRef.current.pause(); setAudioPaused(true); }
+        } else if (perfState.isPlaying && perfState.isPaused) {
+          // Paused → resume
+          perfRef.current.resume();
+          setPerfState(perfRef.current.getState());
+          if (audioRef.current && audioUrl) { audioRef.current.play().catch(() => {}); setAudioPaused(false); }
         } else if (streamIdRef.current) {
+          // Stopped → play
           const cfg = getSdkConfig();
           const fn = async (params: Record<string, unknown>) => {
             await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
@@ -471,7 +492,7 @@ export default function Stage() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [mounted, perfState.scenes.length, perfState.isPlaying, streamState?.status]);
+  }, [mounted, perfState.scenes.length, perfState.isPlaying, perfState.isPaused, streamState?.status, audioUrl]);
 
   const saveSettings = () => {
     localStorage.setItem("sdk_service_url", sdkUrl);
@@ -593,6 +614,17 @@ export default function Stage() {
           audioUrl={audioUrl} bpm={bpm}
           isPlaying={perfState.isPlaying} currentTime={perfState.elapsed}
           totalDuration={perfState.totalDuration}
+          audioPaused={audioPaused}
+          onTogglePlay={() => {
+            if (!audioRef.current || !audioUrl) return;
+            if (audioPaused) {
+              audioRef.current.play().catch(() => {});
+              setAudioPaused(false);
+            } else {
+              audioRef.current.pause();
+              setAudioPaused(true);
+            }
+          }}
           onSync={(detectedBpm) => {
             if (!streamIdRef.current) return;
             const s = getSdkConfig();
@@ -620,6 +652,16 @@ export default function Stage() {
             perfRef.current.play(fn, setPerfState);
           }}
           onStop={() => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); }}
+          onPause={() => {
+            perfRef.current.pause();
+            setPerfState(perfRef.current.getState());
+            if (audioRef.current && !audioPaused) { audioRef.current.pause(); setAudioPaused(true); }
+          }}
+          onResume={() => {
+            perfRef.current.resume();
+            setPerfState(perfRef.current.getState());
+            if (audioRef.current && audioPaused && audioUrl) { audioRef.current.play().catch(() => {}); setAudioPaused(false); }
+          }}
           onReorder={(from, to) => { perfRef.current.reorderScenes(from, to); setPerfState(perfRef.current.getState()); }}
           onRemove={(idx) => { perfRef.current.removeScene(idx); setPerfState(perfRef.current.getState()); }}
           onEditScene={(idx, updates) => { perfRef.current.editScene(idx, updates); setPerfState(perfRef.current.getState()); }}
@@ -651,7 +693,8 @@ export default function Stage() {
               setAudioUrl(null);
             }
 
-            // Auto-play if stream is running
+            // Auto-play if stream is running — flush KV cache so the new
+            // scene set starts clean without carryover frames from the old set
             if (streamIdRef.current) {
               const cfg = getSdkConfig();
               const fn = async (params: Record<string, unknown>) => {
@@ -664,7 +707,10 @@ export default function Stage() {
                   });
                 } catch { /* fire and forget */ }
               };
-              perfRef.current.play(fn, setPerfState);
+              // Flush KV cache first to avoid carryover frames
+              fn({ reset_cache: true }).then(() => {
+                perfRef.current.play(fn, setPerfState);
+              });
             }
 
             chat.getState().addMessage(`Switched to: "${target.title}"`, "system");

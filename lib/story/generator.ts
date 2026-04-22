@@ -8,9 +8,23 @@
  */
 
 import type { Story, StoryScene } from "./types";
-import { STORYTELLER_SYSTEM_PROMPT } from "./storyteller-prompt";
 import type { CreativeContext } from "@/lib/agents/session-context";
 import { extractGeminiTokens } from "@/lib/utils/execution-tracker";
+
+/** Fetch skills/storyteller.md at runtime so edits to the skill file take effect without code changes. */
+let _promptCache: string | null = null;
+async function getStorytellerPrompt(): Promise<string> {
+  if (_promptCache) return _promptCache;
+  try {
+    const resp = await fetch("/skills/storyteller.md");
+    if (resp.ok) {
+      _promptCache = await resp.text();
+      return _promptCache;
+    }
+  } catch { /* fall through */ }
+  // Minimal fallback — should never be hit if public/skills/storyteller.md exists
+  return "You are a visual storyteller. Respond with a JSON story object with title, audience, arc, context, and scenes.";
+}
 
 /**
  * Tolerant JSON extractor. LLMs sometimes wrap output in code fences,
@@ -144,6 +158,8 @@ export async function generateStory(
     return { ok: false, error: "Give me a concept — a character, genre, or situation." };
   }
 
+  const systemPrompt = await getStorytellerPrompt();
+
   let resp: Response;
   try {
     resp = await fetch("/api/agent/gemini", {
@@ -155,7 +171,7 @@ export async function generateStory(
           { role: "user", parts: [{ text: trimmed }] },
         ],
         system_instruction: {
-          parts: [{ text: STORYTELLER_SYSTEM_PROMPT }],
+          parts: [{ text: systemPrompt }],
         },
       }),
     });

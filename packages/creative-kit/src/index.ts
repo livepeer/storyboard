@@ -24,7 +24,12 @@ export { createCapabilityResolver, type CapabilityResult, type CapabilityResolve
 export { extractFalError, isRecoverableFailure } from "./routing/fal-errors";
 export { createIntentClassifier, type IntentRule, type IntentClassifier, type IntentContext } from "./routing/intent-classifier";
 
-// UI Components
+// Streaming — Pipeline Registry & Recipes
+export { createPipelineRegistry } from "./streaming/pipeline-registry";
+export { BUILTIN_RECIPES, KNOWN_PIPELINES } from "./streaming/recipes";
+export { buildSimpleGraph, buildTextOnlyGraph, buildPreprocessorGraph, buildPostprocessorGraph } from "./streaming/graph-builder";
+export type { PipelineInfo, PipelineRegistry, StreamRecipe, RecipeGraph, RecipeGraphNode, RecipeGraphEdge } from "./streaming/types";
+
 // Utils
 export { resizeImageForModel } from "./utils/resize-image";
 export { mixVideoAudio, mixMedia, type MixOptions } from "./utils/media-mixer";

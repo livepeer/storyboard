@@ -75,13 +75,32 @@ Map user intent to optimal config:
 | "preserve structure" | graph_template=depth-guided |
 | "use this image as reference" | vace_ref_images=[url], vace_context_scale=1.5 |
 
+## Recipes
+
+Recipes bundle pipeline + graph + defaults. Pass `recipe` to scope_start instead of manually choosing pipeline_id + template.
+
+| Recipe | Pipeline | Use When |
+|--------|----------|----------|
+| `classic` | longlive | Default — stable, LoRA, VACE support |
+| `ltx-responsive` | ltx2 | User wants "smooth", "fluid", "24fps" |
+| `ltx-smooth` | ltx2+rife | User wants "buttery smooth", "48fps" |
+| `depth-lock` | longlive+depth | User wants to "preserve structure", "keep depth" |
+| `scribble-guide` | longlive+scribble | User wants "sketch-based", "edge-guided" |
+| `interpolated` | longlive+rife | User wants "smoother frames" |
+| `fast-preview` | longlive (2 steps) | User wants "quick preview", "fast" |
+| `krea-hq` | krea_realtime_video | User wants "highest quality", "best visuals" |
+| `memflow-consistent` | memflow | User wants "consistent characters", "same face throughout" |
+
+See `scope-pipelines` skill for full pipeline details.
+
 ## Rules
 
 1. Always use `scope_start` for LV2V (not `stream_start`) — it supports full params
-2. Default to `simple-lv2v` graph and `longlive` pipeline unless user asks otherwise
+2. Default to recipe=`classic` unless user asks otherwise
 3. When user says "stream" or "live" with no specifics, use `preset=cinematic`
 4. For mid-stream changes, use `scope_control` — never stop and restart
 5. Explain what parameters you're setting and why (transparency)
 6. If user provides an image/video card, use `source.ref_id` to feed it as input
 7. For LoRA: use `permanent_merge` unless user needs runtime scale adjustment
 8. Combine presets with user prompts — preset provides the technical params, user provides the creative direction
+9. When using ltx2-based recipes, remember kv_cache defaults to 0.3 (not 1.0) — more responsive to prompt changes
