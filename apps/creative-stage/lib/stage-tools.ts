@@ -538,117 +538,92 @@ export function createStageTools(ctx: StageToolContext) {
           return JSON.stringify({ error: `Only ${imageUrls.length} key frames generated — need at least 2` });
         }
 
-        // ── Step 2: Generate transition videos ──
-        ctx.say(`Creating ${imageUrls.length - 1} transition videos via seedance…`);
+        // ── Step 2: Generate transition videos via veo-transition ──
+        // veo-transition takes FIRST frame + LAST frame → generates a smooth morph video.
+        // This is dramatically better than i2v models for transformations because it
+        // understands BOTH endpoints and generates the in-between motion.
+        // Fallback chain: veo-transition → pixverse-transition → seedance-i2v
+        ctx.say(`Creating ${imageUrls.length - 1} morph videos via veo-transition…`);
 
         for (let i = 0; i < imageUrls.length - 1; i++) {
           const fromUrl = imageUrls[i];
+          const toUrl = imageUrls[i + 1];
+          const fromScene = scenes[i];
           const toScene = scenes[i + 1];
-          const toPrompt = stylePrefix
-            ? `${stylePrefix}, smooth cinematic morphing transition, ${toScene?.prompt || ""}`
-            : `smooth cinematic morphing transition, ${toScene?.prompt || ""}`;
-          const dur = toScene?.duration || 5;
-          ctx.say(`Transition ${i + 1}/${imageUrls.length - 1}: ${scenes[i]?.title} → ${toScene?.title}…`);
+          const transPrompt = stylePrefix
+            ? `${stylePrefix}, smooth cinematic transformation from ${fromScene?.prompt || ""} into ${toScene?.prompt || ""}`
+            : `smooth cinematic transformation, morphing between two scenes`;
+          ctx.say(`Morph ${i + 1}/${imageUrls.length - 1}: ${fromScene?.title} → ${toScene?.title}…`);
 
           let videoUrl: string | null = null;
 
-          // Try seedance first, fallback to ltx
-          for (const cap of ["seedance-i2v", "ltx-i2v"]) {
-            try {
-              // Pass image URL via params.image_url (not image_data which expects base64)
-              // The SDK merges params into the BYOC payload, and fal models read image_url directly
-              const params: Record<string, unknown> = cap === "seedance-i2v"
-                ? { image_url: fromUrl, duration: String(dur), aspect_ratio: "16:9" }
-                : { image_url: fromUrl, duration: dur };
+          // Try veo-transition first (best: knows both start + end frames)
+          // Then pixverse-transition (also first+last frame)
+          // Then seedance-i2v (only knows start frame)
+          const models: Array<{ cap: string; params: Record<string, unknown> }> = [
+            {
+              cap: "veo-transition",
+              params: { first_frame_image: fromUrl, last_frame_image: toUrl },
+            },
+            {
+              cap: "pixverse-transition",
+              params: { first_frame_image: fromUrl, last_frame_image: toUrl },
+            },
+            {
+              cap: "seedance-i2v",
+              params: { image_url: fromUrl, duration: "5", aspect_ratio: "16:9" },
+            },
+          ];
 
+          for (const model of models) {
+            try {
               const resp = await fetch(`${ctx.sdkUrl}/inference`, {
                 method: "POST",
                 headers: headers(),
-                body: JSON.stringify({ capability: cap, prompt: toPrompt, params }),
+                body: JSON.stringify({
+                  capability: model.cap,
+                  prompt: transPrompt,
+                  params: model.params,
+                }),
               });
 
               if (resp.ok) {
                 const data = await resp.json();
                 videoUrl = extractUrl(data);
                 if (videoUrl) {
-                  ctx.say(`Transition ${i + 1} complete (${cap})`);
+                  ctx.say(`Morph ${i + 1} done (${model.cap})`);
                   break;
-                } else {
-                  console.log(`[cinematic] Transition ${i+1} ${cap} ok but no URL:`, JSON.stringify(data).slice(0, 200));
                 }
               } else {
                 const errText = await resp.text().catch(() => "");
-                console.log(`[cinematic] Transition ${i+1} ${cap} failed ${resp.status}:`, errText.slice(0, 150));
-                ctx.say(`Transition ${i + 1} (${cap}): ${resp.status} — trying next model…`);
+                ctx.say(`${model.cap}: ${resp.status} — trying next…`);
+                console.log(`[cinematic] ${model.cap} failed:`, errText.slice(0, 100));
               }
             } catch (e) {
-              console.log(`[cinematic] Transition ${i+1} ${cap} error:`, (e as Error).message);
+              console.log(`[cinematic] ${model.cap} error:`, (e as Error).message);
             }
           }
 
           if (videoUrl) {
             videoUrls.push(videoUrl);
-            console.log(`[cinematic] Transition ${i+1} video URL:`, videoUrl);
-            ctx.say(`Transition ${i + 1} video: ${videoUrl.slice(0, 80)}…`);
-            ctx.addArtifact({ type: "video", title: `${scenes[i]?.title} → ${toScene?.title}`, url: videoUrl, refId: `trans-${i}`, x: cardX, y: 250 });
+            ctx.addArtifact({
+              type: "video",
+              title: `${fromScene?.title} → ${toScene?.title}`,
+              url: videoUrl,
+              refId: `morph-${i}`,
+              x: cardX, y: 250,
+            });
             cardX += 360;
           } else {
-            ctx.say(`Transition ${i + 1} failed on all models`);
+            ctx.say(`Morph ${i + 1} failed on all models`);
           }
-        }
-
-        // ── Step 3: Start VACE-enhanced Scope stream ──
-        // Use the key frame images as VACE references for live morphing
-        if (imageUrls.length >= 2) {
-          ctx.say("Starting VACE-enhanced live stream with key frames as references…");
-
-          // Load scenes into timeline for live morphing (each scene uses its key frame as VACE ref)
-          const liveScenes = scenes.map((s, i) => ({
-            title: s.title,
-            prompt: stylePrefix ? `${stylePrefix}, ${s.prompt}` : s.prompt,
-            preset: "cinematic" as const,
-            duration: s.duration + 10,
-            vaceRef: imageUrls[i] || undefined, // key frame as VACE anchor
-          }));
-          ctx.setScenes(liveScenes);
-
-          // Start stream with first key frame as VACE reference
-          fetch(`${ctx.sdkUrl}/stream/start`, {
-            method: "POST",
-            headers: headers(),
-            body: JSON.stringify({
-              model_id: "scope",
-              params: {
-                prompt: liveScenes[0].prompt,
-                prompts: liveScenes[0].prompt,
-                pipeline_ids: ["longlive"],
-                noise_scale: 0.45,
-                kv_cache_attention_bias: 0.65,
-                denoising_step_list: [1000, 750, 500, 250],
-                vace_enabled: true,
-                vace_ref_images: [imageUrls[0]],
-                vace_context_scale: 1.2,
-              },
-            }),
-          }).then(async (resp) => {
-            if (resp.ok) {
-              const data = await resp.json();
-              if (data.stream_id) {
-                ctx.setStreamId(data.stream_id);
-                ctx.playWhenReady();
-                ctx.say(`VACE stream started: ${data.stream_id}`);
-              }
-            } else {
-              ctx.say(`Stream start failed: ${resp.status}`);
-            }
-          }).catch((e) => ctx.say(`Stream error: ${(e as Error).message}`));
         }
 
         return JSON.stringify({
           status: "cinematic_complete",
           key_frames: imageUrls.length,
-          transitions: videoUrls.length,
-          message: `${imageUrls.length} key frames + ${videoUrls.length} transition videos on canvas. VACE-enhanced live stream starting with key frames as visual anchors.`,
+          morphs: videoUrls.length,
+          message: `${imageUrls.length} key frames + ${videoUrls.length} morph videos on canvas.`,
         });
       },
     },
