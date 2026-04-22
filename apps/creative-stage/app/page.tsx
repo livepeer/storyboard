@@ -309,7 +309,7 @@ export default function Stage() {
     working.setCriticalConstraints([STAGE_SYSTEM_PROMPT]);
     const runner = new AgentRunner(provider, tools, working, new SessionMemoryStore());
 
-    chat.getState().setProcessing(true);
+    // Don't call setProcessing — it disables the send button and never recovers if Gemini hangs
     try {
       for await (const event of runner.runStream({ user: text, maxIterations: 8 })) {
         switch (event.kind) {
@@ -335,7 +335,7 @@ export default function Stage() {
     } catch (e) {
       say(`Agent error: ${(e as Error).message}`);
     } finally {
-      chat.getState().setProcessing(false);
+      // chat always stays active
     }
   }, []);
 
