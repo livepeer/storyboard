@@ -138,6 +138,10 @@ export default function Stage() {
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pendingPlayRef = useRef(false);
 
+  // Saved streams for switching
+  interface SavedStream { streamId: string; scenes: Scene[]; title: string }
+  const savedStreamsRef = useRef<SavedStream[]>([]);
+
   useEffect(() => {
     setMounted(true);
     const unsubArt = artifacts.subscribe((s) => setArts([...s.artifacts]));
@@ -268,6 +272,43 @@ export default function Stage() {
       playWhenReady: () => { pendingPlayRef.current = true; },
       setAudioUrl, setBpm,
       getSceneCount: () => perfRef.current.scenes.length,
+      saveStream: () => {
+        if (streamIdRef.current && perfRef.current.scenes.length > 0) {
+          const title = perfRef.current.scenes[0]?.title || `Stream ${savedStreamsRef.current.length + 1}`;
+          savedStreamsRef.current.push({
+            streamId: streamIdRef.current,
+            scenes: [...perfRef.current.scenes],
+            title,
+          });
+          chat.getState().addMessage(`Stream saved: "${title}" (${perfRef.current.scenes.length} scenes)`, "system");
+        }
+      },
+      switchStream: (idx: number) => {
+        const saved = savedStreamsRef.current[idx];
+        if (!saved) {
+          chat.getState().addMessage(`No stream at index ${idx}`, "system");
+          return;
+        }
+        // Save current stream first
+        if (streamIdRef.current && perfRef.current.scenes.length > 0) {
+          const alreadySaved = savedStreamsRef.current.some((s) => s.streamId === streamIdRef.current);
+          if (!alreadySaved) {
+            savedStreamsRef.current.push({
+              streamId: streamIdRef.current,
+              scenes: [...perfRef.current.scenes],
+              title: perfRef.current.scenes[0]?.title || "Untitled",
+            });
+          }
+        }
+        // Restore the saved stream
+        perfRef.current.stop();
+        streamIdRef.current = saved.streamId;
+        setActiveStreamId(saved.streamId);
+        perfRef.current.setScenes(saved.scenes);
+        setPerfState(perfRef.current.getState());
+        chat.getState().addMessage(`Switched to: "${saved.title}"`, "system");
+      },
+      getSavedStreamCount: () => savedStreamsRef.current.length,
       setSceneVaceRef: (idx, url) => {
         if (perfRef.current.scenes[idx]) {
           perfRef.current.scenes[idx].vaceRef = url;

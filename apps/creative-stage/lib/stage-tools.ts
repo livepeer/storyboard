@@ -72,8 +72,14 @@ export interface StageToolContext {
   addArtifact: (artifact: { type: string; title: string; url: string; refId: string; x?: number; y?: number }) => void;
   /** Attach a VACE reference image to a scene by index */
   setSceneVaceRef: (idx: number, url: string) => void;
-  /** Get current scene count (for double-call guard) */
+  /** Get current scene count */
   getSceneCount?: () => number;
+  /** Save current stream to the stream list (for switching) */
+  saveStream: () => void;
+  /** Switch to a saved stream by index */
+  switchStream: (idx: number) => void;
+  /** Get saved stream count */
+  getSavedStreamCount: () => number;
   /** Notify user via chat */
   say: (msg: string) => void;
 }
@@ -251,13 +257,18 @@ export function createStageTools(ctx: StageToolContext) {
 
     {
       name: "stage_scene",
-      description: "Create a LIVE STREAM with multi-scene timeline. Use for ANY request containing 'stream', 'live', or 'real-time'. The stream morphs between scenes via prompt traveling.",
+      description: "Create a LIVE STREAM with multi-scene timeline. Use for ANY request containing 'stream', 'live', or 'real-time'. The stream morphs between scenes via prompt traveling. If a stream is already running, ask the user: overwrite (replace scenes) or new (create a second stream, switchable).",
       parameters: {
         type: "object",
         properties: {
+          mode: {
+            type: "string",
+            enum: ["auto", "overwrite", "new"],
+            description: "auto=ask user if stream exists, overwrite=replace current scenes, new=create separate stream. Default: auto",
+          },
           style_prefix: {
             type: "string",
-            description: "A style prefix prepended to EVERY scene prompt for visual consistency. Include: camera angle, lighting mood, color grading, art style. E.g. 'low-angle cinematic tracking shot, warm golden light, film grain, shallow depth of field'",
+            description: "A style prefix prepended to EVERY scene prompt for visual consistency. Include: camera angle, lighting mood, color grading, art style.",
           },
           scenes: {
             type: "array",
@@ -280,10 +291,15 @@ export function createStageTools(ctx: StageToolContext) {
         const rawScenes = args.scenes as Array<{ title: string; prompt: string; preset: string; duration: number }>;
         if (!rawScenes || rawScenes.length === 0) return JSON.stringify({ error: "No scenes provided" });
 
-        // Guard: don't recreate if scenes already loaded
+        const mode = (args.mode as string) || "auto";
         const existing = ctx.getSceneCount?.() ?? 0;
-        if (existing > 0 && ctx.streamId) {
-          return JSON.stringify({ status: "already_loaded", message: `${existing} scenes already loaded and stream running.` });
+
+        // Auto mode: if stream exists, ask the user
+        if (mode === "auto" && existing > 0 && ctx.streamId) {
+          return JSON.stringify({
+            status: "ask_user",
+            message: `A stream is already running with ${existing} scenes. Would you like to:\n• **Overwrite** — replace the current scenes with the new ones\n• **New** — create a second stream you can switch between\n\nPlease reply "overwrite" or "new".`,
+          });
         }
 
         // Prepend style_prefix to every scene prompt for consistent look
@@ -292,6 +308,16 @@ export function createStageTools(ctx: StageToolContext) {
           ...s,
           prompt: stylePrefix ? `${stylePrefix}, ${s.prompt}` : s.prompt,
         }));
+
+        // Overwrite mode: stop current performance, replace scenes
+        if (mode === "overwrite" && ctx.streamId) {
+          ctx.stopPerformance();
+        }
+
+        // New mode: save current stream, start fresh
+        if (mode === "new" && ctx.streamId) {
+          ctx.saveStream();
+        }
 
         // ── Step 1: Load scenes into timeline immediately ──
         ctx.setScenes(scenes);
@@ -378,6 +404,37 @@ export function createStageTools(ctx: StageToolContext) {
         }
         ctx.playPerformance();
         return JSON.stringify({ status: "playing" });
+      },
+    },
+
+    {
+      name: "stage_switch",
+      description: "Switch between saved streams. Each stream has its own scene timeline. Use when user wants to go back to a previous stream or compare streams.",
+      parameters: {
+        type: "object",
+        properties: {
+          index: { type: "number", description: "Stream index to switch to (0-based). Use 'list' action to see available streams." },
+          action: { type: "string", enum: ["list", "switch"], description: "list=show saved streams, switch=activate a stream by index" },
+        },
+        required: ["action"],
+      },
+      async execute(args: Record<string, unknown>) {
+        if (args.action === "list") {
+          const count = ctx.getSavedStreamCount();
+          return JSON.stringify({
+            status: "stream_list",
+            count,
+            active: ctx.streamId ? "yes" : "no",
+            message: count === 0
+              ? "No saved streams. The current stream is the only one."
+              : `${count} saved stream(s) + current active stream. Use stage_switch with index 0-${count - 1} to switch.`,
+          });
+        }
+        if (args.action === "switch" && args.index !== undefined) {
+          ctx.switchStream(args.index as number);
+          return JSON.stringify({ status: "switched", index: args.index });
+        }
+        return JSON.stringify({ error: "Provide action='list' or action='switch' with index" });
       },
     },
 
