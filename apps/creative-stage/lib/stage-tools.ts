@@ -314,6 +314,7 @@ export function createStageTools(ctx: StageToolContext) {
                   noise_scale: noise,
                   kv_cache_attention_bias: 0.5,
                   denoising_step_list: [1000, 750, 500, 250],
+                  vace_enabled: true,
                 },
               }),
             }).then(async (resp) => {
