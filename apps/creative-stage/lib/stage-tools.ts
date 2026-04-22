@@ -257,15 +257,10 @@ export function createStageTools(ctx: StageToolContext) {
 
     {
       name: "stage_scene",
-      description: "Create a LIVE STREAM with multi-scene timeline. Use for ANY request containing 'stream', 'live', or 'real-time'. The stream morphs between scenes via prompt traveling. If a stream is already running, ask the user: overwrite (replace scenes) or new (create a second stream, switchable).",
+      description: "Create a LIVE STREAM with multi-scene timeline. Use for ANY request containing 'stream', 'live', or 'real-time'. If a stream is already running, the previous one is saved and can be switched back to via stage_switch.",
       parameters: {
         type: "object",
         properties: {
-          mode: {
-            type: "string",
-            enum: ["auto", "overwrite", "new"],
-            description: "auto=ask user if stream exists, overwrite=replace current scenes, new=create separate stream. Default: auto",
-          },
           style_prefix: {
             type: "string",
             description: "A style prefix prepended to EVERY scene prompt for visual consistency. Include: camera angle, lighting mood, color grading, art style.",
@@ -291,17 +286,6 @@ export function createStageTools(ctx: StageToolContext) {
         const rawScenes = args.scenes as Array<{ title: string; prompt: string; preset: string; duration: number }>;
         if (!rawScenes || rawScenes.length === 0) return JSON.stringify({ error: "No scenes provided" });
 
-        const mode = (args.mode as string) || "auto";
-        const existing = ctx.getSceneCount?.() ?? 0;
-
-        // Auto mode: if stream exists, ask the user
-        if (mode === "auto" && existing > 0 && ctx.streamId) {
-          return JSON.stringify({
-            status: "ask_user",
-            message: `A stream is already running with ${existing} scenes. Would you like to:\n• **Overwrite** — replace the current scenes with the new ones\n• **New** — create a second stream you can switch between\n\nPlease reply "overwrite" or "new".`,
-          });
-        }
-
         // Prepend style_prefix to every scene prompt for consistent look
         const stylePrefix = (args.style_prefix as string) || "";
         const scenes = rawScenes.map((s) => ({
@@ -309,14 +293,11 @@ export function createStageTools(ctx: StageToolContext) {
           prompt: stylePrefix ? `${stylePrefix}, ${s.prompt}` : s.prompt,
         }));
 
-        // Overwrite mode: stop current performance, replace scenes
-        if (mode === "overwrite" && ctx.streamId) {
-          ctx.stopPerformance();
-        }
-
-        // New mode: save current stream, start fresh
-        if (mode === "new" && ctx.streamId) {
+        // If a stream is already running, save it and start fresh
+        if (ctx.streamId && (ctx.getSceneCount?.() ?? 0) > 0) {
           ctx.saveStream();
+          ctx.stopPerformance();
+          ctx.say("Previous stream saved — creating new one");
         }
 
         // ── Step 1: Load scenes into timeline immediately ──
