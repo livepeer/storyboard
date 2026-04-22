@@ -344,7 +344,7 @@ export function createStageTools(ctx: StageToolContext) {
                   const url = extractUrl(data);
                   if (url) {
                     ctx.setSceneVaceRef(i, url);
-                    ctx.addArtifact({ type: "image", title: `KF: ${scene.title}`, url, refId: `kf-${i}`, x: 900 + i * 220, y: 50 });
+                    ctx.addArtifact({ type: "image", title: `KF: ${scene.title}`, url, refId: `kf-${i}`, x: 900 + i * 220, y: 500 });
                     generated++;
                   }
                 }

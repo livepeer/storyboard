@@ -371,12 +371,17 @@ export default function Stage() {
   }, []);
 
   // ─── VACE Proximity ───
+  const vaceAppliedRef = useRef(new Set<string>());
   const handleCardDrop = useCallback((droppedId: string) => {
     const store = artifacts.getState();
     const dropped = store.artifacts.find((a) => a.id === droppedId);
     const live = store.getByRefId("live-output");
     if (!dropped || !live || dropped.refId === "live-output") return;
     if (dropped.type !== "image") return;
+    // Skip key frame cards — they're managed by the performance engine via vaceRef
+    if (dropped.refId.startsWith("kf-")) return;
+    // Prevent repeated VACE applications for the same card
+    if (vaceAppliedRef.current.has(dropped.refId)) return;
 
     const dx = Math.abs((dropped.x + dropped.w / 2) - (live.x + live.w / 2));
     const dy = Math.abs((dropped.y + dropped.h / 2) - (live.y + live.h / 2));
@@ -387,6 +392,7 @@ export default function Stage() {
         headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
         body: JSON.stringify({ type: "parameters", params: { vace_enabled: true, vace_ref_images: [dropped.url], vace_context_scale: 0.8 } }),
       }).then(() => {
+        vaceAppliedRef.current.add(dropped.refId);
         store.connect(dropped.refId, "live-output", { action: "vace-reference" });
         chat.getState().addMessage(`Reference applied: "${dropped.title}" → Live Output`, "system");
       }).catch((e) => {
