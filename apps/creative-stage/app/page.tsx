@@ -160,13 +160,25 @@ export default function Stage() {
   useEffect(() => {
     if (pendingPlayRef.current && streamState?.status === "streaming" && streamIdRef.current) {
       pendingPlayRef.current = false;
-      const sdk = getSdkConfig();
+      // Create a controlFn with retry — /control may 404 if SDK session is still initializing
       const controlFn = async (params: Record<string, unknown>) => {
-        await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
-          body: JSON.stringify({ type: "parameters", params }),
-        });
+        const cfg = getSdkConfig();
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            const resp = await fetch(`${cfg.url}/stream/${streamIdRef.current}/control`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...(cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {}) },
+              body: JSON.stringify({ type: "parameters", params }),
+            });
+            if (resp.ok) return;
+            if (resp.status === 404 && attempt < 4) {
+              await new Promise((r) => setTimeout(r, 3000));
+              continue;
+            }
+          } catch {
+            if (attempt < 4) await new Promise((r) => setTimeout(r, 3000));
+          }
+        }
       };
       perfRef.current.play(controlFn, setPerfState);
       chat.getState().addMessage("Stream ready — performance playing!", "system");
@@ -255,6 +267,7 @@ export default function Stage() {
       stopPerformance: () => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); },
       playWhenReady: () => { pendingPlayRef.current = true; },
       setAudioUrl, setBpm,
+      getSceneCount: () => perfRef.current.scenes.length,
       setSceneVaceRef: (idx, url) => {
         if (perfRef.current.scenes[idx]) {
           perfRef.current.scenes[idx].vaceRef = url;

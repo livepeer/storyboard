@@ -72,6 +72,8 @@ export interface StageToolContext {
   addArtifact: (artifact: { type: string; title: string; url: string; refId: string; x?: number; y?: number }) => void;
   /** Attach a VACE reference image to a scene by index */
   setSceneVaceRef: (idx: number, url: string) => void;
+  /** Get current scene count (for double-call guard) */
+  getSceneCount?: () => number;
   /** Notify user via chat */
   say: (msg: string) => void;
 }
@@ -273,6 +275,12 @@ export function createStageTools(ctx: StageToolContext) {
       async execute(args: Record<string, unknown>) {
         const scenes = args.scenes as Array<{ title: string; prompt: string; preset: string; duration: number }>;
         if (!scenes || scenes.length === 0) return JSON.stringify({ error: "No scenes provided" });
+
+        // Guard: don't recreate if scenes already loaded (Gemini sometimes double-calls)
+        const existing = ctx.getSceneCount?.() ?? 0;
+        if (existing > 0 && ctx.streamId) {
+          return JSON.stringify({ status: "already_loaded", message: `${existing} scenes already loaded and stream running. Use stage_prompt to change the current scene.` });
+        }
 
         // ── Step 1: Load scenes into timeline immediately ──
         ctx.setScenes(scenes);
