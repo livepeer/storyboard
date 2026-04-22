@@ -277,9 +277,13 @@ export function createStageTools(ctx: StageToolContext) {
         // ── Step 1: Load scenes into timeline immediately ──
         ctx.setScenes(scenes);
         const total = scenes.reduce((s, sc) => s + sc.duration, 0);
+        ctx.say(`${scenes.length} scenes loaded (${total}s)`);
 
-        // ── Step 2: Start stream in background ──
-        if (!ctx.streamId && ctx.apiKey) {
+        // ── Step 2: Start stream + generate key frames concurrently ──
+        // Both run in background so the tool returns instantly.
+        // Stream: SDK /stream/start (30-90s cold start)
+        // Key frames: flux-dev inference (5-8s each, sequential)
+        if (ctx.apiKey) {
           const first = scenes[0];
           const presetMap: Record<string, number> = {
             dreamy: 0.7, cinematic: 0.5, anime: 0.6, abstract: 0.95,
@@ -287,55 +291,52 @@ export function createStageTools(ctx: StageToolContext) {
           };
           const noise = presetMap[first.preset] ?? 0.5;
 
-          fetch(`${ctx.sdkUrl}/stream/start`, {
-            method: "POST",
-            headers: headers(),
-            body: JSON.stringify({
-              model_id: "scope",
-              params: {
-                prompt: first.prompt,
-                prompts: first.prompt,
-                pipeline_ids: ["longlive"],
-                noise_scale: noise,
-                kv_cache_attention_bias: 0.5,
-                denoising_step_list: [1000, 750, 500, 250],
-              },
-            }),
-          }).then(async (resp) => {
-            if (resp.ok) {
-              const data = await resp.json();
-              if (data.stream_id) {
-                console.log("[stage_scene] Stream started:", data.stream_id);
-                ctx.setStreamId(data.stream_id);
-                ctx.playWhenReady();
+          // ── Stream start (fire-and-forget) ──
+          if (!ctx.streamId) {
+            ctx.say("Starting Scope stream…");
+            fetch(`${ctx.sdkUrl}/stream/start`, {
+              method: "POST",
+              headers: headers(),
+              body: JSON.stringify({
+                model_id: "scope",
+                params: {
+                  prompt: first.prompt,
+                  prompts: first.prompt,
+                  pipeline_ids: ["longlive"],
+                  noise_scale: noise,
+                  kv_cache_attention_bias: 0.5,
+                  denoising_step_list: [1000, 750, 500, 250],
+                },
+              }),
+            }).then(async (resp) => {
+              if (resp.ok) {
+                const data = await resp.json();
+                if (data.stream_id) {
+                  ctx.say(`Stream started: ${data.stream_id}`);
+                  ctx.setStreamId(data.stream_id);
+                  ctx.playWhenReady();
+                }
+              } else {
+                const text = await resp.text().catch(() => "");
+                ctx.say(`Stream failed (${resp.status}): ${text.slice(0, 80)}`);
               }
-            } else {
-              const text = await resp.text().catch(() => "");
-              ctx.say(`Stream failed (${resp.status}): ${text.slice(0, 80)}`);
-            }
-          }).catch((e) => ctx.say(`SDK error: ${(e as Error).message}`));
-        } else if (ctx.streamId) {
-          ctx.playPerformance();
-        }
+            }).catch((e) => ctx.say(`Stream error: ${(e as Error).message}`));
+          } else {
+            ctx.playPerformance();
+          }
 
-        // ── Step 3: Generate VACE key frames in background ──
-        // Each scene gets a flux-dev image that becomes its VACE reference.
-        // When the performance transitions to that scene, the control message
-        // includes vace_ref_images=[keyframe] — Scope morphs TOWARD the image
-        // instead of generating from text alone. Dramatically improves quality.
-        if (ctx.apiKey) {
+          // ── Key frame generation (fire-and-forget, concurrent with stream) ──
           (async () => {
-            ctx.say("Generating VACE key frames for enhanced morphing…");
+            ctx.say("Generating VACE key frames…");
             let generated = 0;
             for (let i = 0; i < scenes.length; i++) {
-              const scene = scenes[i];
               try {
                 const resp = await fetch(`${ctx.sdkUrl}/inference`, {
                   method: "POST",
                   headers: headers(),
                   body: JSON.stringify({
                     capability: "flux-dev",
-                    prompt: scene.prompt,
+                    prompt: scenes[i].prompt,
                     params: { width: 1280, height: 720, num_inference_steps: 20 },
                   }),
                 });
@@ -344,15 +345,13 @@ export function createStageTools(ctx: StageToolContext) {
                   const url = extractUrl(data);
                   if (url) {
                     ctx.setSceneVaceRef(i, url);
-                    ctx.addArtifact({ type: "image", title: `KF: ${scene.title}`, url, refId: `kf-${i}`, x: 900 + i * 220, y: 500 });
+                    ctx.addArtifact({ type: "image", title: `KF: ${scenes[i].title}`, url, refId: `kf-${i}`, x: 900 + i * 220, y: 500 });
                     generated++;
                   }
                 }
-              } catch { /* continue */ }
+              } catch { /* continue to next */ }
             }
-            if (generated > 0) {
-              ctx.say(`${generated}/${scenes.length} VACE key frames ready — morphing quality enhanced`);
-            }
+            ctx.say(`${generated}/${scenes.length} VACE key frames ready`);
           })();
         }
 
@@ -360,7 +359,7 @@ export function createStageTools(ctx: StageToolContext) {
           status: "scenes_loaded",
           count: scenes.length,
           total_duration: total,
-          message: `${scenes.length} scenes loaded (${total}s). Stream + VACE key frames generating in background.`,
+          message: `${scenes.length} scenes loaded. Stream + VACE key frames starting in background.`,
         });
       },
     },
