@@ -156,10 +156,9 @@ export default function Stage() {
     const list = savedStreamsRef.current;
     const curIdx = list.findIndex((s) => s.streamId === activeStreamId);
     if (curIdx >= 0) {
-      // Update scene count for current
       list[curIdx].scenes = [...perfRef.current.scenes];
-    } else if (list.length > 0) {
-      // Current stream not in list yet — add it
+    } else {
+      // Current stream not in list — add it so tabs show
       const firstScene = perfState.scenes[0];
       const name = (firstScene?.title || firstScene?.prompt || "").replace(/^[^,]*,\s*/, "").split(/[,.]/).at(0)?.trim().slice(0, 25) || `Stream ${list.length + 1}`;
       list.push({ streamId: activeStreamId, scenes: [...perfRef.current.scenes], title: name });
@@ -274,7 +273,7 @@ export default function Stage() {
       get streamId() { return streamIdRef.current; },
       setStreamId: (id) => {
         streamIdRef.current = id;
-        if (id) setActiveStreamId(id);
+        setActiveStreamId(id);
       },
       controlStream: async (params) => {
         try { await controlStreamFn(params as Record<string, unknown>); }

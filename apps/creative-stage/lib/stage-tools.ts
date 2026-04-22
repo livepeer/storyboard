@@ -297,6 +297,7 @@ export function createStageTools(ctx: StageToolContext) {
         if (ctx.streamId && (ctx.getSceneCount?.() ?? 0) > 0) {
           ctx.saveStream();
           ctx.stopPerformance();
+          ctx.setStreamId(null); // clear so new stream starts fresh
           ctx.say("Previous stream saved — creating new one");
         }
 
