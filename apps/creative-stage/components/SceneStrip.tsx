@@ -121,28 +121,32 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
         </div>
       )}
 
-      {/* Stream switcher tabs */}
-      {savedStreams && savedStreams.length > 0 && (
+      {/* Stream switcher tabs — only show when 2+ streams exist */}
+      {savedStreams && savedStreams.length >= 2 && (
         <div style={{
-          display: "flex", gap: 4, padding: "5px 12px 0",
-          borderBottom: "1px solid rgba(255,255,255,0.03)",
+          display: "flex", gap: 3, padding: "4px 12px 0",
+          overflowX: "auto", scrollbarWidth: "none",
         }}>
           {savedStreams.map((s, i) => {
             const isActive = s.streamId === activeStreamId;
+            const label = s.title || `Stream ${i + 1}`;
             return (
               <button
                 key={s.streamId}
                 onClick={() => onSwitchStream?.(i)}
                 style={{
                   padding: "3px 10px", borderRadius: "6px 6px 0 0",
-                  border: "1px solid rgba(255,255,255,0.06)", borderBottom: "none",
-                  background: isActive ? "rgba(129,140,248,0.12)" : "rgba(255,255,255,0.02)",
-                  color: isActive ? "#818cf8" : "#555570",
+                  border: `1px solid ${isActive ? "rgba(129,140,248,0.3)" : "rgba(255,255,255,0.04)"}`,
+                  borderBottom: "none",
+                  background: isActive ? "rgba(129,140,248,0.12)" : "transparent",
+                  color: isActive ? "#a5b4fc" : "#555570",
                   fontSize: 10, fontWeight: 600, fontFamily: "inherit",
                   cursor: "pointer", transition: "all 150ms",
+                  whiteSpace: "nowrap", flexShrink: 0,
                 }}
               >
-                {s.title} ({s.sceneCount})
+                <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: isActive ? "#4ade80" : "#333", marginRight: 5, verticalAlign: "middle" }} />
+                {label.slice(0, 20)} · {s.sceneCount}
               </button>
             );
           })}

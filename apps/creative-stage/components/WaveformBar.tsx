@@ -134,7 +134,7 @@ export function WaveformBar({
 
   return (
     <div style={{
-      position: "absolute", bottom: 80, left: 0, right: 340,
+      position: "absolute", bottom: 100, left: 0, right: 360,
       height: 40, background: "rgba(0,0,0,0.5)",
       borderTop: "1px solid rgba(255,255,255,0.06)",
       display: "flex", alignItems: "center", gap: 8, padding: "0 12px",
