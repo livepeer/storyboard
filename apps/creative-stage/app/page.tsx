@@ -141,6 +141,7 @@ export default function Stage() {
   // Saved streams for switching
   interface SavedStream { streamId: string; scenes: Scene[]; title: string }
   const savedStreamsRef = useRef<SavedStream[]>([]);
+  const [savedStreamsList, setSavedStreamsList] = useState<Array<{ title: string; sceneCount: number; streamId: string }>>([]);
 
   useEffect(() => {
     setMounted(true);
@@ -274,12 +275,15 @@ export default function Stage() {
       getSceneCount: () => perfRef.current.scenes.length,
       saveStream: () => {
         if (streamIdRef.current && perfRef.current.scenes.length > 0) {
+          const alreadySaved = savedStreamsRef.current.some((s) => s.streamId === streamIdRef.current);
+          if (alreadySaved) return;
           const title = perfRef.current.scenes[0]?.title || `Stream ${savedStreamsRef.current.length + 1}`;
           savedStreamsRef.current.push({
             streamId: streamIdRef.current,
             scenes: [...perfRef.current.scenes],
             title,
           });
+          setSavedStreamsList(savedStreamsRef.current.map((s) => ({ title: s.title, sceneCount: s.scenes.length, streamId: s.streamId })));
           chat.getState().addMessage(`Stream saved: "${title}" (${perfRef.current.scenes.length} scenes)`, "system");
         }
       },
@@ -655,6 +659,26 @@ export default function Stage() {
           onRemove={(idx) => { perfRef.current.removeScene(idx); setPerfState(perfRef.current.getState()); }}
           onEditScene={(idx, updates) => { perfRef.current.editScene(idx, updates); setPerfState(perfRef.current.getState()); }}
           onAddScene={(scene) => { perfRef.current.addScene(scene); setPerfState(perfRef.current.getState()); }}
+          savedStreams={savedStreamsList}
+          activeStreamId={activeStreamId}
+          onSwitchStream={(idx) => {
+            const saved = savedStreamsRef.current[idx];
+            if (!saved) return;
+            // Save current if not already saved
+            if (streamIdRef.current && perfRef.current.scenes.length > 0) {
+              const alreadySaved = savedStreamsRef.current.some((s) => s.streamId === streamIdRef.current);
+              if (!alreadySaved) {
+                savedStreamsRef.current.push({ streamId: streamIdRef.current, scenes: [...perfRef.current.scenes], title: perfRef.current.scenes[0]?.title || "Untitled" });
+                setSavedStreamsList(savedStreamsRef.current.map((s) => ({ title: s.title, sceneCount: s.scenes.length, streamId: s.streamId })));
+              }
+            }
+            perfRef.current.stop();
+            streamIdRef.current = saved.streamId;
+            setActiveStreamId(saved.streamId);
+            perfRef.current.setScenes(saved.scenes);
+            setPerfState(perfRef.current.getState());
+            chat.getState().addMessage(`Switched to: "${saved.title}"`, "system");
+          }}
         />
 
         {/* Record */}

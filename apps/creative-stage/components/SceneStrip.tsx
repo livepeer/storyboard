@@ -3,6 +3,12 @@
 import { useState, useRef, useCallback } from "react";
 import type { Scene, PerformanceState } from "../lib/performance";
 
+export interface SavedStreamInfo {
+  title: string;
+  sceneCount: number;
+  streamId: string;
+}
+
 interface SceneStripProps {
   state: PerformanceState;
   onPlay: () => void;
@@ -11,6 +17,12 @@ interface SceneStripProps {
   onRemove: (idx: number) => void;
   onEditScene: (idx: number, updates: Partial<Scene>) => void;
   onAddScene?: (scene: Omit<Scene, "index">) => void;
+  /** Saved streams for the switcher */
+  savedStreams?: SavedStreamInfo[];
+  /** Current active stream ID */
+  activeStreamId?: string | null;
+  /** Switch to a saved stream */
+  onSwitchStream?: (idx: number) => void;
 }
 
 const PRESET_COLORS: Record<string, string> = {
@@ -25,7 +37,7 @@ const PRESET_COLORS: Record<string, string> = {
 
 const PRESETS = Object.keys(PRESET_COLORS);
 
-export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditScene, onAddScene }: SceneStripProps) {
+export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditScene, onAddScene, savedStreams, activeStreamId, onSwitchStream }: SceneStripProps) {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
@@ -106,6 +118,34 @@ export function SceneStrip({ state, onPlay, onStop, onReorder, onRemove, onEditS
             transition: "width 0.5s linear",
             boxShadow: "0 0 8px rgba(129,140,248,0.4)",
           }} />
+        </div>
+      )}
+
+      {/* Stream switcher tabs */}
+      {savedStreams && savedStreams.length > 0 && (
+        <div style={{
+          display: "flex", gap: 4, padding: "5px 12px 0",
+          borderBottom: "1px solid rgba(255,255,255,0.03)",
+        }}>
+          {savedStreams.map((s, i) => {
+            const isActive = s.streamId === activeStreamId;
+            return (
+              <button
+                key={s.streamId}
+                onClick={() => onSwitchStream?.(i)}
+                style={{
+                  padding: "3px 10px", borderRadius: "6px 6px 0 0",
+                  border: "1px solid rgba(255,255,255,0.06)", borderBottom: "none",
+                  background: isActive ? "rgba(129,140,248,0.12)" : "rgba(255,255,255,0.02)",
+                  color: isActive ? "#818cf8" : "#555570",
+                  fontSize: 10, fontWeight: 600, fontFamily: "inherit",
+                  cursor: "pointer", transition: "all 150ms",
+                }}
+              >
+                {s.title} ({s.sceneCount})
+              </button>
+            );
+          })}
         </div>
       )}
 
