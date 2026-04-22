@@ -138,10 +138,11 @@ export default function Stage() {
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pendingPlayRef = useRef(false);
 
-  // Saved streams for switching
-  interface SavedStream { streamId: string; scenes: Scene[]; title: string }
-  const savedStreamsRef = useRef<SavedStream[]>([]);
-  const [savedStreamsList, setSavedStreamsList] = useState<Array<{ title: string; sceneCount: number; streamId: string }>>([]);
+  // Scene set tabs — each prompt creates a scene set, tabs let you switch
+  interface SceneSet { id: string; title: string; scenes: Scene[]; audioUrl?: string | null }
+  const sceneSetsRef = useRef<SceneSet[]>([]);
+  const [activeSetId, setActiveSetId] = useState<string | null>(null);
+  const [sceneSets, setSceneSets] = useState<Array<{ id: string; title: string; sceneCount: number }>>([]);
 
   useEffect(() => {
     setMounted(true);
@@ -150,21 +151,10 @@ export default function Stage() {
     return () => { unsubArt(); unsubChat(); };
   }, []);
 
-  // Keep saved streams list in sync — always include current active stream
-  useEffect(() => {
-    if (!activeStreamId || perfState.scenes.length === 0) return;
-    const list = savedStreamsRef.current;
-    const curIdx = list.findIndex((s) => s.streamId === activeStreamId);
-    if (curIdx >= 0) {
-      list[curIdx].scenes = [...perfRef.current.scenes];
-    } else {
-      // Current stream not in list — add it so tabs show
-      const firstScene = perfState.scenes[0];
-      const name = (firstScene?.title || firstScene?.prompt || "").replace(/^[^,]*,\s*/, "").split(/[,.]/).at(0)?.trim().slice(0, 25) || `Stream ${list.length + 1}`;
-      list.push({ streamId: activeStreamId, scenes: [...perfRef.current.scenes], title: name });
-    }
-    setSavedStreamsList(list.map((s) => ({ title: s.title, sceneCount: s.scenes.length, streamId: s.streamId })));
-  }, [activeStreamId, perfState.scenes.length]);
+  // Helper to sync scene sets UI
+  const syncSceneSets = useCallback(() => {
+    setSceneSets(sceneSetsRef.current.map((s) => ({ id: s.id, title: s.title, sceneCount: s.scenes.length })));
+  }, []);
 
   // Play audio when URL changes
   useEffect(() => {
@@ -283,56 +273,34 @@ export default function Stage() {
         const indexed: Scene[] = scenes.map((s, i) => ({ ...s, index: i }));
         perfRef.current.setScenes(indexed);
         setPerfState(perfRef.current.getState());
+
+        // Create a new scene set tab
+        const firstScene = scenes[0];
+        const name = (firstScene?.title || firstScene?.prompt || "")
+          .replace(/^[^,]*,\s*/, "").split(/[,.]/).at(0)?.trim().slice(0, 25)
+          || `Set ${sceneSetsRef.current.length + 1}`;
+        const setId = `set-${Date.now()}`;
+        sceneSetsRef.current.push({ id: setId, title: name, scenes: indexed, audioUrl: null });
+        setActiveSetId(setId);
+        syncSceneSets();
       },
       playPerformance: () => { perfRef.current.play(controlStreamFn, setPerfState); },
       stopPerformance: () => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); },
       playWhenReady: () => { pendingPlayRef.current = true; },
       setAudioUrl, setBpm,
       getSceneCount: () => perfRef.current.scenes.length,
-      saveStream: () => {
-        if (streamIdRef.current && perfRef.current.scenes.length > 0) {
-          const alreadySaved = savedStreamsRef.current.some((s) => s.streamId === streamIdRef.current);
-          if (alreadySaved) return;
-          // Build a short recognizable name from the first scene
-          const firstScene = perfRef.current.scenes[0];
-          const rawTitle = firstScene?.title || firstScene?.prompt || "";
-          // Strip style prefix (everything before the first comma after camera angle)
-          const shortName = rawTitle.replace(/^[^,]*,\s*/, "").split(/[,.]/).at(0)?.trim().slice(0, 25) || `Stream ${savedStreamsRef.current.length + 1}`;
-          savedStreamsRef.current.push({
-            streamId: streamIdRef.current,
-            scenes: [...perfRef.current.scenes],
-            title: shortName,
-          });
-          setSavedStreamsList(savedStreamsRef.current.map((s) => ({ title: s.title, sceneCount: s.scenes.length, streamId: s.streamId })));
-          chat.getState().addMessage(`Stream saved: "${shortName}" (${perfRef.current.scenes.length} scenes)`, "system");
-        }
-      },
-      switchStream: (idx: number) => {
-        const saved = savedStreamsRef.current[idx];
-        if (!saved) {
-          chat.getState().addMessage(`No stream at index ${idx}`, "system");
-          return;
-        }
-        // Save current stream first
-        if (streamIdRef.current && perfRef.current.scenes.length > 0) {
-          const alreadySaved = savedStreamsRef.current.some((s) => s.streamId === streamIdRef.current);
-          if (!alreadySaved) {
-            savedStreamsRef.current.push({
-              streamId: streamIdRef.current,
-              scenes: [...perfRef.current.scenes],
-              title: perfRef.current.scenes[0]?.title || "Untitled",
-            });
+      saveSceneSet: () => {
+        if (perfRef.current.scenes.length === 0) return;
+        // Update existing set or create new one
+        if (activeSetId) {
+          const existing = sceneSetsRef.current.find((s) => s.id === activeSetId);
+          if (existing) {
+            existing.scenes = [...perfRef.current.scenes];
+            existing.audioUrl = audioUrl;
           }
         }
-        // Restore the saved stream
-        perfRef.current.stop();
-        streamIdRef.current = saved.streamId;
-        setActiveStreamId(saved.streamId);
-        perfRef.current.setScenes(saved.scenes);
-        setPerfState(perfRef.current.getState());
-        chat.getState().addMessage(`Switched to: "${saved.title}"`, "system");
+        syncSceneSets();
       },
-      getSavedStreamCount: () => savedStreamsRef.current.length,
       setSceneVaceRef: (idx, url) => {
         if (perfRef.current.scenes[idx]) {
           perfRef.current.scenes[idx].vaceRef = url;
@@ -679,27 +647,48 @@ export default function Stage() {
           onRemove={(idx) => { perfRef.current.removeScene(idx); setPerfState(perfRef.current.getState()); }}
           onEditScene={(idx, updates) => { perfRef.current.editScene(idx, updates); setPerfState(perfRef.current.getState()); }}
           onAddScene={(scene) => { perfRef.current.addScene(scene); setPerfState(perfRef.current.getState()); }}
-          savedStreams={savedStreamsList}
-          activeStreamId={activeStreamId}
+          savedStreams={sceneSets.map((s) => ({ title: s.title, sceneCount: s.sceneCount, streamId: s.id }))}
+          activeStreamId={activeSetId}
           onSwitchStream={(idx) => {
-            const target = savedStreamsRef.current[idx];
-            if (!target || target.streamId === streamIdRef.current) return;
+            const target = sceneSetsRef.current[idx];
+            if (!target || target.id === activeSetId) return;
 
-            // Update current stream's scenes in the saved list (so switching back gets the latest)
-            if (streamIdRef.current) {
-              const curIdx = savedStreamsRef.current.findIndex((s) => s.streamId === streamIdRef.current);
-              if (curIdx >= 0) {
-                savedStreamsRef.current[curIdx].scenes = [...perfRef.current.scenes];
-              }
+            // Save current scenes back
+            if (activeSetId) {
+              const cur = sceneSetsRef.current.find((s) => s.id === activeSetId);
+              if (cur) { cur.scenes = [...perfRef.current.scenes]; cur.audioUrl = audioUrl; }
             }
 
-            // Switch
+            // Switch to target scene set (same stream, different scenes)
             perfRef.current.stop();
-            streamIdRef.current = target.streamId;
-            setActiveStreamId(target.streamId);
             perfRef.current.setScenes(target.scenes);
             setPerfState(perfRef.current.getState());
-            setSavedStreamsList(savedStreamsRef.current.map((s) => ({ title: s.title, sceneCount: s.scenes.length, streamId: s.streamId })));
+            setActiveSetId(target.id);
+            syncSceneSets();
+
+            // Restore audio
+            if (target.audioUrl) { setAudioUrl(target.audioUrl); }
+            else { setAudioUrl(null); }
+
+            // Auto-play if stream is running
+            if (streamIdRef.current) {
+              const sdk = getSdkConfig();
+              const fn = async (params: Record<string, unknown>) => {
+                for (let a = 0; a < 5; a++) {
+                  try {
+                    const r = await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
+                      body: JSON.stringify({ type: "parameters", params }),
+                    });
+                    if (r.ok) return;
+                    if (r.status === 404) { await new Promise((r) => setTimeout(r, 3000)); continue; }
+                  } catch { await new Promise((r) => setTimeout(r, 3000)); }
+                }
+              };
+              perfRef.current.play(fn, setPerfState);
+            }
+
             chat.getState().addMessage(`Switched to: "${target.title}"`, "system");
           }}
         />
