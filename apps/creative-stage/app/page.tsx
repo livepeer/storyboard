@@ -146,6 +146,10 @@ export default function Stage() {
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pendingPlayRef = useRef(false);
 
+  // Resizable chat sidebar
+  const [chatWidth, setChatWidth] = useState(360);
+  const chatResizing = useRef(false);
+
   // Right-click context menu (artifactId = null means canvas-level)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; artifactId: string | null } | null>(null);
   // Styled prompt dialog
@@ -948,8 +952,35 @@ export default function Stage() {
         )}
       </div>
 
-      {/* ─── Chat Sidebar ─── */}
-      <div style={S.chatSidebar}>
+      {/* ─── Chat Sidebar (resizable) ─── */}
+      <div style={{ ...S.chatSidebar, width: chatWidth, position: "relative" }}>
+        {/* Resize handle */}
+        <div
+          style={{
+            position: "absolute", left: -3, top: 0, bottom: 0, width: 6,
+            cursor: "col-resize", zIndex: 100,
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            chatResizing.current = true;
+            const startX = e.clientX;
+            const startW = chatWidth;
+            const onMove = (ev: PointerEvent) => {
+              if (!chatResizing.current) return;
+              const newW = Math.max(280, Math.min(700, startW - (ev.clientX - startX)));
+              setChatWidth(newW);
+            };
+            const onUp = () => {
+              chatResizing.current = false;
+              window.removeEventListener("pointermove", onMove);
+              window.removeEventListener("pointerup", onUp);
+            };
+            window.addEventListener("pointermove", onMove);
+            window.addEventListener("pointerup", onUp);
+          }}
+          onPointerEnter={(e) => { (e.target as HTMLElement).style.background = "rgba(99,102,241,0.3)"; }}
+          onPointerLeave={(e) => { if (!chatResizing.current) (e.target as HTMLElement).style.background = "transparent"; }}
+        />
         <div style={S.chatHeader}>
           <span style={S.chatTitle}>Creative Stage</span>
           {isStreaming && (
