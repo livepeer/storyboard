@@ -127,10 +127,10 @@ export class PerformanceEngine {
 
     const first = this.scenes[0];
     // Flush first, then settle into normal params after a brief hold
-    await controlFn(buildFlushParams(first));
+    await this.controlFn!(buildFlushParams(first));
     setTimeout(() => {
-      if (this.isPlaying && this.currentScene === 0) {
-        controlFn(buildControlParams(first));
+      if (this.isPlaying && this.currentScene === 0 && this.controlFn) {
+        this.controlFn(buildControlParams(first));
       }
     }, FLUSH_HOLD_MS);
     this.notify();
@@ -155,7 +155,7 @@ export class PerformanceEngine {
     this.startTime = Date.now() - this.pausedElapsed * 1000;
     // Re-send current scene's control params to resume the stream content
     const current = this.scenes[this.currentScene];
-    if (current) {
+    if (current && this.controlFn) {
       this.controlFn(buildControlParams(current));
     }
     this.rescheduleFuture();
@@ -221,18 +221,15 @@ export class PerformanceEngine {
       const idx = i;
       const delay = sceneStartMs - elapsedMs;
       if (delay > 0) {
-        const fn = this.controlFn;
-        // Step 1: Flush — hard break from old scene
         this.timers.push(setTimeout(async () => {
-          if (!this.isPlaying) return;
+          if (!this.isPlaying || !this.controlFn) return;
           this.currentScene = idx;
-          await fn(buildFlushParams(scene));
+          await this.controlFn(buildFlushParams(scene));
           this.notify();
         }, delay));
-        // Step 2: Settle — restore normal params after flush hold
         this.timers.push(setTimeout(async () => {
-          if (!this.isPlaying || this.currentScene !== idx) return;
-          await fn(buildControlParams(scene));
+          if (!this.isPlaying || this.currentScene !== idx || !this.controlFn) return;
+          await this.controlFn(buildControlParams(scene));
         }, delay + FLUSH_HOLD_MS));
       }
       sceneStartMs += scene.duration * 1000;
@@ -248,18 +245,16 @@ export class PerformanceEngine {
       elapsed += this.scenes[i - 1].duration;
       const scene = this.scenes[i];
       const idx = i;
-      const fn = this.controlFn;
-      // Step 1: Flush — hard break from previous scene
+      // Use this.controlFn at CALL TIME (not captured — avoids stale closure)
       this.timers.push(setTimeout(async () => {
-        if (!this.isPlaying) return;
+        if (!this.isPlaying || !this.controlFn) return;
         this.currentScene = idx;
-        await fn(buildFlushParams(scene));
+        await this.controlFn(buildFlushParams(scene));
         this.notify();
       }, elapsed * 1000));
-      // Step 2: Settle — normal params after flush hold
       this.timers.push(setTimeout(async () => {
-        if (!this.isPlaying || this.currentScene !== idx) return;
-        await fn(buildControlParams(scene));
+        if (!this.isPlaying || this.currentScene !== idx || !this.controlFn) return;
+        await this.controlFn(buildControlParams(scene));
       }, elapsed * 1000 + FLUSH_HOLD_MS));
     }
     const total = this.scenes.reduce((s, sc) => s + sc.duration, 0);

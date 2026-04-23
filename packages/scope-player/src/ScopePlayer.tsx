@@ -71,23 +71,23 @@ export function ScopePlayer({
   }, [onSourceReady, setSource]);
 
   // Render loop — draws latest frame to canvas at display refresh rate.
-  // Runs independently of all other effects. Never cancelled except on unmount.
+  // Re-acquires canvasRef each frame so re-renders don't create stale ctx.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
     let running = true;
 
     function renderLoop() {
       if (!running) return;
-      if (lastBitmapRef.current && ctx) {
-        const bm = lastBitmapRef.current;
-        if (canvas!.width !== bm.width || canvas!.height !== bm.height) {
-          canvas!.width = bm.width;
-          canvas!.height = bm.height;
+      const canvas = canvasRef.current;
+      if (canvas && lastBitmapRef.current) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          const bm = lastBitmapRef.current;
+          if (canvas.width !== bm.width || canvas.height !== bm.height) {
+            canvas.width = bm.width;
+            canvas.height = bm.height;
+          }
+          ctx.drawImage(bm, 0, 0);
         }
-        ctx.drawImage(bm, 0, 0);
       }
       animFrameRef.current = requestAnimationFrame(renderLoop);
     }

@@ -138,7 +138,9 @@ export default function Stage() {
   const [musicPrompt, setMusicPrompt] = useState<string | null>(null);
   const [musicRegenerating, setMusicRegenerating] = useState(false);
   const setSourceFnRef = useRef<((source: StreamSource) => void) | null>(null);
-  const [streamSource, setStreamSource] = useState<StreamSource>({ type: "blank" });
+  const streamSourceRef = useRef<StreamSource>({ type: "blank" });
+  // State only for the UI indicator — updated via forceUpdate to avoid re-render cascade
+  const [streamSourceDisplay, setStreamSourceDisplay] = useState<StreamSource>({ type: "blank" });
   const recorderRef = useRef(new StageRecorder());
   const [recState, setRecState] = useState<RecorderState>({ isRecording: false, duration: 0, blobUrl: null });
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -292,7 +294,8 @@ export default function Stage() {
       setStreamSource: (type: "blank" | "image" | "video", url?: string, label?: string) => {
         const src = { type, url, label } as StreamSource;
         if (setSourceFnRef.current) setSourceFnRef.current(src);
-        setStreamSource(src);
+        streamSourceRef.current = src;
+        setStreamSourceDisplay(src);
       },
       getSceneCount: () => perfRef.current.scenes.length,
       saveSceneSet: () => {
@@ -438,8 +441,11 @@ export default function Stage() {
       // Set as publish source — real content instead of blank frames
       const srcType = dropped.type === "video" ? "video" as const : "image" as const;
       if (setSourceFnRef.current) {
-        setSourceFnRef.current({ type: srcType, url: dropped.url, label: dropped.title });
-        setStreamSource({ type: srcType, url: dropped.url, label: dropped.title });
+        const src = { type: srcType, url: dropped.url, label: dropped.title } as StreamSource;
+        setSourceFnRef.current(src);
+        streamSourceRef.current = src;
+        // Deferred display update — avoids re-render cascade that detaches canvas
+        setTimeout(() => setStreamSourceDisplay(src), 50);
       }
 
       // Flush KV cache + lower noise_scale so the pipeline picks up
@@ -574,7 +580,7 @@ export default function Stage() {
                   </div>
                 )}
                 {/* Source indicator — shows when image/video is feeding the stream */}
-                {streamSource.type !== "blank" && (
+                {streamSourceDisplay.type !== "blank" && (
                   <div style={{
                     position: "absolute", bottom: 6, left: 8, right: 8,
                     display: "flex", alignItems: "center", gap: 6,
@@ -582,13 +588,13 @@ export default function Stage() {
                     padding: "4px 8px", fontSize: 10,
                   }}>
                     <span style={{ color: "#6366f1" }}>
-                      {streamSource.type === "video" ? "🎬" : "🖼"} Source: {streamSource.label?.slice(0, 25) || streamSource.type}
+                      {streamSourceDisplay.type === "video" ? "🎬" : "🖼"} Source: {streamSourceDisplay.label?.slice(0, 25) || streamSourceDisplay.type}
                     </span>
                     <button
                       onClick={() => {
                         if (setSourceFnRef.current) {
                           setSourceFnRef.current({ type: "blank" });
-                          setStreamSource({ type: "blank" });
+                          streamSourceRef.current = { type: "blank" }; setStreamSourceDisplay({ type: "blank" });
                           chat.getState().addMessage("Source cleared — back to blank frames.", "system");
                         }
                       }}
@@ -957,8 +963,10 @@ export default function Stage() {
                       setCtxMenu(null);
                       const srcType = isVideo ? "video" as const : "image" as const;
                       if (setSourceFnRef.current && art.url) {
-                        setSourceFnRef.current({ type: srcType, url: art.url, label: art.title });
-                        setStreamSource({ type: srcType, url: art.url, label: art.title });
+                        const src = { type: srcType, url: art.url, label: art.title } as StreamSource;
+                        setSourceFnRef.current(src);
+                        streamSourceRef.current = src;
+                        setTimeout(() => setStreamSourceDisplay(src), 50);
                         chat.getState().addMessage(`${srcType} source set: "${art.title}" → Live Output`, "system");
                       }
                     }} />
