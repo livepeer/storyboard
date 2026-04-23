@@ -89,6 +89,25 @@ export function SettingsPanel() {
 
   const plugins = typeof window !== "undefined" ? getPluginList() : [];
 
+  // Dynamic agent config fields — load/save from localStorage
+  const [agentConfig, setAgentConfig] = useState<Record<string, string>>({});
+  const activePlugin = plugins.find((p) => p.id === activeAgent);
+
+  // Load agent config when agent changes
+  useEffect(() => {
+    if (!activePlugin?.configFields?.length) return;
+    const loaded: Record<string, string> = {};
+    for (const field of activePlugin.configFields) {
+      loaded[field.key] = localStorage.getItem(`storyboard_${field.key}`) || "";
+    }
+    setAgentConfig(loaded);
+  }, [activeAgent, activePlugin]);
+
+  const handleAgentConfigChange = useCallback((key: string, value: string) => {
+    setAgentConfig((prev) => ({ ...prev, [key]: value }));
+    localStorage.setItem(`storyboard_${key}`, value);
+  }, []);
+
   // Draggable dialog
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const [initialized, setInitialized] = useState(false);
@@ -180,6 +199,22 @@ export function SettingsPanel() {
                 </option>
               ))}
             </select>
+
+            {/* Dynamic agent config fields */}
+            {activePlugin?.configFields?.map((field) => (
+              <div key={field.key} className="mb-3">
+                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
+                  {field.label}
+                </label>
+                <input
+                  type={field.type}
+                  value={agentConfig[field.key] || ""}
+                  onChange={(e) => handleAgentConfigChange(field.key, e.target.value)}
+                  placeholder={field.placeholder}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
+                />
+              </div>
+            ))}
 
             <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
               SDK Service URL
