@@ -1,17 +1,19 @@
 /**
  * Performance Engine — sequences scenes over time with prompt traveling.
  *
- * Scope runtime params (confirmed from source code):
- * - prompts (string | PromptItem[]) — YES runtime
- * - noise_scale (0-1) — YES runtime
- * - kv_cache_attention_bias (0.01-1) — YES runtime
- * - reset_cache (bool) — YES runtime, one-shot
- * - transition (PromptTransition) — YES runtime, smooth morphing
- * - vace_ref_images (string[]) — YES runtime, one-shot (cleared after use)
- * - vace_context_scale (0-2) — YES runtime
+ * Scene transitions use Scope's native transition system:
+ * 1. Transition phase: slerp interpolation from old prompt → new prompt
+ *    over N steps (controls the "grow into" morphing effect)
+ * 2. Ramp phase: gradually shift noise_scale and kv_cache from
+ *    transition values → scene's target values
+ * 3. Settle phase: scene plays at its target params
  *
- * The events loop crash (1MB trickle limit) was from fal runner log events,
- * not from our control messages. Our params are small and safe.
+ * Scope runtime params used:
+ * - prompts (string) — the target scene prompt
+ * - noise_scale (0-1) — creativity level
+ * - kv_cache_attention_bias (0.01-1) — temporal consistency
+ * - reset_cache (bool) — one-shot cache flush
+ * - transition — slerp/lerp interpolation to new prompt over N steps
  */
 
 export interface Scene {
@@ -50,8 +52,47 @@ const PRESET_PARAMS: Record<string, {
   psychedelic: { noise_scale: 0.9,  kv_cache_attention_bias: 0.05, transition_steps: 4, reset_cache: true },
 };
 
-/** Build the "settle" params for the scene (normal playback). */
-function buildControlParams(scene: Scene): Record<string, unknown> {
+/**
+ * Build transition params — initiates a smooth slerp morph into the new scene.
+ * During transition: noise is raised slightly and kv_cache is lowered to allow
+ * the morphing to happen. The `transition` field tells Scope to interpolate
+ * the prompt embedding over N steps.
+ */
+function buildTransitionParams(
+  scene: Scene,
+  prevScene: Scene | undefined,
+): Record<string, unknown> {
+  const params = PRESET_PARAMS[scene.preset] || PRESET_PARAMS.cinematic;
+  const prevParams = prevScene
+    ? (PRESET_PARAMS[prevScene.preset] || PRESET_PARAMS.cinematic)
+    : params;
+
+  // During transition: boost noise and lower kv_cache to enable morphing
+  // Blend between previous and next preset values with a bias toward more fluid
+  const transitionNoise = Math.min(
+    Math.max(prevParams.noise_scale, params.noise_scale) + 0.15,
+    0.95,
+  );
+  const transitionKvCache = Math.max(
+    Math.min(prevParams.kv_cache_attention_bias, params.kv_cache_attention_bias) - 0.15,
+    0.05,
+  );
+
+  return {
+    prompts: scene.prompt,
+    noise_scale: transitionNoise,
+    kv_cache_attention_bias: transitionKvCache,
+    // Scope's native transition: slerp interpolation over N steps
+    transition: {
+      target_prompts: [{ text: scene.prompt, weight: 1.0 }],
+      num_steps: params.transition_steps,
+      temporal_interpolation_method: "slerp",
+    },
+  };
+}
+
+/** Build the "settle" params — scene plays at its target values. */
+function buildSettleParams(scene: Scene): Record<string, unknown> {
   const params = PRESET_PARAMS[scene.preset] || PRESET_PARAMS.cinematic;
   const noise = scene.noiseScale ?? params.noise_scale;
 
@@ -63,21 +104,18 @@ function buildControlParams(scene: Scene): Record<string, unknown> {
   };
 }
 
-/** Build "flush" params — forces a hard visual break from the previous scene.
- *  High noise + low kv_cache + reset_cache clears the latent state so the
- *  new prompt generates cleanly without bleed from the old scene. */
-function buildFlushParams(scene: Scene): Record<string, unknown> {
-  return {
-    prompts: scene.prompt,
-    noise_scale: 0.95,
-    kv_cache_attention_bias: 0.05,
-    reset_cache: true,
-  };
-}
+/**
+ * How long to hold transition params before settling.
+ * This gives Scope time to complete the slerp interpolation.
+ * ~2s at ~8-12fps = 16-24 frames, enough for most transition_steps values.
+ */
+const TRANSITION_HOLD_MS = 2000;
 
-/** How long to hold the flush params before settling into normal playback.
- *  This is stolen from the scene's duration — not added on top. */
-const FLUSH_HOLD_MS = 800;
+/**
+ * For the very first scene, do a brief reset to establish the prompt cleanly.
+ * Shorter than inter-scene transitions since there's nothing to morph from.
+ */
+const FIRST_SCENE_RESET_MS = 600;
 
 export class PerformanceEngine {
   scenes: Scene[] = [];
@@ -126,13 +164,18 @@ export class PerformanceEngine {
     this.pausedElapsed = 0;
 
     const first = this.scenes[0];
-    // Flush first, then settle into normal params after a brief hold
-    await this.controlFn!(buildFlushParams(first));
+    // First scene: brief reset to establish prompt, then settle
+    await this.controlFn!({
+      prompts: first.prompt,
+      noise_scale: 0.8,
+      kv_cache_attention_bias: 0.1,
+      reset_cache: true,
+    });
     setTimeout(() => {
       if (this.isPlaying && this.currentScene === 0 && this.controlFn) {
-        this.controlFn(buildControlParams(first));
+        this.controlFn(buildSettleParams(first));
       }
-    }, FLUSH_HOLD_MS);
+    }, FIRST_SCENE_RESET_MS);
     this.notify();
     this.scheduleFutureScenes();
     this.progressTimer = setInterval(() => this.notify(), 1000);
@@ -151,12 +194,10 @@ export class PerformanceEngine {
   resume() {
     if (!this.isPlaying || !this.isPaused || !this.controlFn) return;
     this.isPaused = false;
-    // Shift startTime so elapsed picks up where we left off
     this.startTime = Date.now() - this.pausedElapsed * 1000;
-    // Re-send current scene's control params to resume the stream content
     const current = this.scenes[this.currentScene];
     if (current && this.controlFn) {
-      this.controlFn(buildControlParams(current));
+      this.controlFn(buildSettleParams(current));
     }
     this.rescheduleFuture();
     this.progressTimer = setInterval(() => this.notify(), 1000);
@@ -210,6 +251,40 @@ export class PerformanceEngine {
   private reindex() { this.scenes.forEach((s, i) => { s.index = i; }); }
   private clearFutureTimers() { this.timers.forEach(clearTimeout); this.timers = []; }
 
+  /**
+   * Schedule transitions for all future scenes.
+   * Each scene gets a 3-step sequence:
+   *   T+0: Transition — slerp morph + boosted noise + lowered kv_cache
+   *   T+HOLD: Settle — target preset params
+   *   T+duration: Next scene transition starts
+   */
+  private scheduleFutureScenes() {
+    if (!this.controlFn) return;
+    let elapsed = 0;
+    for (let i = 1; i < this.scenes.length; i++) {
+      elapsed += this.scenes[i - 1].duration;
+      const scene = this.scenes[i];
+      const prev = this.scenes[i - 1];
+      const idx = i;
+
+      // Step 1: Start transition — slerp morph into new scene
+      this.timers.push(setTimeout(async () => {
+        if (!this.isPlaying || !this.controlFn) return;
+        this.currentScene = idx;
+        await this.controlFn(buildTransitionParams(scene, prev));
+        this.notify();
+      }, elapsed * 1000));
+
+      // Step 2: Settle — lock in target params after morph completes
+      this.timers.push(setTimeout(async () => {
+        if (!this.isPlaying || this.currentScene !== idx || !this.controlFn) return;
+        await this.controlFn(buildSettleParams(scene));
+      }, elapsed * 1000 + TRANSITION_HOLD_MS));
+    }
+    const total = this.scenes.reduce((s, sc) => s + sc.duration, 0);
+    this.timers.push(setTimeout(() => { this.isPlaying = false; this.notify(); }, total * 1000));
+  }
+
   private rescheduleFuture() {
     this.clearFutureTimers();
     if (!this.controlFn || !this.isPlaying) return;
@@ -218,47 +293,25 @@ export class PerformanceEngine {
     for (let i = 0; i <= this.currentScene; i++) sceneStartMs += (this.scenes[i]?.duration ?? 0) * 1000;
     for (let i = this.currentScene + 1; i < this.scenes.length; i++) {
       const scene = this.scenes[i];
+      const prev = this.scenes[i - 1];
       const idx = i;
       const delay = sceneStartMs - elapsedMs;
       if (delay > 0) {
         this.timers.push(setTimeout(async () => {
           if (!this.isPlaying || !this.controlFn) return;
           this.currentScene = idx;
-          await this.controlFn(buildFlushParams(scene));
+          await this.controlFn(buildTransitionParams(scene, prev));
           this.notify();
         }, delay));
         this.timers.push(setTimeout(async () => {
           if (!this.isPlaying || this.currentScene !== idx || !this.controlFn) return;
-          await this.controlFn(buildControlParams(scene));
-        }, delay + FLUSH_HOLD_MS));
+          await this.controlFn(buildSettleParams(scene));
+        }, delay + TRANSITION_HOLD_MS));
       }
       sceneStartMs += scene.duration * 1000;
     }
     const endDelay = sceneStartMs - elapsedMs;
     if (endDelay > 0) this.timers.push(setTimeout(() => { this.isPlaying = false; this.notify(); }, endDelay));
-  }
-
-  private scheduleFutureScenes() {
-    if (!this.controlFn) return;
-    let elapsed = 0;
-    for (let i = 1; i < this.scenes.length; i++) {
-      elapsed += this.scenes[i - 1].duration;
-      const scene = this.scenes[i];
-      const idx = i;
-      // Use this.controlFn at CALL TIME (not captured — avoids stale closure)
-      this.timers.push(setTimeout(async () => {
-        if (!this.isPlaying || !this.controlFn) return;
-        this.currentScene = idx;
-        await this.controlFn(buildFlushParams(scene));
-        this.notify();
-      }, elapsed * 1000));
-      this.timers.push(setTimeout(async () => {
-        if (!this.isPlaying || this.currentScene !== idx || !this.controlFn) return;
-        await this.controlFn(buildControlParams(scene));
-      }, elapsed * 1000 + FLUSH_HOLD_MS));
-    }
-    const total = this.scenes.reduce((s, sc) => s + sc.duration, 0);
-    this.timers.push(setTimeout(() => { this.isPlaying = false; this.notify(); }, total * 1000));
   }
 
   private notify() { this.onUpdate?.(this.getState()); }

@@ -808,8 +808,8 @@ export default function Stage() {
               setAudioUrl(null);
             }
 
-            // Clean transition: flush KV cache, send new prompt at high noise
-            // to force a hard visual break, wait for pipeline to process, then play.
+            // Smooth transition to new tab: slerp morph into first scene,
+            // then start the timeline after the morph completes.
             if (streamIdRef.current) {
               const cfg = getSdkConfig();
               const fn = async (params: Record<string, unknown>) => {
@@ -823,17 +823,20 @@ export default function Stage() {
                 } catch { /* fire and forget */ }
               };
               const firstScene = target.scenes[0];
-              // Step 1: Flush cache + force new prompt at high noise (clean break)
+              // Step 1: Reset cache + slerp morph into new tab's first prompt
               fn({
                 reset_cache: true,
-                noise_scale: 0.95,
-                kv_cache_attention_bias: 0.05,
+                noise_scale: 0.75,
+                kv_cache_attention_bias: 0.1,
                 prompts: firstScene?.prompt || "",
+                transition: {
+                  target_prompts: [{ text: firstScene?.prompt || "", weight: 1.0 }],
+                  num_steps: 10,
+                  temporal_interpolation_method: "slerp",
+                },
               }).then(() =>
-                // Step 2: Wait for pipeline to process a few frames with new prompt
-                new Promise((r) => setTimeout(r, 1500))
+                new Promise((r) => setTimeout(r, 2000))
               ).then(() => {
-                // Step 3: Play timeline normally (restores proper preset params)
                 perfRef.current.play(fn, setPerfState);
               });
             }
