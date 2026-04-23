@@ -58,6 +58,13 @@ export function buildAgentContext(intent: Intent, memory: MemorySnapshot): strin
     if (longTermMemory) parts.push(`\nMemory: ${longTermMemory}`);
   } catch { /* not available in tests */ }
 
+  // Conversation context — tracks active work item for continuation
+  try {
+    const { getConversationPrompt } = require("@/lib/agents/conversation-context");
+    const convCtx = getConversationPrompt();
+    if (convCtx) parts.push(`\n${convCtx}`);
+  } catch { /* not available in tests */ }
+
   // Preferences
   const prefParts = Object.entries(memory.preferences).map(([k, v]) => `${k}: ${v}`).join(", ");
   if (prefParts) parts.push(`\nPreferences: ${prefParts}`);

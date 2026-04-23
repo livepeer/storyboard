@@ -21,6 +21,7 @@ import { useStoryStore } from "./store";
 import { generateStory } from "./generator";
 import type { Story, StoryListItem } from "./types";
 import { createTracker } from "@/lib/utils/execution-tracker";
+import { setActiveWork } from "@/lib/agents/conversation-context";
 
 /** Envelope marker used by MessageBubble to detect and render a StoryCard. */
 export const STORY_CARD_MARKER = "@@story@@";
@@ -172,6 +173,9 @@ async function storyGenerate(prompt: string): Promise<string> {
   if (result.tokens) tracker.trackLLM(result.tokens.input, result.tokens.output);
   tracker.announce();
   const story = useStoryStore.getState().addStory(result.story);
+  // Set as active work so "add more scenes" / "continue" resolves to this story
+  setActiveWork("story", story.id, story.title,
+    `${story.scenes.length}-scene story: ${story.arc}. Style: ${story.context.style}. Characters: ${story.context.characters}`);
   return renderStoryEnvelope(story);
 }
 

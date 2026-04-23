@@ -70,6 +70,8 @@ interface StoryState {
 
   addStory: (story: Omit<Story, "id" | "createdAt" | "status"> & { id?: string }) => Story;
   updateStory: (id: string, patch: Partial<Pick<Story, "title" | "audience" | "arc" | "context" | "scenes">>) => void;
+  /** Append scenes to an existing story, re-indexing automatically. */
+  addScenes: (id: string, newScenes: StoryScene[]) => void;
   markApplied: (id: string) => void;
   archive: (id: string) => void;
   remove: (id: string) => void;
@@ -105,6 +107,18 @@ export const useStoryStore = create<StoryState>((set, get) => ({
       const next = s.stories.map((x) =>
         x.id === id ? { ...x, ...patch } : x
       );
+      saveToStorage(next);
+      return { stories: next };
+    }),
+
+  addScenes: (id, newScenes) =>
+    set((s) => {
+      const next = s.stories.map((x) => {
+        if (x.id !== id) return x;
+        const maxIndex = x.scenes.reduce((m, sc) => Math.max(m, sc.index), 0);
+        const reindexed = newScenes.map((sc, i) => ({ ...sc, index: maxIndex + 1 + i }));
+        return { ...x, scenes: [...x.scenes, ...reindexed], status: "draft" as const };
+      });
       saveToStorage(next);
       return { stories: next };
     }),

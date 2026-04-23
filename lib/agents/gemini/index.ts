@@ -385,11 +385,17 @@ export const geminiPlugin: AgentPlugin = {
       // by compound-tools' selectCapability to detect edit-intent).
       setCurrentUserText(text);
 
+      // Check for continuation of active work (story/film/project).
+      // If detected, enrich the user message with context so the agent
+      // knows WHAT to continue and HOW.
+      const { detectContinuation } = await import("@/lib/agents/conversation-context");
+      const continuation = detectContinuation(text);
+      if (continuation) {
+        text = continuation;
+      }
+
       // Update ActiveRequest BEFORE buildAgentContext so the injected
-      // "Active request:" line reflects this turn's patch. Pure
-      // deterministic extractor — no LLM cost. Handles new request,
-      // clarification answer, and correction. See
-      // lib/agents/active-request.ts for the classifier.
+      // "Active request:" line reflects this turn's patch.
       useActiveRequest.getState().applyTurn(text);
 
       // L2: log the user turn to the rolling digest so prior turns
