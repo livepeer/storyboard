@@ -220,7 +220,11 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
 
   // Attach to an already-started stream (skip start, go straight to polling)
   const attach = useCallback(async (streamId: string) => {
-    if (runningRef.current) return;
+    if (runningRef.current) {
+      console.log(`[attach] Already running, skipping attach for ${streamId.slice(0, 8)}`);
+      return;
+    }
+    console.log(`[attach] Attaching to stream ${streamId.slice(0, 8)}`);
     streamIdRef.current = streamId;
     runningRef.current = true;
 
@@ -266,18 +270,23 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
       // Wait for first output frame before publishing — the SDK's trickle
       // publish channel returns 404 until _init_stream_session completes
       // (30-90s). Polling during warm-up just spams the console.
+      console.log(`[publish] Waiting for first output frame before publishing (stream=${streamId.slice(0, 8)})`);
       while (runningRef.current && streamIdRef.current === streamId && !publishReady) {
         await new Promise((r) => setTimeout(r, 2000));
-        // Check if we've received any frames yet (set by pollFrames)
         if (frameCountRef.current > 0) {
           publishReady = true;
+          console.log(`[publish] First output frame received — starting publish loop`);
         }
       }
 
       // Now publish frames — use source content if available, blank otherwise
       while (runningRef.current && streamIdRef.current === streamId) {
         try {
+          const src = sourceRef.current;
           const frameBlob = await captureSourceFrame(blob);
+          if (seq % 50 === 0) {
+            console.log(`[publish] seq=${seq}, source=${src.type}, blobSize=${frameBlob.size}, running=${runningRef.current}`);
+          }
           const resp = await fetch(`${opts.sdkUrl}/stream/${streamId}/publish?seq=${seq}`, {
             method: "POST",
             headers: { "Content-Type": "image/jpeg", ...publishHeaders },
@@ -289,14 +298,21 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
             consecutive404 = 0;
           } else if (resp?.status === 404) {
             consecutive404++;
-            if (consecutive404 > 10) return; // stream gone
+            console.warn(`[publish] 404 on seq=${seq} (${consecutive404}/10)`);
+            if (consecutive404 > 10) { console.error(`[publish] Too many 404s — stopping`); return; }
           } else if (resp?.status === 410) {
+            console.warn(`[publish] 410 Gone — stream ended`);
             return;
+          } else if (resp) {
+            console.warn(`[publish] Unexpected ${resp.status} on seq=${seq}`);
           }
-        } catch { /* continue */ }
+        } catch (e) {
+          console.warn(`[publish] Error:`, e);
+        }
 
         await new Promise((r) => setTimeout(r, 100));
       }
+      console.log(`[publish] Loop ended: running=${runningRef.current}, streamId match=${streamIdRef.current === streamId}`);
     }
     publishLoop();
   }, [opts.sdkUrl, opts.apiKey, captureSourceFrame]);
@@ -353,6 +369,7 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
               }
             }
           } else if (resp.status === 410) {
+            console.warn(`[poll] 410 Gone — stream ended by SDK`);
             updateState({ status: "error", error: "Stream ended (SDK restarted)", phase: null });
             runningRef.current = false;
             stopped = true;
@@ -401,6 +418,7 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
 
   // Stop
   const stop = useCallback(async () => {
+    console.log(`[stop] Stopping stream ${streamIdRef.current?.slice(0, 8)}`);
     runningRef.current = false;
     if (!streamIdRef.current) return;
     try {
