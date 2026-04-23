@@ -550,28 +550,49 @@ export function ContextMenu() {
         const speechText = await styledPrompt("Talking Video", "What should they say?");
         if (!speechText) return;
 
-        // Step 2: Get optional voice clone source
+        // Step 2: Voice selection — clone from card OR describe the voice
         const allCards = useCanvasStore.getState().cards;
         const audioCards = allCards.filter((c) => c.type === "audio" && c.url);
-        let voiceHint = "";
-        if (audioCards.length > 0) {
-          const cardList = audioCards.map((c) => c.refId).join(", ");
-          voiceHint = ` (audio cards: ${cardList})`;
-        }
-        const voiceRef = await styledPrompt("Voice Clone (optional)", `Card name to clone voice from${voiceHint}, or leave blank for default`);
-        const voiceCard = voiceRef ? allCards.find((c) => c.refId === voiceRef.trim()) : null;
+        let voiceCloneUrl: string | null = null;
+        let voiceDesc: string | null = null;
 
-        addMessage(`Creating talking video: "${speechText.slice(0, 40)}…"${voiceCard ? ` (voice: ${voiceCard.refId})` : ""}`, "system");
+        const voiceChoice = await styledPrompt(
+          "Voice",
+          audioCards.length > 0
+            ? `Type a card name to clone (${audioCards.map((c) => c.refId).join(", ")}), or describe the voice (e.g. "young girl, cheerful", "deep male, calm"), or leave blank for default`
+            : `Describe the voice (e.g. "young girl, cheerful", "deep male narrator", "elderly woman, warm"), or leave blank for default`,
+        );
+
+        if (voiceChoice) {
+          const trimmed = voiceChoice.trim();
+          // Check if it's a card refId
+          const matchCard = allCards.find((c) => c.refId === trimmed);
+          if (matchCard?.url) {
+            voiceCloneUrl = matchCard.url;
+          } else {
+            // It's a voice description — will be prepended to TTS text
+            voiceDesc = trimmed;
+          }
+        }
+
+        const voiceLabel = voiceCloneUrl ? `clone: ${voiceChoice}` : voiceDesc ? `voice: ${voiceDesc}` : "default voice";
+        addMessage(`Creating talking video: "${speechText.slice(0, 40)}…" (${voiceLabel})`, "system");
 
         try {
-          // Step A: Generate speech audio via chatterbox-tts (with optional voice clone)
+          // Step A: Generate speech audio via TTS
           addMessage("Step 1/2: Generating speech…", "system");
-          const ttsParams: Record<string, unknown> = { text: speechText };
-          if (voiceCard?.url) ttsParams.audio_url = voiceCard.url;
+          // Use gemini-tts for voice descriptions (it supports style/persona),
+          // chatterbox-tts for cloning (it needs audio_url)
+          const useGeminiTts = voiceDesc && !voiceCloneUrl;
+          const ttsCapability = useGeminiTts ? "gemini-tts" : "chatterbox-tts";
+          const ttsParams: Record<string, unknown> = {
+            text: voiceDesc ? `[Voice: ${voiceDesc}] ${speechText}` : speechText,
+          };
+          if (voiceCloneUrl) ttsParams.audio_url = voiceCloneUrl;
 
           const ttsResult = await runInference({
-            capability: "chatterbox-tts",
-            prompt: speechText,
+            capability: ttsCapability,
+            prompt: voiceDesc ? `[Voice: ${voiceDesc}] ${speechText}` : speechText,
             params: ttsParams,
           });
           const tr = ttsResult as Record<string, unknown>;
