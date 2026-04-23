@@ -50,24 +50,34 @@ const PRESET_PARAMS: Record<string, {
   psychedelic: { noise_scale: 0.9,  kv_cache_attention_bias: 0.05, transition_steps: 4, reset_cache: true },
 };
 
-function buildControlParams(scene: Scene, prevScene?: Scene): Record<string, unknown> {
+/** Build the "settle" params for the scene (normal playback). */
+function buildControlParams(scene: Scene): Record<string, unknown> {
   const params = PRESET_PARAMS[scene.preset] || PRESET_PARAMS.cinematic;
   const noise = scene.noiseScale ?? params.noise_scale;
 
-  const control: Record<string, unknown> = {
+  return {
+    prompts: scene.prompt,
     noise_scale: noise,
     kv_cache_attention_bias: params.kv_cache_attention_bias,
+    ...(params.reset_cache ? { reset_cache: true } : {}),
   };
-
-  // Always send prompts directly — simple and reliable
-  control.prompts = scene.prompt;
-
-  if (params.reset_cache) {
-    control.reset_cache = true;
-  }
-
-  return control;
 }
+
+/** Build "flush" params — forces a hard visual break from the previous scene.
+ *  High noise + low kv_cache + reset_cache clears the latent state so the
+ *  new prompt generates cleanly without bleed from the old scene. */
+function buildFlushParams(scene: Scene): Record<string, unknown> {
+  return {
+    prompts: scene.prompt,
+    noise_scale: 0.95,
+    kv_cache_attention_bias: 0.05,
+    reset_cache: true,
+  };
+}
+
+/** How long to hold the flush params before settling into normal playback.
+ *  This is stolen from the scene's duration — not added on top. */
+const FLUSH_HOLD_MS = 800;
 
 export class PerformanceEngine {
   scenes: Scene[] = [];
@@ -116,7 +126,13 @@ export class PerformanceEngine {
     this.pausedElapsed = 0;
 
     const first = this.scenes[0];
-    await controlFn(buildControlParams(first));
+    // Flush first, then settle into normal params after a brief hold
+    await controlFn(buildFlushParams(first));
+    setTimeout(() => {
+      if (this.isPlaying && this.currentScene === 0) {
+        controlFn(buildControlParams(first));
+      }
+    }, FLUSH_HOLD_MS);
     this.notify();
     this.scheduleFutureScenes();
     this.progressTimer = setInterval(() => this.notify(), 1000);
@@ -202,17 +218,22 @@ export class PerformanceEngine {
     for (let i = 0; i <= this.currentScene; i++) sceneStartMs += (this.scenes[i]?.duration ?? 0) * 1000;
     for (let i = this.currentScene + 1; i < this.scenes.length; i++) {
       const scene = this.scenes[i];
-      const prev = this.scenes[i - 1];
       const idx = i;
       const delay = sceneStartMs - elapsedMs;
       if (delay > 0) {
         const fn = this.controlFn;
+        // Step 1: Flush — hard break from old scene
         this.timers.push(setTimeout(async () => {
           if (!this.isPlaying) return;
           this.currentScene = idx;
-          await fn(buildControlParams(scene, prev));
+          await fn(buildFlushParams(scene));
           this.notify();
         }, delay));
+        // Step 2: Settle — restore normal params after flush hold
+        this.timers.push(setTimeout(async () => {
+          if (!this.isPlaying || this.currentScene !== idx) return;
+          await fn(buildControlParams(scene));
+        }, delay + FLUSH_HOLD_MS));
       }
       sceneStartMs += scene.duration * 1000;
     }
@@ -226,15 +247,20 @@ export class PerformanceEngine {
     for (let i = 1; i < this.scenes.length; i++) {
       elapsed += this.scenes[i - 1].duration;
       const scene = this.scenes[i];
-      const prev = this.scenes[i - 1];
       const idx = i;
       const fn = this.controlFn;
+      // Step 1: Flush — hard break from previous scene
       this.timers.push(setTimeout(async () => {
         if (!this.isPlaying) return;
         this.currentScene = idx;
-        await fn(buildControlParams(scene, prev));
+        await fn(buildFlushParams(scene));
         this.notify();
       }, elapsed * 1000));
+      // Step 2: Settle — normal params after flush hold
+      this.timers.push(setTimeout(async () => {
+        if (!this.isPlaying || this.currentScene !== idx) return;
+        await fn(buildControlParams(scene));
+      }, elapsed * 1000 + FLUSH_HOLD_MS));
     }
     const total = this.scenes.reduce((s, sc) => s + sc.duration, 0);
     this.timers.push(setTimeout(() => { this.isPlaying = false; this.notify(); }, total * 1000));
