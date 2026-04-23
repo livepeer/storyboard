@@ -201,12 +201,7 @@ async function filmApply(idOrEmpty: string): Promise<string> {
 
     try {
       const { listTools } = await import("@/lib/tools/registry");
-      let tools = listTools();
-      if (tools.length === 0) {
-        const { initializeTools } = await import("@/lib/tools");
-        initializeTools();
-        tools = listTools();
-      }
+      const tools = listTools(); // auto-initializes if needed
       const createTool = tools.find((t) => t.name === "project_create");
       const genTool = tools.find((t) => t.name === "project_generate");
       if (!createTool || !genTool) return "Apply failed: project tools not registered.";
