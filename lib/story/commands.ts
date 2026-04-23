@@ -273,6 +273,131 @@ async function storyApply(idOrEmpty: string): Promise<string> {
 }
 
 // ----------------------------------------------------------------------
+// Story continuation — "add more scenes"
+// ----------------------------------------------------------------------
+
+const CONTINUE_PATTERNS = [
+  /\b(add|append|extend|include|insert)\b.*\b(more|additional|extra|new)\b.*\b(scene|shot|frame)/i,
+  /\b(add|create|make)\b.*\b(scene|shot|frame)/i,
+  /\bmore\s+scenes?\b/i,
+  /\bcontinue\b.*\b(story|scene)/i,
+  /\bkeep\s+going\b/i,
+  /\badd\b.*\bthat\b.*\b(show|describe|depict|include)/i,
+];
+
+/**
+ * True when there's a pending/recent story and the user wants to add scenes.
+ */
+export function isStoryContinuationIntent(text: string): boolean {
+  const t = text.trim();
+  if (t.length === 0 || t.length > 500) return false;
+  // Must have an active story (pending or recently created via conversation context)
+  const pending = useStoryStore.getState().getPending();
+  if (!pending) {
+    try {
+      const { getConversationContext } = require("@/lib/agents/conversation-context");
+      const ctx = getConversationContext().getState();
+      if (!ctx.activeWork || ctx.activeWork.type !== "story") return false;
+    } catch { return false; }
+  }
+  return CONTINUE_PATTERNS.some((re) => re.test(t));
+}
+
+/**
+ * Generate additional scenes for the active story and append them.
+ * Uses the storyteller LLM with the existing story's context as constraints.
+ */
+export async function continueStory(userRequest: string): Promise<string> {
+  const store = useStoryStore.getState();
+  let story = store.getPending();
+
+  // Fall back to conversation context's active work
+  if (!story) {
+    try {
+      const { getConversationContext } = require("@/lib/agents/conversation-context");
+      const ctx = getConversationContext().getState();
+      if (ctx.activeWork?.type === "story") {
+        story = store.getById(ctx.activeWork.id) ?? null;
+      }
+    } catch { /* */ }
+  }
+  if (!story) return "No active story to continue. Use /story <concept> to create one first.";
+
+  // Build a continuation prompt that constrains the LLM to match the existing story
+  const continuationPrompt = `Continue this existing story by adding new scenes.
+
+EXISTING STORY:
+Title: ${story.title}
+Audience: ${story.audience}
+Arc: ${story.arc}
+Style: ${story.context.style}
+Palette: ${story.context.palette}
+Characters: ${story.context.characters}
+Setting: ${story.context.setting}
+Mood: ${story.context.mood}
+Existing scenes (${story.scenes.length}):
+${story.scenes.map((s) => `  Scene ${s.index}: ${s.title} — ${s.description.slice(0, 80)}`).join("\n")}
+
+USER WANTS TO ADD: ${userRequest}
+
+Generate ONLY the new scenes (not the existing ones). Match the style, characters, palette, and mood exactly. Continue the scene index numbering from ${story.scenes.length + 1}. Return JSON with ONLY a "scenes" array — no title, no context, no arc.
+
+{"scenes": [{"index": ${story.scenes.length + 1}, "title": "...", "description": "..."}]}`;
+
+  try {
+    const resp = await fetch("/api/agent/gemini", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts: [{ text: continuationPrompt }] }],
+        system_instruction: { parts: [{ text: "You are a story continuation assistant. Return ONLY valid JSON with a scenes array. No code fences. No preamble." }] },
+      }),
+    });
+
+    if (!resp.ok) return `Story continuation failed (${resp.status})`;
+
+    const payload = await resp.json();
+    const text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
+      .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+
+    const { extractJsonObject } = await import("./generator");
+    const parsed = extractJsonObject(text);
+    if (!parsed || typeof parsed !== "object") return "Storyteller returned invalid JSON — try again.";
+
+    const obj = parsed as Record<string, unknown>;
+    const newScenes = obj.scenes as Array<{ index: number; title: string; description: string }>;
+    if (!Array.isArray(newScenes) || newScenes.length === 0) return "No new scenes generated — try being more specific.";
+
+    // Validate and normalize scenes
+    const validScenes = newScenes
+      .filter((s) => s.description && s.description.length > 10)
+      .map((s, i) => ({
+        index: story!.scenes.length + 1 + i,
+        title: s.title || `Scene ${story!.scenes.length + 1 + i}`,
+        description: s.description,
+      }));
+
+    if (validScenes.length === 0) return "Generated scenes were too short — try again.";
+
+    // Append to the story
+    store.addScenes(story.id, validScenes);
+    store.setPending(story.id);
+
+    // Update conversation context
+    setActiveWork("story", story.id, story.title,
+      `${story.scenes.length + validScenes.length}-scene story: ${story.arc}`);
+
+    // Re-render the updated story card
+    const updated = store.getById(story.id);
+    if (updated) return renderStoryEnvelope(updated);
+    return `Added ${validScenes.length} scenes to "${story.title}".`;
+  } catch (e) {
+    return `Story continuation error: ${(e as Error).message}`;
+  }
+}
+
+// ----------------------------------------------------------------------
 // Natural-language apply detection
 // ----------------------------------------------------------------------
 

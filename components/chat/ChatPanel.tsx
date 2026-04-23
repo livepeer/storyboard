@@ -8,7 +8,7 @@ import { MessageBubble } from "./MessageBubble";
 import { ToolPill } from "./ToolPill";
 import { QuickActions } from "./QuickActions";
 import { parseCommand, executeCommand } from "@/lib/skills/commands";
-import { isApplyPendingIntent, applyPendingStory } from "@/lib/story/commands";
+import { isApplyPendingIntent, applyPendingStory, isStoryContinuationIntent, continueStory } from "@/lib/story/commands";
 import { isFilmApplyIntent, applyPendingFilm } from "@/lib/film/commands";
 import { isStreamApplyIntent, applyPendingStream } from "@/lib/stream-cmd/commands";
 import { preprocessPrompt } from "@/lib/agents/preprocessor";
@@ -314,6 +314,15 @@ export function ChatPanel() {
         addMessage(text.trim(), "user");
         setInput("");
         applyPendingStream().then((result) => addMessage(result, "system"));
+        return;
+      }
+
+      // Story continuation — "add more scenes about X"
+      if (isStoryContinuationIntent(text.trim())) {
+        addMessage(text.trim(), "user");
+        setInput("");
+        addMessage("Adding scenes to your story…", "system");
+        continueStory(text.trim()).then((result) => addMessage(result, "system"));
         return;
       }
 
