@@ -345,9 +345,14 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
                 fpsWindowFrames++;
                 noFrameCount = 0;
 
+                if (frameCountRef.current % 30 === 1) {
+                  console.log(`[poll] frame #${frameCountRef.current}, ${bitmap.width}x${bitmap.height}, blob=${blob.size}`);
+                }
+
                 // Transition from "warming" to "streaming" on first real frame
                 if (!firstFrameReceived) {
                   firstFrameReceived = true;
+                  console.log(`[poll] First frame received — status → streaming`);
                   updateState({ status: "streaming", phase: null });
                 }
 
@@ -366,7 +371,11 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
                 // Minimal yield between successful frames
                 await new Promise((r) => setTimeout(r, 16));
                 continue;
+              } else {
+                if (noFrameCount % 20 === 0) console.log(`[poll] tiny blob (${blob.size}b), noFrame=${noFrameCount}`);
               }
+            } else {
+              if (noFrameCount % 20 === 0) console.log(`[poll] non-image content-type: ${contentType}, status=${resp.status}`);
             }
           } else if (resp.status === 410) {
             console.warn(`[poll] 410 Gone — stream ended by SDK`);
@@ -378,7 +387,11 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
 
           // No frame yet — back off
           noFrameCount++;
+          if (noFrameCount % 50 === 0) {
+            console.log(`[poll] no frame x${noFrameCount}, firstFrame=${firstFrameReceived}, running=${runningRef.current}`);
+          }
           if (noFrameCount > MAX_NO_FRAME) {
+            console.error(`[poll] Timed out — ${MAX_NO_FRAME} polls with no frames`);
             updateState({ status: "error", error: "Stream timed out — no frames received", phase: null });
             runningRef.current = false;
             stopped = true;
@@ -391,11 +404,12 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
             updateState({ phase: `warming up GPU… (${noFrameCount}s)` });
           }
           await new Promise((r) => setTimeout(r, backoff));
-        } catch {
-          // Network error — hold last frame, brief pause
+        } catch (e) {
+          console.warn(`[poll] Network error:`, e);
           await new Promise((r) => setTimeout(r, 200));
         }
       }
+      console.log(`[poll] Fetcher exited: stopped=${stopped}, running=${runningRef.current}, streamMatch=${streamIdRef.current === streamId}`);
     }
 
     const fetchers = Array.from({ length: CONCURRENCY }, () => fetcher());
