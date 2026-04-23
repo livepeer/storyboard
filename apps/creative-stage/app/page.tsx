@@ -823,17 +823,12 @@ export default function Stage() {
                 } catch { /* fire and forget */ }
               };
               const firstScene = target.scenes[0];
-              // Step 1: Reset cache + slerp morph into new tab's first prompt
+              // Step 1: Reset cache + send new prompt with morphing params
               fn({
                 reset_cache: true,
                 noise_scale: 0.75,
                 kv_cache_attention_bias: 0.1,
                 prompts: firstScene?.prompt || "",
-                transition: {
-                  target_prompts: [{ text: firstScene?.prompt || "", weight: 1.0 }],
-                  num_steps: 10,
-                  temporal_interpolation_method: "slerp",
-                },
               }).then(() =>
                 new Promise((r) => setTimeout(r, 2000))
               ).then(() => {

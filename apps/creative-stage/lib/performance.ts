@@ -53,10 +53,11 @@ const PRESET_PARAMS: Record<string, {
 };
 
 /**
- * Build transition params — initiates a smooth slerp morph into the new scene.
- * During transition: noise is raised slightly and kv_cache is lowered to allow
- * the morphing to happen. The `transition` field tells Scope to interpolate
- * the prompt embedding over N steps.
+ * Build transition params — morphs from the previous scene into the new one.
+ * Raises noise and lowers kv_cache to give the pipeline room to transform.
+ * Does NOT use the `transition` field (it can lock the pipeline into
+ * re-interpolating forever). Instead, relies on prompt change + noise/kv_cache
+ * shift to create a natural "grow into" effect.
  */
 function buildTransitionParams(
   scene: Scene,
@@ -67,14 +68,15 @@ function buildTransitionParams(
     ? (PRESET_PARAMS[prevScene.preset] || PRESET_PARAMS.cinematic)
     : params;
 
-  // During transition: boost noise and lower kv_cache to enable morphing
-  // Blend between previous and next preset values with a bias toward more fluid
+  // During transition: boost noise and lower kv_cache to enable morphing.
+  // The prompt changes while kv_cache is low → Scope naturally morphs between
+  // the old cached latent and the new prompt direction.
   const transitionNoise = Math.min(
     Math.max(prevParams.noise_scale, params.noise_scale) + 0.15,
     0.95,
   );
   const transitionKvCache = Math.max(
-    Math.min(prevParams.kv_cache_attention_bias, params.kv_cache_attention_bias) - 0.15,
+    Math.min(prevParams.kv_cache_attention_bias, params.kv_cache_attention_bias) * 0.4,
     0.05,
   );
 
@@ -82,12 +84,6 @@ function buildTransitionParams(
     prompts: scene.prompt,
     noise_scale: transitionNoise,
     kv_cache_attention_bias: transitionKvCache,
-    // Scope's native transition: slerp interpolation over N steps
-    transition: {
-      target_prompts: [{ text: scene.prompt, weight: 1.0 }],
-      num_steps: params.transition_steps,
-      temporal_interpolation_method: "slerp",
-    },
   };
 }
 
@@ -100,20 +96,17 @@ function buildSettleParams(scene: Scene): Record<string, unknown> {
     prompts: scene.prompt,
     noise_scale: noise,
     kv_cache_attention_bias: params.kv_cache_attention_bias,
-    ...(params.reset_cache ? { reset_cache: true } : {}),
   };
 }
 
 /**
  * How long to hold transition params before settling.
- * This gives Scope time to complete the slerp interpolation.
- * ~2s at ~8-12fps = 16-24 frames, enough for most transition_steps values.
+ * ~2.5s at ~8-12fps = 20-30 frames of morphing before locking in.
  */
-const TRANSITION_HOLD_MS = 2000;
+const TRANSITION_HOLD_MS = 2500;
 
 /**
  * For the very first scene, do a brief reset to establish the prompt cleanly.
- * Shorter than inter-scene transitions since there's nothing to morph from.
  */
 const FIRST_SCENE_RESET_MS = 600;
 

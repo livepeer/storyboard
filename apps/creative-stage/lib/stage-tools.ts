@@ -308,7 +308,7 @@ export function createStageTools(ctx: StageToolContext) {
               type: "object",
               properties: {
                 title: { type: "string", description: "Short scene title" },
-                prompt: { type: "string", description: "20-35 words describing THIS scene only (style_prefix handles the rest). Focus on: subject, action, unique colors, unique textures. Share visual anchors with neighboring scenes." },
+                prompt: { type: "string", description: "40-60 words with 7 layers: subject+action, surface/ground, background+motion, lighting, color palette (3 specific colors), atmosphere+particles. Bridge scenes: use transformation verbs (melting, crystallizing, emerging). Share camera angle, 2+ colors, 1+ material with neighboring scenes." },
                 preset: { type: "string", description: "cinematic=stable(0.5), abstract=dramatic morph(0.95), psychedelic=extreme morph(0.9), dreamy=soft(0.7), faithful=frozen(0.2), painterly=artistic(0.65)" },
                 duration: { type: "number", description: "25-40s for beauty shots, 10-15s for morph bridges" },
               },
