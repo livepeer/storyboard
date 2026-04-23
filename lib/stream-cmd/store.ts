@@ -33,6 +33,7 @@ interface StreamStore {
   plans: StreamPlan[];
   pendingId: string | null;
   addPlan: (p: Omit<StreamPlan, "id" | "createdAt" | "status">) => StreamPlan;
+  updatePlan: (id: string, patch: Partial<Pick<StreamPlan, "title" | "style" | "graphTemplate" | "scenes">>) => void;
   markStreaming: (id: string, streamId: string) => void;
   markDone: (id: string) => void;
   setPending: (id: string | null) => void;
@@ -50,6 +51,12 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
     set((s) => { const next = [plan, ...s.plans]; save(next); return { plans: next, pendingId: plan.id }; });
     return plan;
   },
+
+  updatePlan: (id, patch) => set((s) => {
+    const next = s.plans.map((p) => p.id === id ? { ...p, ...patch } : p);
+    save(next);
+    return { plans: next };
+  }),
 
   markStreaming: (id, streamId) => set((s) => {
     const next = s.plans.map((p) => p.id === id ? { ...p, status: "streaming" as const, streamId } : p);
