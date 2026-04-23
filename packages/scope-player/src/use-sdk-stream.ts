@@ -46,6 +46,7 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
   const sourceRef = useRef<StreamSource>({ type: "blank" });
   const sourceVideoRef = useRef<HTMLVideoElement | null>(null);
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sourceBitmapRef = useRef<ImageBitmap | null>(null); // cached image bitmap for fast draw
 
   const headers = useCallback(() => {
     const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -68,6 +69,7 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
   const setSource = useCallback((source: StreamSource) => {
     const prev = sourceRef.current;
     sourceRef.current = source;
+    sourceBitmapRef.current = null; // clear cached bitmap
 
     // Cleanup previous video source
     if (prev.type === "video" && sourceVideoRef.current) {
@@ -76,7 +78,8 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
       sourceVideoRef.current = null;
     }
 
-    // Initialize new source
+    if (source.type === "blank") return;
+
     if (source.type === "video" && source.url && typeof document !== "undefined") {
       const video = document.createElement("video");
       video.crossOrigin = "anonymous";
@@ -86,20 +89,34 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
       video.playsInline = true;
       video.play().catch(() => {});
       sourceVideoRef.current = video;
-    } else if (source.type === "image" && source.url && typeof document !== "undefined") {
-      // For images, draw once to the source canvas
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => {
-        if (!sourceCanvasRef.current) {
-          sourceCanvasRef.current = document.createElement("canvas");
-        }
-        sourceCanvasRef.current.width = img.naturalWidth || 512;
-        sourceCanvasRef.current.height = img.naturalHeight || 512;
-        const ctx = sourceCanvasRef.current.getContext("2d");
-        if (ctx) ctx.drawImage(img, 0, 0);
-      };
-      img.src = source.url;
+    } else if (source.type === "image" && source.url) {
+      // Load image as bitmap. Try fetch first (works for blob: and same-origin),
+      // fall back to Image element for cross-origin CDN URLs.
+      const loadViaFetch = () =>
+        fetch(source.url!)
+          .then((r) => { if (!r.ok) throw new Error(`${r.status}`); return r.blob(); })
+          .then((blob) => createImageBitmap(blob));
+
+      const loadViaImg = () =>
+        new Promise<ImageBitmap>((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.onload = () => createImageBitmap(img).then(resolve).catch(reject);
+          img.onerror = () => reject(new Error("Image load failed"));
+          img.src = source.url!;
+        });
+
+      loadViaFetch()
+        .catch(() => loadViaImg()) // fallback for CORS-restricted CDN URLs
+        .then((bm) => {
+          if (sourceRef.current === source) {
+            sourceBitmapRef.current = bm;
+            console.log(`[useSdkStream] Image source ready: ${bm.width}x${bm.height}`);
+          }
+        })
+        .catch((e) => {
+          console.warn("[useSdkStream] Image source load failed (both methods):", e);
+        });
     }
   }, []);
 
@@ -108,24 +125,34 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
     const src = sourceRef.current;
     if (src.type === "blank") return blankBlob;
 
-    if (src.type === "image" && sourceCanvasRef.current) {
-      const canvas = sourceCanvasRef.current;
+    // Ensure we have a canvas for encoding
+    if (!sourceCanvasRef.current) {
+      sourceCanvasRef.current = document.createElement("canvas");
+    }
+    const canvas = sourceCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return blankBlob;
+
+    if (src.type === "image") {
+      const bm = sourceBitmapRef.current;
+      if (!bm) return blankBlob; // image still loading
+      if (canvas.width !== bm.width || canvas.height !== bm.height) {
+        canvas.width = bm.width;
+        canvas.height = bm.height;
+      }
+      ctx.drawImage(bm, 0, 0);
       return new Promise<Blob>((resolve) =>
         canvas.toBlob((b) => resolve(b || blankBlob), "image/jpeg", 0.7)
       );
     }
 
-    if (src.type === "video" && sourceVideoRef.current) {
+    if (src.type === "video") {
       const video = sourceVideoRef.current;
-      if (video.readyState < 2) return blankBlob; // not ready yet
-      if (!sourceCanvasRef.current) {
-        sourceCanvasRef.current = document.createElement("canvas");
+      if (!video || video.readyState < 2) return blankBlob;
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth || 512;
+        canvas.height = video.videoHeight || 512;
       }
-      const canvas = sourceCanvasRef.current;
-      canvas.width = video.videoWidth || 512;
-      canvas.height = video.videoHeight || 512;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return blankBlob;
       ctx.drawImage(video, 0, 0);
       return new Promise<Blob>((resolve) =>
         canvas.toBlob((b) => resolve(b || blankBlob), "image/jpeg", 0.7)
