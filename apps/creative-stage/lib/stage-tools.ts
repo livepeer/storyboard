@@ -30,9 +30,10 @@ function resolveStageRecipe(recipeId?: string): ResolvedRecipe {
   return { pipeline: "longlive", kv_cache: 0.5, denoising: [1000, 750, 500, 250] };
 }
 
-/** Build a source→pipeline→sink graph. The source node creates the trickle
- *  input channel so published frames actually reach the pipeline. Without
- *  this graph, Scope runs in text-only mode and ignores published frames. */
+/** Build a source→pipeline→sink graph with input_mode: "video".
+ *  The source node creates the trickle input channel.
+ *  input_mode: "video" tells the pipeline to USE published frames
+ *  (without it, Scope routes to text-mode blocks and ignores input). */
 function buildStreamGraph(pipelineId = "longlive") {
   return {
     nodes: [
@@ -44,6 +45,23 @@ function buildStreamGraph(pipelineId = "longlive") {
       { from: "input", from_port: "video", to_node: pipelineId, to_port: "video", kind: "stream" },
       { from: pipelineId, from_port: "video", to_node: "output", to_port: "video", kind: "stream" },
     ],
+  };
+}
+
+/** Stream start params that enable video-to-video mode.
+ *  input_mode: "video" is THE gating parameter — without it, published
+ *  frames are completely dropped by the pipeline. */
+function buildStreamStartParams(recipe: ResolvedRecipe, prompt: string, noise: number) {
+  return {
+    prompt,
+    prompts: prompt,
+    pipeline_ids: [recipe.pipeline],
+    graph: buildStreamGraph(recipe.pipeline),
+    input_mode: "video",
+    noise_scale: noise,
+    kv_cache_attention_bias: recipe.kv_cache,
+    denoising_step_list: recipe.denoising,
+    ...recipe.extras,
   };
 }
 
@@ -151,16 +169,7 @@ export function createStageTools(ctx: StageToolContext) {
           headers: headers(),
           body: JSON.stringify({
             model_id: "scope",
-            params: {
-              prompt: prompt,
-              prompts: prompt,
-              pipeline_ids: [recipe.pipeline],
-              graph: buildStreamGraph(recipe.pipeline),
-              noise_scale: noise,
-              kv_cache_attention_bias: recipe.kv_cache,
-              denoising_step_list: recipe.denoising,
-              ...recipe.extras,
-            },
+            params: buildStreamStartParams(recipe, prompt, noise),
           }),
         }).then(async (resp) => {
           if (resp.ok) {
@@ -354,16 +363,7 @@ export function createStageTools(ctx: StageToolContext) {
             headers: headers(),
             body: JSON.stringify({
               model_id: "scope",
-              params: {
-                prompt: first.prompt,
-                prompts: first.prompt,
-                pipeline_ids: [recipe.pipeline],
-                graph: buildStreamGraph(recipe.pipeline),
-                noise_scale: noise,
-                kv_cache_attention_bias: recipe.kv_cache,
-                denoising_step_list: recipe.denoising,
-                ...recipe.extras,
-              },
+              params: buildStreamStartParams(recipe, first.prompt, noise),
             }),
           }).then(async (resp) => {
             if (resp.ok) {
@@ -761,13 +761,14 @@ export function createStageTools(ctx: StageToolContext) {
 
         ctx.setStreamSource?.(type, url, url.split("/").pop()?.slice(0, 25));
 
-        // Flush KV cache so pipeline picks up new input + set noise_scale
+        // Tell pipeline to use input frames:
+        // noise_controller: false prevents motion detector from overriding noise_scale
         if (ctx.streamId) {
-          const controlParams: Record<string, unknown> = {
+          await ctx.controlStream({
             reset_cache: true,
-            noise_scale: (args.noise_scale as number) ?? 0.4,
-          };
-          await ctx.controlStream(controlParams);
+            noise_scale: (args.noise_scale as number) ?? 0.3,
+            noise_controller: false,
+          });
         }
 
         return JSON.stringify({

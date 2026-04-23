@@ -448,15 +448,18 @@ export default function Stage() {
         setTimeout(() => setStreamSourceDisplay(src), 50);
       }
 
-      // Flush KV cache + lower noise_scale so the pipeline picks up
-      // the new input frames. Without reset_cache, the pipeline keeps
-      // generating from its cached latent state and ignores the input.
+      // Tell the pipeline to USE the input frames:
+      // - noise_scale: 0.3 = 70% input influence (very visible)
+      // - noise_controller: false = prevent motion detector from overriding
+      //   our noise_scale (static images = zero motion → controller would
+      //   raise noise_scale to ~0.8, suppressing the input)
+      // - reset_cache: true = flush old latent state
       const sdk = getSdkConfig();
       const controlParams: Record<string, unknown> = {
         reset_cache: true,
-        noise_scale: 0.4, // lower = more faithful to input
+        noise_scale: 0.3,
+        noise_controller: false,
       };
-      // Also apply VACE for images (structural guidance)
       if (dropped.type === "image") {
         controlParams.vace_enabled = true;
         controlParams.vace_ref_images = [dropped.url];

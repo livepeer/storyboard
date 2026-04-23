@@ -23,12 +23,14 @@ test.describe("Stream Source Input", () => {
     expect(code).toContain('type: "pipeline"');
     expect(code).toContain('type: "sink"');
 
-    // Verify stage_start uses the graph
+    // Verify buildStreamStartParams uses the graph and sets input_mode
     expect(code).toContain("graph: buildStreamGraph(recipe.pipeline)");
+    expect(code).toContain('input_mode: "video"');
+    expect(code).toContain("buildStreamStartParams");
 
-    // Count how many times buildStreamGraph is called (should be at least 2: stage_start + stage_scene)
+    // buildStreamGraph called at least twice (definition + buildStreamStartParams)
     const calls = (code.match(/buildStreamGraph\(/g) || []).length;
-    expect(calls).toBeGreaterThanOrEqual(3); // definition + stage_start + stage_scene
+    expect(calls).toBeGreaterThanOrEqual(2);
   });
 
   test("buildStreamGraph creates correct graph structure", async () => {
