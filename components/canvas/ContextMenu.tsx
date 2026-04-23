@@ -579,19 +579,30 @@ export function ContextMenu() {
         addMessage(`Creating talking video: "${speechText.slice(0, 40)}…" (${voiceLabel})`, "system");
 
         try {
-          // Step A: Generate speech audio via chatterbox-tts
+          // Step A: Generate speech audio
+          // Voice description → gemini-tts (supports persona directives)
+          // Voice clone → chatterbox-tts (needs audio_url)
+          // Default → chatterbox-tts
           addMessage("Step 1/2: Generating speech…", "system");
-          const ttsText = voiceDesc
-            ? `[Speaking as: ${voiceDesc}] ${speechText}`
-            : speechText;
-          const ttsParams: Record<string, unknown> = { text: ttsText };
-          if (voiceCloneUrl) ttsParams.audio_url = voiceCloneUrl;
-
-          const ttsResult = await runInference({
-            capability: "chatterbox-tts",
-            prompt: ttsText,
-            params: ttsParams,
-          });
+          let ttsResult: unknown;
+          if (voiceDesc && !voiceCloneUrl) {
+            // gemini-tts: SDK maps prompt→text for TTS models, but gemini-tts
+            // expects "prompt". Workaround: send empty top-level prompt so SDK
+            // skips the text mapping, put real prompt in params directly.
+            ttsResult = await runInference({
+              capability: "gemini-tts",
+              prompt: "",
+              params: { prompt: `Say the following in the voice of a ${voiceDesc}: ${speechText}` },
+            });
+          } else {
+            const ttsParams: Record<string, unknown> = { text: speechText };
+            if (voiceCloneUrl) ttsParams.audio_url = voiceCloneUrl;
+            ttsResult = await runInference({
+              capability: "chatterbox-tts",
+              prompt: speechText,
+              params: ttsParams,
+            });
+          }
           const tr = ttsResult as Record<string, unknown>;
           const td = (tr.data ?? tr) as Record<string, unknown>;
           const audioUrl = (tr.audio_url as string)
