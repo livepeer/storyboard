@@ -233,7 +233,13 @@ async function storyApply(idOrEmpty: string): Promise<string> {
   let createResult: { success?: boolean; data?: unknown; error?: string } | undefined;
   try {
     const { listTools } = await import("@/lib/tools/registry");
-    const tools = listTools();
+    let tools = listTools();
+    // Lazy-init: on first page load, useEffect may not have run yet
+    if (tools.length === 0) {
+      const { initializeTools } = await import("@/lib/tools");
+      initializeTools();
+      tools = listTools();
+    }
     const projectCreateTool = tools.find((t) => t.name === "project_create");
     const projectGenerateTool = tools.find((t) => t.name === "project_generate");
     if (!projectCreateTool || !projectGenerateTool) {
