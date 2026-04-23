@@ -61,19 +61,26 @@ export function ScopePlayer({
     onStateChange,
   });
 
-  // Expose setSource to parent
+  // Expose setSource to parent — only call once (setSource is stable)
+  const sourceReadyCalledRef = useRef(false);
   useEffect(() => {
-    onSourceReady?.(setSource);
+    if (!sourceReadyCalledRef.current && onSourceReady) {
+      sourceReadyCalledRef.current = true;
+      onSourceReady(setSource);
+    }
   }, [onSourceReady, setSource]);
 
-  // Render loop — draws latest frame to canvas at display refresh rate
+  // Render loop — draws latest frame to canvas at display refresh rate.
+  // Runs independently of all other effects. Never cancelled except on unmount.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    let running = true;
 
     function renderLoop() {
+      if (!running) return;
       if (lastBitmapRef.current && ctx) {
         const bm = lastBitmapRef.current;
         if (canvas!.width !== bm.width || canvas!.height !== bm.height) {
@@ -85,28 +92,26 @@ export function ScopePlayer({
       animFrameRef.current = requestAnimationFrame(renderLoop);
     }
     animFrameRef.current = requestAnimationFrame(renderLoop);
-    return () => cancelAnimationFrame(animFrameRef.current);
+    return () => { running = false; cancelAnimationFrame(animFrameRef.current); };
   }, []);
 
   // Attach to external stream (started by agent tool).
-  // If the stream ID changes mid-flight (agent started a new stream),
-  // stop the old one and attach to the new one.
+  // Only fires when externalStreamId actually changes value.
   const prevStreamIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!externalStreamId) return;
-    if (externalStreamId === prevStreamIdRef.current) return; // same stream, no-op
+    if (externalStreamId === prevStreamIdRef.current) return;
     prevStreamIdRef.current = externalStreamId;
 
-    if (state.status !== "idle") {
-      // Already running on a different stream — stop first, then re-attach
-      console.log(`[ScopePlayer] Stream changed ${state.streamId?.slice(0, 8)} → ${externalStreamId.slice(0, 8)}, re-attaching`);
-      stop().then(() => {
-        attach(externalStreamId);
-      });
-    } else {
+    if (state.status === "idle") {
       attach(externalStreamId);
+    } else {
+      // Stream ID changed while running — stop old, attach new
+      console.log(`[ScopePlayer] Stream changed → ${externalStreamId.slice(0, 8)}, re-attaching`);
+      stop().then(() => attach(externalStreamId));
     }
-  }, [externalStreamId, state.status, state.streamId, attach, stop]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalStreamId]);
 
   // Auto-start if initialParams provided (standalone mode)
   useEffect(() => {
