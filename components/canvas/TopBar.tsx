@@ -2,6 +2,7 @@
 
 import { useCanvasStore } from "@/lib/canvas/store";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
+import { CheatSheet } from "./CheatSheet";
 
 export function TopBar({ onTrainClick }: { onTrainClick?: () => void }) {
   const { viewport, zoomTo, fitAll } = useCanvasStore();
@@ -49,6 +50,7 @@ export function TopBar({ onTrainClick }: { onTrainClick?: () => void }) {
             Train
           </button>
         )}
+        <CheatSheet />
         <SettingsPanel />
       </div>
     </div>
