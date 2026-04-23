@@ -113,11 +113,23 @@ export function ArtifactCard({
       >
         {/* Drag dots */}
         <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, letterSpacing: 2 }}>⠿</span>
-        {/* Title */}
-        <span style={{
-          fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.5)",
-          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1,
-        }}>
+        {/* Title — click to copy refId */}
+        <span
+          title={`Click to copy: ${artifact.refId}`}
+          style={{
+            fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.5)",
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1,
+            cursor: "pointer",
+          }}
+          onPointerDown={(e) => {
+            e.stopPropagation(); // prevent drag
+            navigator.clipboard.writeText(artifact.refId).catch(() => {});
+            const el = e.currentTarget;
+            const orig = el.style.color;
+            el.style.color = "#6366f1";
+            setTimeout(() => { el.style.color = orig; }, 400);
+          }}
+        >
           {artifact.title || artifact.refId}
         </span>
       </div>
