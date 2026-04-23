@@ -52,19 +52,25 @@ export const FALLBACK_CHAINS: Record<string, string[]> = {
   "kontext-edit": ["flux-fill", "gemini-image"],
   "flux-fill": ["kontext-edit"],
 
-  // Video image-to-video
-  "veo-i2v": ["seedance-i2v", "ltx-i2v", "pixverse-i2v"],
-  "seedance-i2v": ["seedance-i2v-fast", "veo-i2v", "ltx-i2v"],
+  // Video image-to-video (Kling O3 4K is the premium tier)
+  "kling-o3-i2v": ["kling-v3-i2v", "seedance-i2v", "veo-i2v"],
+  "kling-v3-i2v": ["kling-o3-i2v", "seedance-i2v", "veo-i2v"],
+  "veo-i2v": ["seedance-i2v", "kling-o3-i2v", "ltx-i2v", "pixverse-i2v"],
+  "seedance-i2v": ["seedance-i2v-fast", "kling-o3-i2v", "veo-i2v", "ltx-i2v"],
   "seedance-i2v-fast": ["seedance-i2v", "veo-i2v", "ltx-i2v"],
   "ltx-i2v": ["seedance-i2v-fast", "veo-i2v", "pixverse-i2v"],
   "pixverse-i2v": ["seedance-i2v-fast", "veo-i2v", "ltx-i2v"],
-  // Kling i2v (legacy entry)
-  "kling-i2v": ["seedance-i2v", "veo-i2v", "ltx-i2v"],
+  "kling-i2v": ["kling-o3-i2v", "seedance-i2v", "veo-i2v", "ltx-i2v"],
 
-  // Video text-to-video
-  "veo-t2v": ["ltx-t2v", "pixverse-t2v"],
-  "ltx-t2v": ["veo-t2v", "pixverse-t2v"],
+  // Video text-to-video (Kling O3 4K for premium)
+  "kling-o3-t2v": ["kling-v3-t2v", "veo-t2v", "ltx-t2v"],
+  "kling-v3-t2v": ["kling-o3-t2v", "veo-t2v", "ltx-t2v"],
+  "veo-t2v": ["kling-o3-t2v", "ltx-t2v", "pixverse-t2v"],
+  "ltx-t2v": ["veo-t2v", "kling-v3-t2v", "pixverse-t2v"],
   "pixverse-t2v": ["veo-t2v", "ltx-t2v"],
+
+  // Kling O3 reference-to-video (unique — no direct fallback)
+  "kling-o3-ref2v": ["kling-o3-i2v", "seedance-i2v"],
 
   // Video transition
   "veo-transition": ["pixverse-transition"],
@@ -212,7 +218,7 @@ function selectCapability(
   const userModelMention = (currentUserText || "").match(
     /\b(?:using|with|via|use)\s+(pixverse|tripo|grok|inworld|gemini.tts|void|seedance|seedream)/i
   ) || (currentUserText || "").match(
-    /\b(pixverse|tripo|grok.tts|inworld.tts|void.inpaint|seedance|seedream)\b/i
+    /\b(pixverse|tripo|grok.tts|inworld.tts|void.inpaint|seedance|seedream|kling)\b/i
   );
   if (userModelMention) {
     const mention = userModelMention[1].toLowerCase().replace(/[.\s]+/g, "-");
@@ -230,6 +236,7 @@ function selectCapability(
       "void-inpaint": { capability: "void-inpaint", type: "video" },
       "seedance": { capability: hasSourceUrl ? "seedance-i2v" : "veo-t2v", type: "video" },
       "seedream": { capability: "seedream-5-lite", type: "image" },
+      "kling": { capability: hasSourceUrl ? "kling-o3-i2v" : "kling-o3-t2v", type: "video" },
     };
     const match = mentionMap[mention];
     if (match) {
@@ -320,22 +327,28 @@ function selectCapability(
       //    to kontext-edit (image→image) to produce a refined still.
       // 3) animate WITH source AND motion: the real animation case.
       //    Route to veo-i2v (with ltx-i2v fallback).
+      // Detect 4K / high-quality intent from user text
+      const userText = (currentUserText || "").toLowerCase();
+      const wants4K = /\b(4k|ultra|highest.quality|cinema|premium)\b/.test(userText);
+      const hasKlingO3 = !!valid && valid.some((c) => c.name === "kling-o3-i2v");
+      const hasKlingO3T2V = !!valid && valid.some((c) => c.name === "kling-o3-t2v");
+
       if (!hasSourceUrl) {
+        // Text-to-video: prefer Kling O3 4K for premium requests
+        if (wants4K && hasKlingO3T2V) return { capability: "kling-o3-t2v", type: "video" };
         if (hasVeoT2V) return { capability: "veo-t2v", type: "video" };
         if (valid && valid.some((c) => c.name === "ltx-t2v")) {
           return { capability: "ltx-t2v", type: "video" };
         }
       }
       if (hasSourceUrl && hasEditIntent && !hasMotion) {
-        // Image edit disguised as an animate call. Produce a still,
-        // not a video. kontext-edit is image-to-image refinement.
         return { capability: "kontext-edit", type: "image" };
       }
-      // Prefer Seedance 2.0 (ByteDance) for cinematic i2v — 15s
-      // duration, high motion fidelity, audio generation. Falls back
-      // through veo-i2v → ltx-i2v via FALLBACK_CHAINS.
+      // Image-to-video: Kling O3 4K for premium, Seedance for default
+      if (wants4K && hasKlingO3) return { capability: "kling-o3-i2v", type: "video" };
       const hasSeedance = !!valid && valid.some((c) => c.name === "seedance-i2v");
       if (hasSeedance) return { capability: "seedance-i2v", type: "video" };
+      if (hasKlingO3) return { capability: "kling-o3-i2v", type: "video" };
       if (hasVeoI2V) return { capability: "veo-i2v", type: "video" };
       return { capability: "ltx-i2v", type: "video" };
     }
@@ -594,12 +607,26 @@ export const createMediaTool: ToolDefinition = {
           console.log(`[create_media] Fallback: ${prev} → ${currentCap} (step ${i})`);
         }
 
-        // Adapt params per model — each i2v model has different duration/param formats.
-        // Seedance: duration as string ("10"), generate_audio. Others: strip these.
+        // Adapt params per model — each video model has different field names.
         const capParams = { ...params };
         if (rawDuration && currentCap.startsWith("seedance")) {
           capParams.duration = String(rawDuration);
           capParams.generate_audio = true;
+        } else if (currentCap.startsWith("kling-")) {
+          // Kling V3 i2v expects start_image_url (not image_url)
+          // Kling O3 i2v expects image_url (standard)
+          if (currentCap === "kling-v3-i2v" && capParams.image_url) {
+            capParams.start_image_url = capParams.image_url;
+            delete capParams.image_url;
+          }
+          // Kling duration is number (seconds), generate_audio boolean
+          if (rawDuration) capParams.duration = rawDuration;
+          capParams.generate_audio = true;
+          // O3 doesn't support negative_prompt or cfg_scale
+          if (currentCap.includes("-o3-")) {
+            delete capParams.negative_prompt;
+            delete capParams.cfg_scale;
+          }
         } else {
           delete capParams.duration;
           delete capParams.generate_audio;

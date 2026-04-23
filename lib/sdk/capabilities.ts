@@ -74,6 +74,7 @@ const FALLBACK_CAPABILITIES = new Set([
   "topaz-upscale", "bg-remove", "chatterbox-tts", "nano-banana",
   "seedream-5-lite", "seedance-i2v", "seedance-i2v-fast",
   "tripo-i3d", "tripo-t3d", "tripo-p1-i3d", "tripo-p1-t3d", "tripo-mv3d",
+  "kling-v3-t2v", "kling-v3-i2v", "kling-o3-t2v", "kling-o3-i2v", "kling-o3-ref2v",
 ]);
 
 export function resolveCapability(
@@ -115,8 +116,10 @@ export function resolveCapability(
   const keywords: Record<string, string[]> = {
     "seedance": ["seedance-i2v", "seedance-i2v-fast"],
     "seedream": ["seedream-5-lite"],
-    "i2v": ["seedance-i2v", "ltx-i2v"],
-    "t2v": ["ltx-t2v"],
+    "kling": ["kling-o3-i2v", "kling-o3-t2v", "kling-v3-i2v"],
+    "4k": ["kling-o3-i2v", "kling-o3-t2v"],
+    "i2v": ["seedance-i2v", "kling-o3-i2v", "ltx-i2v"],
+    "t2v": ["kling-o3-t2v", "ltx-t2v"],
     "tts": ["chatterbox-tts"],
     "upscale": ["topaz-upscale"],
     "edit": ["gpt-image-edit", "kontext-edit"],
