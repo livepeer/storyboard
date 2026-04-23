@@ -2,494 +2,521 @@
 
 import { useState } from "react";
 
-// ─── API Documentation Data ─────────────────────────────────────────────────
+// ─── Documentation Sections ─────────────────────────────────────────────────
 
-interface Endpoint {
-  method: "GET" | "POST" | "DELETE";
-  path: string;
-  title: string;
-  description: string;
-  auth?: string;
-  body?: { field: string; type: string; required: boolean; description: string }[];
-  response?: string;
-  example?: { request: string; response: string };
-  tags: string[];
+const NAV = [
+  { id: "overview", label: "Overview" },
+  { id: "quickstart", label: "Quick Start" },
+  { id: "tools", label: "Tools" },
+  { id: "skills", label: "Skills" },
+  { id: "workflows", label: "Workflows" },
+  { id: "streaming", label: "Live Streaming" },
+  { id: "creative-kit", label: "Creative Kit" },
+  { id: "rest-api", label: "REST API" },
+  { id: "models", label: "Models" },
+];
+
+function Code({ children, lang }: { children: string; lang?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="group relative rounded-xl bg-black/40 border border-white/[0.04] overflow-hidden">
+      {lang && <div className="px-4 py-1 border-b border-white/[0.04] text-[9px] text-white/30 font-mono">{lang}</div>}
+      <pre className="p-4 text-[11px] leading-relaxed text-emerald-300/80 overflow-x-auto font-mono whitespace-pre-wrap">{children}</pre>
+      <button
+        onClick={() => { navigator.clipboard.writeText(children); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+        className="absolute top-2 right-2 rounded px-2 py-0.5 text-[9px] text-white/30 bg-white/[0.05] opacity-0 group-hover:opacity-100 transition-opacity"
+      >{copied ? "Copied!" : "Copy"}</button>
+    </div>
+  );
 }
 
-const ENDPOINTS: Endpoint[] = [
-  // ─── Inference ───
-  {
-    method: "POST", path: "/inference", title: "Run AI Inference",
-    description: "Generate images, videos, audio, or 3D models using any available AI model on the Livepeer network. The capability field selects the model — see /capabilities for the full list.",
-    auth: "Bearer sk_... (Daydream API key)",
-    tags: ["inference"],
-    body: [
-      { field: "capability", type: "string", required: true, description: "Model to use: flux-dev, seedance-i2v, gpt-image, chatterbox-tts, etc." },
-      { field: "prompt", type: "string", required: true, description: "Text prompt describing what to generate" },
-      { field: "params", type: "object", required: false, description: "Model-specific parameters (image_url, duration, size, etc.)" },
-      { field: "timeout", type: "number", required: false, description: "Request timeout in seconds (default: 300)" },
-    ],
-    example: {
-      request: `curl -X POST https://sdk.daydream.monster/inference \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk_your_key" \\
-  -d '{
-    "capability": "flux-dev",
-    "prompt": "a serene mountain lake at sunset, cinematic lighting",
-    "params": {}
-  }'`,
-      response: `{
-  "image_url": "https://v3b.fal.media/files/...",
-  "data": {
-    "images": [{ "url": "https://...", "content_type": "image/png" }]
-  }
-}`,
-    },
-  },
-  {
-    method: "GET", path: "/capabilities", title: "List Available Models",
-    description: "Returns all AI models currently available on the network. Each capability has a name (used in /inference), model ID, and capacity.",
-    tags: ["inference"],
-    example: {
-      request: `curl https://sdk.daydream.monster/capabilities`,
-      response: `[
-  { "name": "flux-dev", "model_id": "fal-ai/flux/dev", "capacity": 100 },
-  { "name": "seedance-i2v", "model_id": "bytedance/seedance-2.0/image-to-video", "capacity": 100 },
-  { "name": "gpt-image", "model_id": "openai/gpt-image-2", "capacity": 100 },
-  { "name": "kling-o3-i2v", "model_id": "fal-ai/kling-video/o3/standard/image-to-video", "capacity": 100 }
-]`,
-    },
-  },
+function H2({ children, id }: { children: string; id: string }) {
+  return <h2 id={id} className="text-xl font-bold mt-12 mb-4 scroll-mt-20">{children}</h2>;
+}
 
-  // ─── Live Streaming ───
-  {
-    method: "POST", path: "/stream/start", title: "Start Live Stream",
-    description: "Start a real-time AI video stream using Scope. The stream processes input frames through an AI pipeline and produces transformed output frames. Use with /stream/publish to send frames and /stream/frame to receive output.",
-    auth: "Bearer sk_... (Daydream API key)",
-    tags: ["streaming"],
-    body: [
-      { field: "model_id", type: "string", required: true, description: 'Always "scope"' },
-      { field: "params.prompt", type: "string", required: true, description: "Scene description for the AI transformation" },
-      { field: "params.pipeline_ids", type: "string[]", required: false, description: '["longlive"] (default), ["ltx2"], ["krea_realtime_video"]' },
-      { field: "params.noise_scale", type: "number", required: false, description: "0.0 (faithful) to 1.0 (creative). Default: 0.7" },
-      { field: "params.graph", type: "object", required: false, description: "Graph config with source/pipeline/sink nodes" },
-    ],
-    example: {
-      request: `curl -X POST https://sdk.daydream.monster/stream/start \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk_your_key" \\
-  -d '{
-    "model_id": "scope",
-    "params": {
-      "prompt": "dreamy watercolor landscape",
-      "pipeline_ids": ["longlive"],
-      "noise_scale": 0.6
-    }
-  }'`,
-      response: `{ "stream_id": "abc123", "manifest_id": "abc123" }`,
-    },
-  },
-  {
-    method: "POST", path: "/stream/{id}/publish", title: "Publish Frame",
-    description: "Send a JPEG frame to the live stream pipeline. Publish at ~10fps. The pipeline transforms each frame and produces output available via /stream/{id}/frame.",
-    auth: "Bearer sk_...",
-    tags: ["streaming"],
-    body: [
-      { field: "(body)", type: "binary", required: true, description: "JPEG image data (Content-Type: image/jpeg)" },
-    ],
-    example: {
-      request: `curl -X POST "https://sdk.daydream.monster/stream/abc123/publish?seq=0" \\
-  -H "Content-Type: image/jpeg" \\
-  -H "Authorization: Bearer sk_your_key" \\
-  --data-binary @frame.jpg`,
-      response: `(200 OK)`,
-    },
-  },
-  {
-    method: "GET", path: "/stream/{id}/frame", title: "Get Output Frame",
-    description: "Poll for the latest AI-transformed output frame. Returns JPEG image data. Poll continuously at ~10-30fps for real-time video.",
-    auth: "Bearer sk_...",
-    tags: ["streaming"],
-    example: {
-      request: `curl "https://sdk.daydream.monster/stream/abc123/frame" \\
-  -H "Authorization: Bearer sk_your_key" \\
-  -o output.jpg`,
-      response: `(JPEG binary data, Content-Type: image/jpeg)`,
-    },
-  },
-  {
-    method: "POST", path: "/stream/{id}/control", title: "Update Stream Parameters",
-    description: "Change parameters on a running stream without restarting. Use to update the prompt, adjust noise_scale, switch presets, or flush the KV cache for clean transitions.",
-    auth: "Bearer sk_...",
-    tags: ["streaming"],
-    body: [
-      { field: "type", type: "string", required: true, description: '"parameters"' },
-      { field: "params.prompts", type: "string", required: false, description: "New scene prompt" },
-      { field: "params.noise_scale", type: "number", required: false, description: "Creativity level 0.0-1.0" },
-      { field: "params.reset_cache", type: "boolean", required: false, description: "Flush KV cache for clean scene transition" },
-      { field: "params.kv_cache_attention_bias", type: "number", required: false, description: "Temporal consistency 0.01-1.0" },
-    ],
-    example: {
-      request: `curl -X POST "https://sdk.daydream.monster/stream/abc123/control" \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk_your_key" \\
-  -d '{
-    "type": "parameters",
-    "params": {
-      "prompts": "cyberpunk city at night",
-      "noise_scale": 0.7,
-      "reset_cache": true
-    }
-  }'`,
-      response: `{ "status": "sent", "type": "parameters" }`,
-    },
-  },
-  {
-    method: "POST", path: "/stream/{id}/stop", title: "Stop Stream",
-    description: "Stop a running live stream and clean up resources.",
-    auth: "Bearer sk_...",
-    tags: ["streaming"],
-    example: {
-      request: `curl -X POST "https://sdk.daydream.monster/stream/abc123/stop" \\
-  -H "Authorization: Bearer sk_your_key"`,
-      response: `{ "status": "stopped", "stream_id": "abc123" }`,
-    },
-  },
+function H3({ children }: { children: string }) {
+  return <h3 className="text-sm font-bold text-white/80 mt-6 mb-2">{children}</h3>;
+}
 
-  // ─── Agent ───
-  {
-    method: "POST", path: "/api/agent/gemini", title: "Gemini Agent Proxy",
-    description: "Proxy to Google Gemini API. Send Gemini-format requests (contents + system_instruction + tools). Used by the storyboard agent for multi-turn tool-use conversations.",
-    tags: ["agent"],
-    body: [
-      { field: "model", type: "string", required: false, description: "Model ID (default: gemini-2.5-flash)" },
-      { field: "contents", type: "array", required: true, description: "Gemini conversation messages [{role, parts}]" },
-      { field: "system_instruction", type: "object", required: false, description: "System prompt {parts: [{text}]}" },
-      { field: "tools", type: "array", required: false, description: "Function declarations for tool use" },
-    ],
-    example: {
-      request: `curl -X POST /api/agent/gemini \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "gemini-2.5-flash",
-    "contents": [
-      { "role": "user", "parts": [{ "text": "Generate a sunset image" }] }
-    ],
-    "system_instruction": {
-      "parts": [{ "text": "You are a creative assistant." }]
-    }
-  }'`,
-      response: `{
-  "candidates": [{
-    "content": {
-      "parts": [{ "text": "I\\'ll create that for you!" }]
-    }
-  }]
-}`,
-    },
-  },
+function P({ children }: { children: React.ReactNode }) {
+  return <p className="text-sm text-white/50 leading-relaxed mb-3">{children}</p>;
+}
 
-  // ─── Health ───
-  {
-    method: "GET", path: "/health", title: "Health Check",
-    description: "Check if the SDK service is running and which orchestrator it's connected to.",
-    tags: ["system"],
-    example: {
-      request: `curl https://sdk.daydream.monster/health`,
-      response: `{ "status": "ok", "orchestrator": "https://byoc-staging-1.daydream.monster:8935" }`,
-    },
-  },
-];
-
-const TAG_COLORS: Record<string, string> = {
-  inference: "bg-blue-500/20 text-blue-300",
-  streaming: "bg-red-500/20 text-red-300",
-  agent: "bg-purple-500/20 text-purple-300",
-  system: "bg-gray-500/20 text-gray-300",
-};
-
-const METHOD_COLORS: Record<string, string> = {
-  GET: "bg-emerald-500/20 text-emerald-300",
-  POST: "bg-blue-500/20 text-blue-300",
-  DELETE: "bg-red-500/20 text-red-300",
-};
-
-// ─── Quick Start Guides ─────────────────────────────────────────────────────
-
-const QUICKSTARTS = [
-  {
-    title: "Generate Your First Image",
-    language: "bash",
-    code: `# 1. Get your API key at https://docs.daydream.live
-# 2. Generate an image:
-
-curl -X POST https://sdk.daydream.monster/inference \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk_your_key" \\
-  -d '{
-    "capability": "flux-dev",
-    "prompt": "a magical forest with glowing mushrooms, cinematic"
-  }'
-
-# Response: { "image_url": "https://..." }`,
-  },
-  {
-    title: "Generate a Video from Image",
-    language: "bash",
-    code: `# Animate an existing image into a 10-second video:
-
-curl -X POST https://sdk.daydream.monster/inference \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk_your_key" \\
-  -d '{
-    "capability": "seedance-i2v",
-    "prompt": "gentle camera pan, leaves rustling in wind",
-    "params": {
-      "image_url": "https://your-image-url.jpg",
-      "duration": "10",
-      "generate_audio": true
-    }
-  }'`,
-  },
-  {
-    title: "Start a Live AI Stream",
-    language: "javascript",
-    code: `// 1. Start the stream
-const res = await fetch("https://sdk.daydream.monster/stream/start", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "Authorization": "Bearer sk_your_key"
-  },
-  body: JSON.stringify({
-    model_id: "scope",
-    params: { prompt: "dreamy watercolor landscape", noise_scale: 0.6 }
-  })
-});
-const { stream_id } = await res.json();
-
-// 2. Publish frames (10fps)
-setInterval(async () => {
-  const frame = captureFrame(); // your JPEG frame
-  await fetch(\`https://sdk.daydream.monster/stream/\${stream_id}/publish?seq=\${seq++}\`, {
-    method: "POST",
-    headers: { "Content-Type": "image/jpeg", "Authorization": "Bearer sk_your_key" },
-    body: frame
-  });
-}, 100);
-
-// 3. Poll output frames
-async function pollFrames() {
-  while (true) {
-    const res = await fetch(\`https://sdk.daydream.monster/stream/\${stream_id}/frame\`);
-    if (res.ok) {
-      const blob = await res.blob();
-      renderToCanvas(blob); // display the AI-transformed frame
-    }
-    await new Promise(r => setTimeout(r, 33)); // ~30fps polling
-  }
-}`,
-  },
-];
-
-// ─── Component ──────────────────────────────────────────────────────────────
-
-function EndpointCard({ ep }: { ep: Endpoint }) {
-  const [expanded, setExpanded] = useState(false);
-
+function ToolCard({ name, description, params }: {
+  name: string; description: string;
+  params: { name: string; type: string; desc: string; required?: boolean }[];
+}) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.03] transition-colors"
-      >
-        <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${METHOD_COLORS[ep.method]}`}>
-          {ep.method}
-        </span>
-        <code className="text-xs font-mono text-[#e2e8f0]">{ep.path}</code>
-        <span className="text-xs text-white/40 flex-1">{ep.title}</span>
-        {ep.tags.map((t) => (
-          <span key={t} className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${TAG_COLORS[t]}`}>{t}</span>
-        ))}
-        <span className="text-white/20 text-xs">{expanded ? "▾" : "▸"}</span>
+    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] overflow-hidden mb-2">
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-white/[0.03] transition-colors">
+        <code className="text-xs font-mono font-bold text-cyan-300">{name}</code>
+        <span className="text-[11px] text-white/40 flex-1">{description}</span>
+        <span className="text-white/20 text-xs">{open ? "▾" : "▸"}</span>
       </button>
-
-      {expanded && (
-        <div className="border-t border-white/[0.04] px-4 py-3 space-y-3">
-          <p className="text-xs text-white/60 leading-relaxed">{ep.description}</p>
-
-          {ep.auth && (
-            <div className="text-[10px] text-white/40">
-              <span className="font-semibold text-amber-400/80">Auth:</span> {ep.auth}
-            </div>
-          )}
-
-          {ep.body && (
-            <div>
-              <div className="text-[10px] font-semibold text-white/50 uppercase tracking-wider mb-1">Request Body</div>
-              <div className="rounded-lg bg-black/30 overflow-hidden">
-                <table className="w-full text-[10px]">
-                  <thead>
-                    <tr className="border-b border-white/[0.04]">
-                      <th className="text-left px-3 py-1.5 text-white/40 font-medium">Field</th>
-                      <th className="text-left px-3 py-1.5 text-white/40 font-medium">Type</th>
-                      <th className="text-left px-3 py-1.5 text-white/40 font-medium">Description</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ep.body.map((f) => (
-                      <tr key={f.field} className="border-b border-white/[0.02]">
-                        <td className="px-3 py-1.5 font-mono text-cyan-300/80">
-                          {f.field} {f.required && <span className="text-red-400">*</span>}
-                        </td>
-                        <td className="px-3 py-1.5 text-white/40">{f.type}</td>
-                        <td className="px-3 py-1.5 text-white/50">{f.description}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {ep.example && (
-            <div className="space-y-2">
-              <div className="text-[10px] font-semibold text-white/50 uppercase tracking-wider">Example</div>
-              <pre className="rounded-lg bg-black/40 p-3 text-[10px] leading-relaxed text-emerald-300/80 overflow-x-auto font-mono whitespace-pre-wrap">
-                {ep.example.request}
-              </pre>
-              <pre className="rounded-lg bg-black/40 p-3 text-[10px] leading-relaxed text-amber-300/70 overflow-x-auto font-mono whitespace-pre-wrap">
-                {ep.example.response}
-              </pre>
-            </div>
-          )}
+      {open && (
+        <div className="border-t border-white/[0.04] px-4 py-3">
+          <table className="w-full text-[10px]">
+            <thead><tr className="border-b border-white/[0.04]">
+              <th className="text-left px-2 py-1 text-white/40">Param</th>
+              <th className="text-left px-2 py-1 text-white/40">Type</th>
+              <th className="text-left px-2 py-1 text-white/40">Description</th>
+            </tr></thead>
+            <tbody>{params.map((p) => (
+              <tr key={p.name} className="border-b border-white/[0.02]">
+                <td className="px-2 py-1 font-mono text-cyan-300/80">{p.name}{p.required && <span className="text-red-400">*</span>}</td>
+                <td className="px-2 py-1 text-white/30">{p.type}</td>
+                <td className="px-2 py-1 text-white/50">{p.desc}</td>
+              </tr>
+            ))}</tbody>
+          </table>
         </div>
       )}
     </div>
   );
 }
 
+// ─── Page ───────────────────────────────────────────────────────────────────
+
 export default function DocsPage() {
-  const [activeTag, setActiveTag] = useState<string | null>(null);
-  const filtered = activeTag ? ENDPOINTS.filter((e) => e.tags.includes(activeTag)) : ENDPOINTS;
-  const tags = ["inference", "streaming", "agent", "system"];
+  const [activeSection, setActiveSection] = useState("overview");
 
   return (
-    <div className="min-h-screen bg-[#0a0a0e] text-white">
-      {/* Header */}
-      <div className="border-b border-white/[0.06] bg-[rgba(10,10,14,0.95)] backdrop-blur-xl sticky top-0 z-50">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold">
-              <span className="text-[#6366f1]">Storyboard</span> API
-            </h1>
-            <p className="text-xs text-white/40 mt-0.5">AI-powered creative tools via REST</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <a href="/" className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/50 hover:bg-white/[0.05] transition-colors">
-              ← Back to App
-            </a>
-            <a href="https://docs.daydream.live" target="_blank" className="rounded-lg bg-[#6366f1]/20 border border-[#6366f1]/30 px-3 py-1.5 text-xs text-[#6366f1] hover:bg-[#6366f1]/30 transition-colors">
-              Get API Key
-            </a>
-          </div>
+    <div className="min-h-screen bg-[#0a0a0e] text-white flex">
+      {/* Sidebar */}
+      <nav className="w-52 shrink-0 border-r border-white/[0.06] bg-[rgba(10,10,14,0.95)] sticky top-0 h-screen overflow-y-auto">
+        <div className="px-4 py-5">
+          <a href="/" className="text-xs text-white/30 hover:text-white/60">← Back to App</a>
+          <h1 className="text-base font-bold mt-3">
+            <span className="text-[#6366f1]">Agent</span> SDK
+          </h1>
+          <p className="text-[10px] text-white/30 mt-1">Developer Documentation</p>
         </div>
-      </div>
-
-      <div className="max-w-4xl mx-auto px-6 py-8">
-        {/* Hero */}
-        <div className="mb-10">
-          <h2 className="text-2xl font-bold mb-2">Build with AI Creative Tools</h2>
-          <p className="text-sm text-white/50 leading-relaxed max-w-2xl">
-            Generate images, videos, audio, and 3D models. Run real-time AI video streams.
-            48 AI models available on the Livepeer network — one API, automatic model selection.
-          </p>
-          <div className="mt-4 flex gap-6 text-xs text-white/30">
-            <span>Base URL: <code className="text-cyan-400/70">https://sdk.daydream.monster</code></span>
-            <span>Auth: <code className="text-amber-400/70">Bearer sk_...</code></span>
-            <span>48 models</span>
-          </div>
-        </div>
-
-        {/* Quick Start */}
-        <div className="mb-10">
-          <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wider mb-4">Quick Start</h3>
-          <div className="grid gap-4">
-            {QUICKSTARTS.map((qs) => (
-              <div key={qs.title} className="rounded-xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-                <div className="px-4 py-2 border-b border-white/[0.04] flex items-center justify-between">
-                  <span className="text-xs font-semibold text-white/70">{qs.title}</span>
-                  <span className="text-[9px] text-white/30 font-mono">{qs.language}</span>
-                </div>
-                <pre className="p-4 text-[11px] leading-relaxed text-emerald-300/80 overflow-x-auto font-mono whitespace-pre-wrap">
-                  {qs.code}
-                </pre>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Filter tabs */}
-        <div className="mb-6 flex items-center gap-2">
-          <span className="text-xs text-white/40 mr-2">Filter:</span>
-          <button
-            onClick={() => setActiveTag(null)}
-            className={`rounded-lg px-3 py-1 text-[10px] font-medium transition-colors ${!activeTag ? "bg-white/10 text-white" : "text-white/40 hover:bg-white/[0.05]"}`}
-          >
-            All
-          </button>
-          {tags.map((t) => (
-            <button
-              key={t}
-              onClick={() => setActiveTag(activeTag === t ? null : t)}
-              className={`rounded-lg px-3 py-1 text-[10px] font-medium transition-colors ${activeTag === t ? TAG_COLORS[t] : "text-white/40 hover:bg-white/[0.05]"}`}
-            >
-              {t}
-            </button>
+        <div className="px-2 pb-6 space-y-0.5">
+          {NAV.map((n) => (
+            <a
+              key={n.id}
+              href={`#${n.id}`}
+              onClick={() => setActiveSection(n.id)}
+              className={`block rounded-lg px-3 py-1.5 text-xs transition-colors ${
+                activeSection === n.id ? "bg-[#6366f1]/15 text-[#6366f1] font-medium" : "text-white/40 hover:bg-white/[0.04] hover:text-white/70"
+              }`}
+            >{n.label}</a>
           ))}
         </div>
+        <div className="px-4 pb-4 border-t border-white/[0.04] pt-4">
+          <a href="https://docs.daydream.live" target="_blank" className="block rounded-lg bg-[#6366f1]/20 border border-[#6366f1]/30 px-3 py-2 text-[10px] text-center text-[#6366f1] hover:bg-[#6366f1]/30 transition-colors">
+            Get API Key →
+          </a>
+        </div>
+      </nav>
 
-        {/* Endpoints */}
+      {/* Content */}
+      <main className="flex-1 max-w-3xl px-8 py-8">
+
+        {/* ─── Overview ─── */}
+        <H2 id="overview">What is the Agent SDK?</H2>
+        <P>The Storyboard Agent SDK is a framework for building AI-powered creative applications. It provides:</P>
+        <div className="grid grid-cols-3 gap-3 mb-6">
+          {[
+            { icon: "🧠", title: "21 Agent Tools", desc: "Generate images, videos, 3D models, music, talking videos — all via tool calls" },
+            { icon: "📡", title: "Live AI Streaming", desc: "Real-time video-to-video with Scope — prompt traveling, style morphing, 24fps" },
+            { icon: "🎨", title: "Creative Kit", desc: "UI components, stores, model router — build creative apps fast" },
+          ].map((f) => (
+            <div key={f.title} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+              <div className="text-2xl mb-2">{f.icon}</div>
+              <div className="text-xs font-bold text-white/80 mb-1">{f.title}</div>
+              <div className="text-[10px] text-white/40 leading-relaxed">{f.desc}</div>
+            </div>
+          ))}
+        </div>
+        <P>The SDK has three layers:</P>
+        <Code lang="architecture">{`┌─────────────────────────────────────────┐
+│  Your App (Next.js, React, any JS)      │
+├─────────────────────────────────────────┤
+│  @livepeer/creative-kit                 │
+│  Stores, UI, Model Router, Recipes      │
+├─────────────────────────────────────────┤
+│  @livepeer/agent                        │
+│  AgentRunner, ToolRegistry, Memory      │
+├─────────────────────────────────────────┤
+│  SDK Service (sdk.daydream.monster)      │
+│  48 AI models, Live Streaming, TTS      │
+└─────────────────────────────────────────┘`}</Code>
+
+        {/* ─── Quick Start ─── */}
+        <H2 id="quickstart">Quick Start</H2>
+        <H3>1. Install</H3>
+        <Code lang="bash">{`npm install @livepeer/agent @livepeer/creative-kit @livepeer/scope-player`}</Code>
+
+        <H3>2. Generate an Image (simplest possible)</H3>
+        <Code lang="bash">{`curl -X POST https://sdk.daydream.monster/inference \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer sk_your_key" \\
+  -d '{"capability":"flux-dev","prompt":"a dragon in a misty forest"}'
+
+# → { "image_url": "https://v3b.fal.media/files/..." }`}</Code>
+
+        <H3>3. Build an Agent (full tool-use loop)</H3>
+        <Code lang="typescript">{`import { AgentRunner, ToolRegistry, WorkingMemoryStore } from "@livepeer/agent";
+
+// 1. Register tools
+const tools = new ToolRegistry();
+tools.register({
+  name: "generate_image",
+  description: "Generate an image from a text prompt",
+  parameters: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "Image description" },
+    },
+    required: ["prompt"],
+  },
+  execute: async (args) => {
+    const res = await fetch("https://sdk.daydream.monster/inference", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer sk_..." },
+      body: JSON.stringify({ capability: "flux-dev", prompt: args.prompt }),
+    });
+    const data = await res.json();
+    return JSON.stringify({ url: data.image_url });
+  },
+});
+
+// 2. Create agent with an LLM provider
+const memory = new WorkingMemoryStore();
+memory.setCriticalConstraints(["You are a creative assistant. Use tools to create media."]);
+
+const runner = new AgentRunner(yourLLMProvider, tools, memory);
+
+// 3. Run a conversation turn
+for await (const event of runner.run("Create a dragon image")) {
+  if (event.kind === "text") console.log("Agent:", event.text);
+  if (event.kind === "tool_call") console.log("Calling:", event.name);
+  if (event.kind === "tool_result") console.log("Result:", event.result);
+}`}</Code>
+
+        <H3>4. Use the Smart Model Router</H3>
+        <Code lang="typescript">{`import { routeModel, recordModelLatency } from "@livepeer/creative-kit";
+
+// Auto-select the best model based on speed (60%), style (30%), capacity (10%)
+const result = routeModel({
+  action: "generate",
+  prompt: "a logo with readable text",
+  userText: "make it fast",
+});
+// → { model: "flux-dev", type: "image", score: 7.8, reason: "speed=9 style=5 cap=9" }
+
+// After generation, feed actual latency back (self-learning)
+recordModelLatency("flux-dev", 3200); // 3.2 seconds`}</Code>
+
+        {/* ─── Tools ─── */}
+        <H2 id="tools">Tools Reference</H2>
+        <P>The agent uses 21 tools to create and manipulate media. Each tool has typed parameters and returns structured results. Tools are composed into multi-step workflows automatically by the LLM.</P>
+
+        <H3>Media Creation</H3>
+        <ToolCard name="create_media" description="Generate images, videos, audio, or 3D models. Supports multi-step chains." params={[
+          { name: "steps", type: "array", desc: "Array of generation steps [{action, prompt, title, source_url, duration}]", required: true },
+        ]} />
+        <ToolCard name="project_create" description="Create a multi-scene project for batch generation" params={[
+          { name: "brief", type: "string", desc: "Project description", required: true },
+          { name: "scenes", type: "array", desc: "Scene list [{title, prompt, action}]", required: true },
+          { name: "style_guide", type: "object", desc: "{visual_style, color_palette, mood, prompt_prefix}" },
+        ]} />
+        <ToolCard name="project_generate" description="Generate all pending scenes in a project" params={[
+          { name: "project_id", type: "string", desc: "From project_create result", required: true },
+        ]} />
+
+        <H3>Canvas Operations</H3>
+        <ToolCard name="canvas_create" description="Add a card to the canvas" params={[
+          { name: "type", type: "string", desc: "image | video | audio | text", required: true },
+          { name: "title", type: "string", desc: "Card title", required: true },
+          { name: "url", type: "string", desc: "Media URL" },
+        ]} />
+        <ToolCard name="canvas_get" description="Get card details by refId" params={[
+          { name: "ref_id", type: "string", desc: "Card reference ID (e.g. img-1)", required: true },
+        ]} />
+        <ToolCard name="canvas_organize" description="Auto-layout cards on canvas" params={[
+          { name: "mode", type: "string", desc: "grid | narrative | episode | movie-board" },
+        ]} />
+
+        <H3>Live Streaming (Scope)</H3>
+        <ToolCard name="scope_start" description="Start a live AI video stream with full Scope config" params={[
+          { name: "prompt", type: "string", desc: "Scene description", required: true },
+          { name: "recipe", type: "string", desc: "classic | ltx-responsive | depth-lock | krea-hq | memflow-consistent" },
+          { name: "preset", type: "string", desc: "dreamy | cinematic | anime | abstract | faithful | painterly" },
+          { name: "pipeline_id", type: "string", desc: "longlive | ltx2 | krea_realtime_video | memflow" },
+        ]} />
+        <ToolCard name="scope_control" description="Update running stream parameters" params={[
+          { name: "prompt", type: "string", desc: "New scene prompt" },
+          { name: "noise_scale", type: "number", desc: "0.0 (faithful) to 1.0 (creative)" },
+          { name: "reset_cache", type: "boolean", desc: "Flush KV cache for clean transition" },
+        ]} />
+        <ToolCard name="scope_stop" description="Stop the active stream" params={[]} />
+
+        {/* ─── Skills ─── */}
+        <H2 id="skills">Skills</H2>
+        <P>Skills are markdown files that teach the agent domain knowledge. They&apos;re fetched at runtime from <code className="text-cyan-300/60">/skills/*.md</code> — edit them without code changes.</P>
+
         <div className="space-y-2">
-          {filtered.map((ep) => (
-            <EndpointCard key={`${ep.method}-${ep.path}`} ep={ep} />
+          {[
+            { name: "storyteller.md", desc: "Generates 6-scene visual stories with style, characters, and arc. Accepts story concepts, product campaigns, documentary ideas." },
+            { name: "scope-agent.md", desc: "Translates natural language into Scope live stream configs. Maps presets, recipes, and parameters." },
+            { name: "scope-pipelines.md", desc: "Pipeline catalog: LongLive, LTX 2.3, Krea, MemFlow. 9 composable recipes." },
+            { name: "prompt-craft.md", desc: "7-layer prompt formula for cinematic scene descriptions: camera, subject, surface, background, lighting, colors, atmosphere." },
+            { name: "hifi-video.md", desc: "Two-step pipeline: GPT Image 2 key frame → Seedance 2.0 animation." },
+            { name: "film-hifi.md", desc: "Genre skill for /film — optimized for cartoon, anime, illustration styles." },
+            { name: "scene-traveling.md", desc: "Multi-scene live stream direction. 3 laws of smooth morphing. Transition parameters." },
+          ].map((s) => (
+            <div key={s.name} className="flex items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+              <code className="text-[11px] font-mono text-purple-300/80 shrink-0">{s.name}</code>
+              <span className="text-[11px] text-white/40">{s.desc}</span>
+            </div>
           ))}
         </div>
 
-        {/* Available Models */}
-        <div className="mt-10 mb-10">
-          <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wider mb-4">Popular Models</h3>
-          <div className="grid grid-cols-2 gap-2 text-[11px]">
-            {[
-              { name: "flux-dev", type: "Image", desc: "Fast, reliable image generation" },
-              { name: "gpt-image", type: "Image", desc: "Best for text, logos, products" },
-              { name: "seedream-5-lite", type: "Image", desc: "Photorealistic images" },
-              { name: "recraft-v4", type: "Image", desc: "Professional illustration" },
-              { name: "seedance-i2v", type: "Video", desc: "Image → 15s cinematic video" },
-              { name: "kling-o3-i2v", type: "Video", desc: "4K image → video" },
-              { name: "veo-t2v", type: "Video", desc: "Text → video" },
-              { name: "chatterbox-tts", type: "Audio", desc: "Text-to-speech + voice clone" },
-              { name: "tripo-i3d", type: "3D", desc: "Image → 3D model" },
-              { name: "longlive", type: "Stream", desc: "Real-time AI video pipeline" },
-            ].map((m) => (
-              <div key={m.name} className="flex items-center gap-2 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-2">
-                <code className="font-mono text-cyan-300/80">{m.name}</code>
-                <span className="text-white/20">·</span>
-                <span className="text-white/40">{m.type}</span>
-                <span className="text-white/20">·</span>
-                <span className="text-white/30 flex-1">{m.desc}</span>
+        <H3>Loading a Skill at Runtime</H3>
+        <Code lang="typescript">{`// Skills are static files — fetch and inject into the system prompt
+const skill = await fetch("/skills/storyteller.md").then(r => r.text());
+memory.setCriticalConstraints([basePrompt, skill]);`}</Code>
+
+        {/* ─── Workflows ─── */}
+        <H2 id="workflows">Workflows</H2>
+        <P>Slash commands orchestrate multi-step creative workflows. Each creates a draft, lets the user edit inline, then applies.</P>
+
+        <div className="space-y-3 mb-6">
+          {[
+            { cmd: "/story <concept>", flow: "LLM generates 6 scenes → StoryCard with inline editing → Apply creates project → project_generate → images on canvas", models: "flux-dev (default), auto-routed by style" },
+            { cmd: "/film <concept>", flow: "LLM generates 4 shots with camera → FilmCard → Apply: key frames (flux-dev or gpt-image) → animate each (seedance-i2v) → videos on canvas", models: "hifi mode: gpt-image → seedance" },
+            { cmd: "/stream <concept>", flow: "LLM plans multi-scene stream → StreamPlanCard → Apply: scope_start → prompt traveling with transitions → auto-stop", models: "longlive, ltx2, krea, memflow (via recipes)" },
+            { cmd: "/talk <text>", flow: "TTS (chatterbox or gemini-tts) → talking-head animation → video card", models: "chatterbox-tts, gemini-tts, talking-head" },
+          ].map((w) => (
+            <div key={w.cmd} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+              <code className="text-xs font-mono font-bold text-amber-300">{w.cmd}</code>
+              <div className="text-[10px] text-white/50 mt-1.5 leading-relaxed">{w.flow}</div>
+              <div className="text-[9px] text-white/30 mt-1">Models: {w.models}</div>
+            </div>
+          ))}
+        </div>
+
+        <H3>Conversation Continuity</H3>
+        <Code lang="text">{`User: /story a dragon adventure
+→ 6-scene story card (editable)
+
+User: add more scenes about finding treasure
+→ System detects continuation → generates 3 matching scenes → appends
+→ Updated card with NEW badges → user deletes unwanted → Apply
+
+User: /story a space adventure
+→ resetForNewWork() clears old context → fresh story, no bleed`}</Code>
+
+        {/* ─── Streaming ─── */}
+        <H2 id="streaming">Live Streaming</H2>
+        <P>Real-time AI video generation using Scope. The stream processes input frames through an AI pipeline, transforming them based on text prompts.</P>
+
+        <H3>Stream Recipes</H3>
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          {[
+            { recipe: "classic", pipeline: "LongLive", desc: "Default. Stable prompt traveling, LoRA, VACE" },
+            { recipe: "ltx-responsive", pipeline: "LTX 2.3", desc: "24fps native, fast prompt response" },
+            { recipe: "ltx-smooth", pipeline: "LTX+RIFE", desc: "48fps buttery smooth output" },
+            { recipe: "depth-lock", pipeline: "LongLive+Depth", desc: "Preserve 3D structure" },
+            { recipe: "krea-hq", pipeline: "Krea 14B", desc: "Highest visual fidelity" },
+            { recipe: "memflow-consistent", pipeline: "MemFlow", desc: "Best character consistency" },
+          ].map((r) => (
+            <div key={r.recipe} className="rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-2">
+              <code className="text-[10px] font-mono text-red-300/80">{r.recipe}</code>
+              <span className="text-[9px] text-white/20 ml-2">{r.pipeline}</span>
+              <div className="text-[9px] text-white/30 mt-0.5">{r.desc}</div>
+            </div>
+          ))}
+        </div>
+
+        <H3>Stream Lifecycle</H3>
+        <Code lang="typescript">{`import { ScopePlayer } from "@livepeer/scope-player";
+
+// In your React component:
+<ScopePlayer
+  sdkUrl="https://sdk.daydream.monster"
+  apiKey="sk_your_key"
+  externalStreamId={streamId}
+  onStateChange={(state) => console.log(state.status, state.fps)}
+  onSourceReady={(setSource) => {
+    // Drag an image onto the player to transform it live
+    setSource({ type: "image", url: imageUrl });
+  }}
+/>`}</Code>
+
+        <H3>Prompt Traveling (Scene Transitions)</H3>
+        <Code lang="typescript">{`import { PerformanceEngine } from "./performance";
+
+const engine = new PerformanceEngine();
+engine.setScenes([
+  { index: 0, title: "Dawn", prompt: "golden sunrise over mountains", preset: "cinematic", duration: 30 },
+  { index: 1, title: "Storm", prompt: "dark storm clouds, lightning", preset: "abstract", duration: 15 },
+  { index: 2, title: "Night", prompt: "starry sky, aurora borealis", preset: "dreamy", duration: 25 },
+]);
+
+// Transitions use noise_scale + kv_cache ramp for smooth morphing
+engine.play(controlFn, onStateUpdate);
+engine.pause();   // freeze at current point
+engine.resume();  // continue from where paused`}</Code>
+
+        {/* ─── Creative Kit ─── */}
+        <H2 id="creative-kit">Creative Kit</H2>
+        <P>Shared framework for building creative apps. Both Storyboard and Creative Stage use it.</P>
+
+        <H3>Stores (Zustand)</H3>
+        <Code lang="typescript">{`import {
+  createArtifactStore,   // Canvas cards (images, videos, audio)
+  createChatStore,       // Chat messages
+  createProjectStore,    // Multi-scene projects
+  createGroupManager,    // Episode/collection grouping
+  createConversationContext, // Active work tracking
+} from "@livepeer/creative-kit";
+
+const artifacts = createArtifactStore({ maxArtifacts: 200 });
+artifacts.getState().add({ type: "image", title: "Dragon", url: "...", refId: "img-1" });`}</Code>
+
+        <H3>Model Router (Self-Learning)</H3>
+        <Code lang="typescript">{`import { routeModel, recordModelLatency, getModelStats } from "@livepeer/creative-kit";
+
+// Scores: speed (60%) + style match (30%) + capacity (10%)
+const result = routeModel({
+  action: "generate",
+  prompt: "a logo with text",
+  availableModels: new Set(["flux-dev", "gpt-image", "recraft-v4"]),
+});
+// After each inference, feed back actual speed → router learns
+recordModelLatency(result.model, elapsedMs);
+
+// Check learned stats
+const stats = getModelStats();
+// → Map { "flux-dev" → { avgMs: 3200, count: 47, currentSpeed: 8.9 } }`}</Code>
+
+        <H3>Pipeline Registry</H3>
+        <Code lang="typescript">{`import { createPipelineRegistry } from "@livepeer/creative-kit";
+
+const registry = createPipelineRegistry();
+
+// Resolve user intent to the best recipe
+const recipe = registry.resolve("smooth 24fps stream");
+// → { id: "ltx-responsive", pipeline: "ltx2", graph: {...}, defaults: { kv_cache: 0.3 } }
+
+// List all recipes by quality tier
+const quality = registry.listRecipes("quality");
+// → [depth-lock, ltx-smooth, krea-hq, memflow-consistent, ...]`}</Code>
+
+        {/* ─── REST API ─── */}
+        <H2 id="rest-api">REST API Reference</H2>
+        <P>Base URL: <code className="text-cyan-300/60">https://sdk.daydream.monster</code> · Auth: <code className="text-amber-300/60">Authorization: Bearer sk_...</code></P>
+
+        <div className="space-y-1 mb-6">
+          {[
+            { m: "POST", p: "/inference", d: "Run AI inference (image, video, audio, 3D)" },
+            { m: "GET", p: "/capabilities", d: "List all 48 available models" },
+            { m: "GET", p: "/health", d: "Service health check" },
+            { m: "POST", p: "/stream/start", d: "Start live AI stream" },
+            { m: "POST", p: "/stream/{id}/publish", d: "Send input frame (JPEG)" },
+            { m: "GET", p: "/stream/{id}/frame", d: "Get output frame (JPEG)" },
+            { m: "POST", p: "/stream/{id}/control", d: "Update stream params" },
+            { m: "POST", p: "/stream/{id}/stop", d: "Stop stream" },
+            { m: "GET", p: "/streams", d: "List active streams" },
+            { m: "POST", p: "/api/agent/gemini", d: "Gemini proxy (app route)" },
+            { m: "POST", p: "/api/agent/chat", d: "Claude proxy (app route)" },
+            { m: "POST", p: "/api/agent/openai", d: "OpenAI proxy (app route)" },
+          ].map((e) => (
+            <div key={e.p} className="flex items-center gap-3 px-4 py-2 rounded-lg hover:bg-white/[0.02] transition-colors">
+              <span className={`rounded px-2 py-0.5 text-[9px] font-bold ${e.m === "GET" ? "bg-emerald-500/20 text-emerald-300" : "bg-blue-500/20 text-blue-300"}`}>{e.m}</span>
+              <code className="text-[11px] font-mono text-white/70 w-48">{e.p}</code>
+              <span className="text-[11px] text-white/35">{e.d}</span>
+            </div>
+          ))}
+        </div>
+
+        <H3>Example: Generate Image → Animate → Get Video</H3>
+        <Code lang="bash">{`# Step 1: Generate key frame
+IMG=$(curl -s -X POST https://sdk.daydream.monster/inference \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer sk_your_key" \\
+  -d '{"capability":"flux-dev","prompt":"a majestic eagle soaring"}' \\
+  | jq -r '.image_url // .data.images[0].url')
+
+echo "Image: $IMG"
+
+# Step 2: Animate to video (10 seconds with audio)
+curl -X POST https://sdk.daydream.monster/inference \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer sk_your_key" \\
+  -d "{
+    \\"capability\\": \\"seedance-i2v\\",
+    \\"prompt\\": \\"eagle gliding through mountain valley, cinematic camera follow\\",
+    \\"params\\": { \\"image_url\\": \\"$IMG\\", \\"duration\\": \\"10\\", \\"generate_audio\\": true }
+  }"
+
+# → { "data": { "video": { "url": "https://..." } } }`}</Code>
+
+        {/* ─── Models ─── */}
+        <H2 id="models">Available Models (48)</H2>
+        <div className="space-y-4">
+          {[
+            { cat: "Image Generation", color: "text-blue-300", models: [
+              { name: "flux-dev", speed: "~3s", desc: "Fast, reliable. Default for all styles." },
+              { name: "flux-schnell", speed: "~1s", desc: "Fastest. Draft/preview quality." },
+              { name: "gpt-image", speed: "~8s", desc: "Best for text, logos, products, cartoons." },
+              { name: "recraft-v4", speed: "~6s", desc: "Professional illustration, editorial." },
+              { name: "seedream-5-lite", speed: "~5s", desc: "Best photorealism." },
+              { name: "gemini-image", speed: "~6s", desc: "Painterly, watercolor, artistic." },
+            ]},
+            { cat: "Video (Image → Video)", color: "text-red-300", models: [
+              { name: "seedance-i2v", speed: "~30s", desc: "Default. 15s cinematic + audio." },
+              { name: "kling-o3-i2v", speed: "~45s", desc: "4K premium. Cinema-grade." },
+              { name: "veo-i2v", speed: "~20s", desc: "Google Veo. 8s max." },
+              { name: "ltx-i2v", speed: "~15s", desc: "Fast, open-source." },
+            ]},
+            { cat: "Video (Text → Video)", color: "text-red-300", models: [
+              { name: "kling-o3-t2v", speed: "~45s", desc: "4K text-to-video." },
+              { name: "veo-t2v", speed: "~20s", desc: "Google Veo text-to-video." },
+              { name: "ltx-t2v", speed: "~15s", desc: "Fast text-to-video." },
+            ]},
+            { cat: "Audio", color: "text-amber-300", models: [
+              { name: "chatterbox-tts", speed: "~3s", desc: "TTS + voice cloning." },
+              { name: "gemini-tts", speed: "~3s", desc: "TTS with persona/style control." },
+              { name: "music", speed: "~20s", desc: "Background music generation." },
+            ]},
+            { cat: "3D Models", color: "text-emerald-300", models: [
+              { name: "tripo-i3d", speed: "~30s", desc: "Image → 3D mesh." },
+              { name: "tripo-t3d", speed: "~30s", desc: "Text → 3D mesh." },
+            ]},
+            { cat: "Live Streaming", color: "text-purple-300", models: [
+              { name: "longlive", speed: "8-12fps", desc: "Default Scope pipeline. LoRA + VACE." },
+              { name: "ltx2", speed: "24fps", desc: "LTX 2.3. Fast prompt response." },
+              { name: "krea_realtime_video", speed: "6-8fps", desc: "14B model. Highest quality." },
+              { name: "memflow", speed: "8fps", desc: "Memory bank. Best consistency." },
+            ]},
+          ].map((cat) => (
+            <div key={cat.cat}>
+              <div className={`text-[10px] font-bold uppercase tracking-wider mb-1.5 ${cat.color}`}>{cat.cat}</div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {cat.models.map((m) => (
+                  <div key={m.name} className="flex items-center gap-2 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-1.5">
+                    <code className="text-[10px] font-mono text-cyan-300/80 shrink-0">{m.name}</code>
+                    <span className="text-[9px] text-white/20">{m.speed}</span>
+                    <span className="text-[9px] text-white/30 flex-1">{m.desc}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
 
         {/* Footer */}
-        <div className="border-t border-white/[0.04] pt-6 pb-10 text-center text-xs text-white/20">
-          Powered by <a href="https://livepeer.org" className="text-white/40 hover:text-white/60">Livepeer</a> ·
-          <a href="https://docs.daydream.live" className="text-white/40 hover:text-white/60 ml-1">Full Documentation</a> ·
-          <a href="https://github.com/livepeer/storyboard" className="text-white/40 hover:text-white/60 ml-1">GitHub</a>
+        <div className="border-t border-white/[0.04] pt-6 pb-10 mt-12 text-center text-xs text-white/20">
+          <a href="https://livepeer.org" className="text-white/40 hover:text-white/60">Livepeer</a> ·
+          <a href="https://docs.daydream.live" className="text-white/40 hover:text-white/60 ml-2">Daydream Docs</a> ·
+          <a href="https://github.com/livepeer/storyboard" className="text-white/40 hover:text-white/60 ml-2">GitHub</a>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
