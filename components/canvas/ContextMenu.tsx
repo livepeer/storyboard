@@ -579,20 +579,17 @@ export function ContextMenu() {
         addMessage(`Creating talking video: "${speechText.slice(0, 40)}…" (${voiceLabel})`, "system");
 
         try {
-          // Step A: Generate speech audio via TTS
+          // Step A: Generate speech audio via chatterbox-tts
           addMessage("Step 1/2: Generating speech…", "system");
-          // Use gemini-tts for voice descriptions (it supports style/persona),
-          // chatterbox-tts for cloning (it needs audio_url)
-          const useGeminiTts = voiceDesc && !voiceCloneUrl;
-          const ttsCapability = useGeminiTts ? "gemini-tts" : "chatterbox-tts";
-          const ttsParams: Record<string, unknown> = {
-            text: voiceDesc ? `[Voice: ${voiceDesc}] ${speechText}` : speechText,
-          };
+          const ttsText = voiceDesc
+            ? `[Speaking as: ${voiceDesc}] ${speechText}`
+            : speechText;
+          const ttsParams: Record<string, unknown> = { text: ttsText };
           if (voiceCloneUrl) ttsParams.audio_url = voiceCloneUrl;
 
           const ttsResult = await runInference({
-            capability: ttsCapability,
-            prompt: voiceDesc ? `[Voice: ${voiceDesc}] ${speechText}` : speechText,
+            capability: "chatterbox-tts",
+            prompt: ttsText,
             params: ttsParams,
           });
           const tr = ttsResult as Record<string, unknown>;
