@@ -87,6 +87,12 @@ export function FilmCard({ film: initialFilm }: { film: Film }) {
     updateFilm(film.id, { shots });
   }, [film.id, film.shots, updateFilm]);
 
+  const removeShot = useCallback((shotIdx: number) => {
+    const shots = film.shots.filter((_, i) => i !== shotIdx)
+      .map((s, i) => ({ ...s, index: i + 1 }));
+    updateFilm(film.id, { shots });
+  }, [film.id, film.shots, updateFilm]);
+
   const cameraIcon: Record<string, string> = {
     wide: "🎥", dolly: "🎥", medium: "📹", close: "🔍",
     pan: "↔", crane: "⬆", low: "📐", overhead: "🦅",
@@ -147,19 +153,35 @@ export function FilmCard({ film: initialFilm }: { film: Film }) {
           {/* Shots — each field editable */}
           <div className="mt-2 space-y-1.5">
             {film.shots.map((shot, idx) => (
-              <div key={shot.index} className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-2">
+              <div key={shot.index} className={`rounded-lg border p-2 ${
+                (shot as FilmShot & { isNew?: boolean }).isNew
+                  ? "border-emerald-500/30 bg-emerald-500/[0.04]"
+                  : "border-white/[0.04] bg-white/[0.02]"
+              }`}>
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-[10px] font-semibold text-[var(--text-muted)]">
+                  <div className="flex items-center gap-1.5 text-[10px] font-semibold text-[var(--text-muted)]">
                     Shot {shot.index} —{" "}
                     <EditableText
                       value={shot.title}
                       onSave={(v) => updateShot(idx, { title: v })}
                     />
+                    {(shot as FilmShot & { isNew?: boolean }).isNew && (
+                      <span className="rounded bg-emerald-500/20 px-1 py-0.5 text-[8px] font-bold text-emerald-400">NEW</span>
+                    )}
                   </div>
-                  <button type="button" onClick={() => navigator.clipboard.writeText(shot.description)}
-                    className="shrink-0 rounded px-1.5 py-0.5 text-[9px] text-[var(--text-dim)] hover:bg-white/[0.06]">
-                    ⎘ copy
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button type="button" onClick={() => navigator.clipboard.writeText(shot.description)}
+                      className="rounded px-1.5 py-0.5 text-[9px] text-[var(--text-dim)] hover:bg-white/[0.06]">
+                      ⎘ copy
+                    </button>
+                    {film.status !== "applied" && film.shots.length > 1 && (
+                      <button type="button" title="Remove this shot"
+                        onClick={(e) => { e.stopPropagation(); removeShot(idx); }}
+                        className="rounded px-1.5 py-0.5 text-[9px] text-red-400/60 hover:bg-red-500/10 hover:text-red-400">
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="mt-1 flex items-center gap-1.5 text-[9px] text-orange-300/80">
                   <span>{getCameraEmoji(shot.camera)}</span>

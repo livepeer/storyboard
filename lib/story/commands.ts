@@ -378,13 +378,14 @@ Generate ONLY the new scenes (not the existing ones). Match the style, character
     const newScenes = obj.scenes as Array<{ index: number; title: string; description: string }>;
     if (!Array.isArray(newScenes) || newScenes.length === 0) return "No new scenes generated — try being more specific.";
 
-    // Validate and normalize scenes
+    // Validate, normalize, and mark as new
     const validScenes = newScenes
       .filter((s) => s.description && s.description.length > 10)
       .map((s, i) => ({
         index: story!.scenes.length + 1 + i,
         title: s.title || `Scene ${story!.scenes.length + 1 + i}`,
         description: s.description,
+        isNew: true, // highlight in StoryCard so user can review/delete before applying
       }));
 
     if (validScenes.length === 0) return "Generated scenes were too short — try again.";

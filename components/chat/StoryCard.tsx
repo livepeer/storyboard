@@ -99,6 +99,12 @@ export function StoryCard({ story: initialStory }: Props) {
     updateStory(story.id, { scenes });
   }, [story.id, story.scenes, updateStory]);
 
+  const removeScene = useCallback((sceneIdx: number) => {
+    const scenes = story.scenes.filter((_, i) => i !== sceneIdx)
+      .map((s, i) => ({ ...s, index: i + 1 })); // re-index
+    updateStory(story.id, { scenes });
+  }, [story.id, story.scenes, updateStory]);
+
   const updateContext = useCallback((field: string, value: string) => {
     updateStory(story.id, { context: { ...story.context, [field]: value } });
   }, [story.id, story.context, updateStory]);
@@ -187,24 +193,43 @@ export function StoryCard({ story: initialStory }: Props) {
             {story.scenes.map((scene, idx) => (
               <div
                 key={scene.index}
-                className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-2"
+                className={`rounded-lg border p-2 ${
+                  (scene as StoryScene & { isNew?: boolean }).isNew
+                    ? "border-emerald-500/30 bg-emerald-500/[0.04]"
+                    : "border-white/[0.04] bg-white/[0.02]"
+                }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-[10px] font-semibold text-[var(--text-muted)]">
+                  <div className="flex items-center gap-1.5 text-[10px] font-semibold text-[var(--text-muted)]">
                     Scene {scene.index} —{" "}
                     <EditableText
                       value={scene.title}
                       onSave={(v) => updateScene(idx, { title: v })}
                     />
+                    {(scene as StoryScene & { isNew?: boolean }).isNew && (
+                      <span className="rounded bg-emerald-500/20 px-1 py-0.5 text-[8px] font-bold text-emerald-400">NEW</span>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    title="Copy scene text"
-                    onClick={(e) => { e.stopPropagation(); copyScene(idx, scene.description); }}
-                    className="shrink-0 rounded px-1.5 py-0.5 text-[9px] text-[var(--text-dim)] hover:bg-white/[0.06] hover:text-[var(--text)]"
-                  >
-                    {copiedIdx === idx ? "✓ copied" : "⎘ copy"}
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      title="Copy scene text"
+                      onClick={(e) => { e.stopPropagation(); copyScene(idx, scene.description); }}
+                      className="rounded px-1.5 py-0.5 text-[9px] text-[var(--text-dim)] hover:bg-white/[0.06] hover:text-[var(--text)]"
+                    >
+                      {copiedIdx === idx ? "✓ copied" : "⎘ copy"}
+                    </button>
+                    {story.status !== "applied" && story.scenes.length > 1 && (
+                      <button
+                        type="button"
+                        title="Remove this scene"
+                        onClick={(e) => { e.stopPropagation(); removeScene(idx); }}
+                        className="rounded px-1.5 py-0.5 text-[9px] text-red-400/60 hover:bg-red-500/10 hover:text-red-400"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="mt-1 text-[10px] leading-relaxed text-[var(--text-muted)]">
                   <EditableText
