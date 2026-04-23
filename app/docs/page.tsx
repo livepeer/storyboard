@@ -81,6 +81,12 @@ function ToolCard({ name, description, params }: {
 export default function DocsPage() {
   const [activeSection, setActiveSection] = useState("overview");
 
+  // Override globals.css overflow:hidden + height:100vh on body
+  if (typeof document !== "undefined") {
+    document.body.style.overflow = "auto";
+    document.body.style.height = "auto";
+  }
+
   return (
     <div className="min-h-screen bg-[#0a0a0e] text-white flex">
       {/* Sidebar */}
