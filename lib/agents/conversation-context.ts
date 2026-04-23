@@ -45,7 +45,7 @@ export function resetForNewWork() {
   // Clear active request (subject tracker)
   try {
     const { useActiveRequest } = require("@/lib/agents/active-request");
-    useActiveRequest.getState().clear();
+    useActiveRequest.getState().reset();
   } catch { /* not available */ }
 
   // Clear auto-seed flag so the new work's context takes over

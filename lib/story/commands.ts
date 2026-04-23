@@ -250,11 +250,14 @@ async function storyApply(idOrEmpty: string): Promise<string> {
         prompt_prefix: story.context.style,
       },
     });
+    console.log("[storyApply] project_create result:", JSON.stringify(createResult).slice(0, 200));
     if (createResult?.success && createResult.data) {
       const projectId = (createResult.data as Record<string, unknown>).project_id as string | undefined;
       if (projectId) {
         tracker.trackTool("project_generate", true);
-        await projectGenerateTool.execute({ project_id: projectId });
+        console.log("[storyApply] calling project_generate for:", projectId);
+        const genResult = await projectGenerateTool.execute({ project_id: projectId });
+        console.log("[storyApply] project_generate result:", JSON.stringify(genResult).slice(0, 300));
       }
     }
   } catch (e) {
