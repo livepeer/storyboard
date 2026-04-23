@@ -30,14 +30,18 @@ function resolveStageRecipe(recipeId?: string): ResolvedRecipe {
   return { pipeline: "longlive", kv_cache: 0.5, denoising: [1000, 750, 500, 250] };
 }
 
-// Default text-only graph (no video input needed)
-function textOnlyGraph(pipelineId = "longlive") {
+/** Build a source→pipeline→sink graph. The source node creates the trickle
+ *  input channel so published frames actually reach the pipeline. Without
+ *  this graph, Scope runs in text-only mode and ignores published frames. */
+function buildStreamGraph(pipelineId = "longlive") {
   return {
     nodes: [
+      { id: "input", type: "source", source_mode: "video" },
       { id: pipelineId, type: "pipeline", pipeline_id: pipelineId },
       { id: "output", type: "sink" },
     ],
     edges: [
+      { from: "input", from_port: "video", to_node: pipelineId, to_port: "video", kind: "stream" },
       { from: pipelineId, from_port: "video", to_node: "output", to_port: "video", kind: "stream" },
     ],
   };
@@ -151,6 +155,7 @@ export function createStageTools(ctx: StageToolContext) {
               prompt: prompt,
               prompts: prompt,
               pipeline_ids: [recipe.pipeline],
+              graph: buildStreamGraph(recipe.pipeline),
               noise_scale: noise,
               kv_cache_attention_bias: recipe.kv_cache,
               denoising_step_list: recipe.denoising,
@@ -353,6 +358,7 @@ export function createStageTools(ctx: StageToolContext) {
                 prompt: first.prompt,
                 prompts: first.prompt,
                 pipeline_ids: [recipe.pipeline],
+                graph: buildStreamGraph(recipe.pipeline),
                 noise_scale: noise,
                 kv_cache_attention_bias: recipe.kv_cache,
                 denoising_step_list: recipe.denoising,
