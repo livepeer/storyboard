@@ -69,7 +69,8 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
   const setSource = useCallback((source: StreamSource) => {
     const prev = sourceRef.current;
     sourceRef.current = source;
-    sourceBitmapRef.current = null; // clear cached bitmap
+    sourceBitmapRef.current = null;
+    sourceBlobRef.current = null;
 
     // Cleanup previous video source
     if (prev.type === "video" && sourceVideoRef.current) {
@@ -89,9 +90,15 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
       video.playsInline = true;
       video.play().catch(() => {});
       sourceVideoRef.current = video;
+      // Pre-create canvas for video frame capture
+      if (!sourceCanvasRef.current) {
+        sourceCanvasRef.current = document.createElement("canvas");
+        sourceCanvasRef.current.width = SOURCE_W;
+        sourceCanvasRef.current.height = SOURCE_H;
+      }
     } else if (source.type === "image" && source.url) {
-      // Load image as bitmap. Try fetch first (works for blob: and same-origin),
-      // fall back to Image element for cross-origin CDN URLs.
+      // Load image → resize to 512x512 → pre-encode as JPEG blob once.
+      // The publish loop reuses this cached blob every tick (zero per-frame cost).
       const loadViaFetch = () =>
         fetch(source.url!)
           .then((r) => { if (!r.ok) throw new Error(`${r.status}`); return r.blob(); })
@@ -107,55 +114,65 @@ export function useSdkStream(opts: UseSdkStreamOptions) {
         });
 
       loadViaFetch()
-        .catch(() => loadViaImg()) // fallback for CORS-restricted CDN URLs
+        .catch(() => loadViaImg())
         .then((bm) => {
-          if (sourceRef.current === source) {
-            sourceBitmapRef.current = bm;
-            console.log(`[useSdkStream] Image source ready: ${bm.width}x${bm.height}`);
+          if (sourceRef.current !== source) return; // source changed while loading
+          sourceBitmapRef.current = bm;
+          // Resize and pre-encode as JPEG blob
+          const canvas = document.createElement("canvas");
+          canvas.width = SOURCE_W;
+          canvas.height = SOURCE_H;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(bm, 0, 0, SOURCE_W, SOURCE_H);
+            canvas.toBlob((b) => {
+              if (b && sourceRef.current === source) {
+                sourceBlobRef.current = b;
+                console.log(`[useSdkStream] Image source ready: ${bm.width}x${bm.height} → ${SOURCE_W}x${SOURCE_H}, blob ${b.size} bytes`);
+              }
+            }, "image/jpeg", SOURCE_QUALITY);
           }
         })
         .catch((e) => {
-          console.warn("[useSdkStream] Image source load failed (both methods):", e);
+          console.warn("[useSdkStream] Image source load failed:", e);
         });
     }
   }, []);
+
+  // Source frames are resized to this size for publishing — must match
+  // the blank frame dimensions so the pipeline processes consistent input.
+  const SOURCE_W = 512;
+  const SOURCE_H = 512;
+  const SOURCE_QUALITY = 0.5;
+
+  // Pre-encode the source image as a blob once (for static images — no need to re-encode every tick)
+  const sourceBlobRef = useRef<Blob | null>(null);
 
   /** Capture a JPEG blob from the current source. */
   const captureSourceFrame = useCallback(async (blankBlob: Blob): Promise<Blob> => {
     const src = sourceRef.current;
     if (src.type === "blank") return blankBlob;
 
-    // Ensure we have a canvas for encoding
-    if (!sourceCanvasRef.current) {
-      sourceCanvasRef.current = document.createElement("canvas");
-    }
-    const canvas = sourceCanvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return blankBlob;
-
-    if (src.type === "image") {
-      const bm = sourceBitmapRef.current;
-      if (!bm) return blankBlob; // image still loading
-      if (canvas.width !== bm.width || canvas.height !== bm.height) {
-        canvas.width = bm.width;
-        canvas.height = bm.height;
-      }
-      ctx.drawImage(bm, 0, 0);
-      return new Promise<Blob>((resolve) =>
-        canvas.toBlob((b) => resolve(b || blankBlob), "image/jpeg", 0.7)
-      );
+    // For static images, return the cached blob (encoded once, reused every tick)
+    if (src.type === "image" && sourceBlobRef.current) {
+      return sourceBlobRef.current;
     }
 
+    // For video, capture the current frame
     if (src.type === "video") {
       const video = sourceVideoRef.current;
       if (!video || video.readyState < 2) return blankBlob;
-      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width = video.videoWidth || 512;
-        canvas.height = video.videoHeight || 512;
+      if (!sourceCanvasRef.current) {
+        sourceCanvasRef.current = document.createElement("canvas");
+        sourceCanvasRef.current.width = SOURCE_W;
+        sourceCanvasRef.current.height = SOURCE_H;
       }
-      ctx.drawImage(video, 0, 0);
+      const canvas = sourceCanvasRef.current;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return blankBlob;
+      ctx.drawImage(video, 0, 0, SOURCE_W, SOURCE_H);
       return new Promise<Blob>((resolve) =>
-        canvas.toBlob((b) => resolve(b || blankBlob), "image/jpeg", 0.7)
+        canvas.toBlob((b) => resolve(b || blankBlob), "image/jpeg", SOURCE_QUALITY)
       );
     }
 
