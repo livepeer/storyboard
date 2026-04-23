@@ -23,6 +23,37 @@ export function setActiveWork(type: "story" | "film" | "project" | "stream", id:
   });
 }
 
+/**
+ * Reset all context for a fresh creative start.
+ * Called when the user runs /story, /film, or any new creation command.
+ * Clears: SessionContext (style DNA), ConversationContext (active work),
+ * ActiveRequest (subject tracker), and the auto-seed flag.
+ *
+ * The NEW work item's context replaces these after generation succeeds.
+ * This prevents old styles/characters from bleeding into new creations.
+ */
+export function resetForNewWork() {
+  // Clear active work item
+  getConversationContext().getState().clearActiveWork();
+
+  // Clear creative context (style, characters, mood from previous work)
+  try {
+    const { useSessionContext } = require("@/lib/agents/session-context");
+    useSessionContext.getState().clearContext();
+  } catch { /* not available */ }
+
+  // Clear active request (subject tracker)
+  try {
+    const { useActiveRequest } = require("@/lib/agents/active-request");
+    useActiveRequest.getState().clear();
+  } catch { /* not available */ }
+
+  // Clear auto-seed flag so the new work's context takes over
+  if (typeof window !== "undefined") {
+    window.sessionStorage.removeItem("storyboard:creative-context-autoseeded");
+  }
+}
+
 /** Get context prompt to inject into agent system message. */
 export function getConversationPrompt(): string {
   return getConversationContext().getState().getContextPrompt();

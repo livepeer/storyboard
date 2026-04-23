@@ -21,7 +21,7 @@ import { useStoryStore } from "./store";
 import { generateStory } from "./generator";
 import type { Story, StoryListItem } from "./types";
 import { createTracker } from "@/lib/utils/execution-tracker";
-import { setActiveWork } from "@/lib/agents/conversation-context";
+import { setActiveWork, resetForNewWork } from "@/lib/agents/conversation-context";
 
 /** Envelope marker used by MessageBubble to detect and render a StoryCard. */
 export const STORY_CARD_MARKER = "@@story@@";
@@ -165,6 +165,8 @@ function storyShow(id: string): string {
 }
 
 async function storyGenerate(prompt: string): Promise<string> {
+  // Fresh start — clear old context so the new story isn't polluted
+  resetForNewWork();
   const tracker = createTracker("/story");
   const result = await generateStory(prompt);
   if (!result.ok) {

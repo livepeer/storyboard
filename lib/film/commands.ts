@@ -3,7 +3,7 @@ import { generateFilm } from "./generator";
 import { FILM_SKILLS, setActiveFilmSkill, getActiveFilmSkill, detectFilmSkill } from "./film-prompt";
 import type { Film } from "./types";
 import { createTracker } from "@/lib/utils/execution-tracker";
-import { setActiveWork } from "@/lib/agents/conversation-context";
+import { setActiveWork, resetForNewWork } from "@/lib/agents/conversation-context";
 
 export const FILM_CARD_MARKER = "@@film@@";
 export const FILM_CARD_END = "@@/film@@";
@@ -111,6 +111,7 @@ function filmShow(id: string): string {
 }
 
 async function filmGenerate(prompt: string): Promise<string> {
+  resetForNewWork();
   const tracker = createTracker("/film");
   const result = await generateFilm(prompt);
   if (!result.ok) return `Film director: ${result.error}`;
