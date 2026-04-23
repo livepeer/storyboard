@@ -448,17 +448,17 @@ export default function Stage() {
         setTimeout(() => setStreamSourceDisplay(src), 50);
       }
 
-      // Tell the pipeline to USE the input frames:
-      // - noise_scale: 0.3 = 70% input influence (very visible)
-      // - noise_controller: false = prevent motion detector from overriding
-      //   our noise_scale (static images = zero motion → controller would
-      //   raise noise_scale to ~0.8, suppressing the input)
-      // - reset_cache: true = flush old latent state
+      // Switch pipeline to video mode so it uses the published frames.
+      // CRITICAL: The SDK's _init_stream_session ignores browser's params
+      // and hardcodes its own start_stream. So input_mode must be sent
+      // via /control AFTER the stream starts. Without input_mode:"video",
+      // Scope routes to text-mode blocks and ignores ALL published frames.
       const sdk = getSdkConfig();
       const controlParams: Record<string, unknown> = {
-        reset_cache: true,
+        input_mode: "video",
         noise_scale: 0.3,
         noise_controller: false,
+        reset_cache: true,
       };
       if (dropped.type === "image") {
         controlParams.vace_enabled = true;

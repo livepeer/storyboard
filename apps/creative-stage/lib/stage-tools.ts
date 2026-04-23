@@ -761,10 +761,12 @@ export function createStageTools(ctx: StageToolContext) {
 
         ctx.setStreamSource?.(type, url, url.split("/").pop()?.slice(0, 25));
 
-        // Tell pipeline to use input frames:
-        // noise_controller: false prevents motion detector from overriding noise_scale
+        // Switch pipeline to video mode + set noise_scale.
+        // input_mode:"video" MUST be sent via control (SDK ignores browser's
+        // start params). Without it, Scope drops all published frames.
         if (ctx.streamId) {
           await ctx.controlStream({
+            input_mode: "video",
             reset_cache: true,
             noise_scale: (args.noise_scale as number) ?? 0.3,
             noise_controller: false,
