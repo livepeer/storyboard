@@ -50,6 +50,14 @@ export function TopBar({ onTrainClick }: { onTrainClick?: () => void }) {
             Train
           </button>
         )}
+        <a
+          href="/docs"
+          target="_blank"
+          title="API Documentation"
+          className="flex h-7 items-center justify-center rounded-md border border-[var(--border)] bg-transparent px-2 text-[11px] text-[var(--text-muted)] transition-all hover:border-[var(--border-hover)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+        >
+          API
+        </a>
         <CheatSheet />
         <SettingsPanel />
       </div>
