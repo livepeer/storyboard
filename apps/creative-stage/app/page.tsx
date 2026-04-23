@@ -802,8 +802,8 @@ export default function Stage() {
               setAudioUrl(null);
             }
 
-            // Auto-play if stream is running — flush KV cache so the new
-            // scene set starts clean without carryover frames from the old set
+            // Clean transition: flush KV cache, send new prompt at high noise
+            // to force a hard visual break, wait for pipeline to process, then play.
             if (streamIdRef.current) {
               const cfg = getSdkConfig();
               const fn = async (params: Record<string, unknown>) => {
@@ -816,8 +816,18 @@ export default function Stage() {
                   });
                 } catch { /* fire and forget */ }
               };
-              // Flush KV cache first to avoid carryover frames
-              fn({ reset_cache: true }).then(() => {
+              const firstScene = target.scenes[0];
+              // Step 1: Flush cache + force new prompt at high noise (clean break)
+              fn({
+                reset_cache: true,
+                noise_scale: 0.95,
+                kv_cache_attention_bias: 0.05,
+                prompts: firstScene?.prompt || "",
+              }).then(() =>
+                // Step 2: Wait for pipeline to process a few frames with new prompt
+                new Promise((r) => setTimeout(r, 1500))
+              ).then(() => {
+                // Step 3: Play timeline normally (restores proper preset params)
                 perfRef.current.play(fn, setPerfState);
               });
             }
