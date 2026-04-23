@@ -69,6 +69,7 @@ interface StoryState {
   pendingStoryId: string | null;
 
   addStory: (story: Omit<Story, "id" | "createdAt" | "status"> & { id?: string }) => Story;
+  updateStory: (id: string, patch: Partial<Pick<Story, "title" | "audience" | "arc" | "context" | "scenes">>) => void;
   markApplied: (id: string) => void;
   archive: (id: string) => void;
   remove: (id: string) => void;
@@ -98,6 +99,15 @@ export const useStoryStore = create<StoryState>((set, get) => ({
     });
     return story;
   },
+
+  updateStory: (id, patch) =>
+    set((s) => {
+      const next = s.stories.map((x) =>
+        x.id === id ? { ...x, ...patch } : x
+      );
+      saveToStorage(next);
+      return { stories: next };
+    }),
 
   markApplied: (id) =>
     set((s) => {

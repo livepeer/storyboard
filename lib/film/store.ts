@@ -34,6 +34,7 @@ interface FilmState {
   films: Film[];
   pendingFilmId: string | null;
   addFilm: (f: Omit<Film, "id" | "createdAt" | "status">) => Film;
+  updateFilm: (id: string, patch: Partial<Pick<Film, "title" | "style" | "characterLock" | "context" | "shots">>) => void;
   markApplied: (id: string) => void;
   setPending: (id: string | null) => void;
   getPending: () => Film | null;
@@ -55,6 +56,12 @@ export const useFilmStore = create<FilmState>((set, get) => ({
     });
     return film;
   },
+
+  updateFilm: (id, patch) => set((s) => {
+    const next = s.films.map((f) => f.id === id ? { ...f, ...patch } : f);
+    save(next);
+    return { films: next };
+  }),
 
   markApplied: (id) => set((s) => {
     const next = s.films.map((f) => f.id === id ? { ...f, status: "applied" as const, appliedAt: Date.now() } : f);

@@ -1,10 +1,70 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import type { Film } from "@/lib/film/types";
+import { useState, useCallback, useRef, useEffect } from "react";
+import type { Film, FilmShot } from "@/lib/film/types";
+import { useFilmStore } from "@/lib/film/store";
 
-export function FilmCard({ film }: { film: Film }) {
+/** Inline editable text — click to edit, Enter/blur to save, Esc to cancel. */
+function EditableText({ value, onSave, multiline, className, style }: {
+  value: string; onSave: (v: string) => void; multiline?: boolean;
+  className?: string; style?: React.CSSProperties;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const ref = useRef<HTMLTextAreaElement | HTMLInputElement>(null);
+
+  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
+
+  if (!editing) {
+    return (
+      <span
+        className={className}
+        style={{ ...style, cursor: "pointer", borderBottom: "1px dashed rgba(255,255,255,0.1)" }}
+        title="Click to edit"
+        onClick={(e) => { e.stopPropagation(); setDraft(value); setEditing(true); }}
+      >
+        {value}
+      </span>
+    );
+  }
+
+  const save = () => { if (draft.trim()) { onSave(draft.trim()); setEditing(false); } };
+  const cancel = () => { setDraft(value); setEditing(false); };
+
+  if (multiline) {
+    return (
+      <textarea
+        ref={ref as React.RefObject<HTMLTextAreaElement>}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Escape") cancel(); if (e.key === "Enter" && e.metaKey) save(); }}
+        onBlur={save}
+        rows={3}
+        className="w-full resize-y rounded border border-orange-500/30 bg-orange-500/10 px-2 py-1 text-[10px] leading-relaxed text-[var(--text)] outline-none"
+        onClick={(e) => e.stopPropagation()}
+      />
+    );
+  }
+
+  return (
+    <input
+      ref={ref as React.RefObject<HTMLInputElement>}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") cancel(); }}
+      onBlur={save}
+      className="w-full rounded border border-orange-500/30 bg-orange-500/10 px-2 py-0.5 text-[10px] text-[var(--text)] outline-none"
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
+}
+
+export function FilmCard({ film: initialFilm }: { film: Film }) {
   const [collapsed, setCollapsed] = useState(false);
+
+  // Read latest from store so edits are reflected
+  const film = useFilmStore((s) => s.films.find((f) => f.id === initialFilm.id)) ?? initialFilm;
+  const updateFilm = useFilmStore((s) => s.updateFilm);
 
   const applyNow = useCallback(() => {
     window.dispatchEvent(
@@ -22,16 +82,10 @@ export function FilmCard({ film }: { film: Film }) {
     );
   }, [film.originalPrompt]);
 
-  const copyShot = useCallback((text: string) => {
-    navigator.clipboard.writeText(text);
-  }, []);
-
-  const editShot = useCallback((text: string) => {
-    window.dispatchEvent(new CustomEvent("chat-prefill", { detail: { text } }));
-  }, []);
-
-  const statusColor =
-    film.status === "applied" ? "text-emerald-300" : "text-amber-300";
+  const updateShot = useCallback((shotIdx: number, patch: Partial<FilmShot>) => {
+    const shots = film.shots.map((s, i) => i === shotIdx ? { ...s, ...patch } : s);
+    updateFilm(film.id, { shots });
+  }, [film.id, film.shots, updateFilm]);
 
   const cameraIcon: Record<string, string> = {
     wide: "🎥", dolly: "🎥", medium: "📹", close: "🔍",
@@ -47,6 +101,9 @@ export function FilmCard({ film }: { film: Film }) {
     return "🎬";
   };
 
+  const statusColor =
+    film.status === "applied" ? "text-emerald-300" : "text-amber-300";
+
   return (
     <div className="group relative max-w-[95%] self-start break-words rounded-xl border border-orange-500/25 bg-orange-500/[0.06] p-3 text-xs text-[var(--text)]">
       <button
@@ -57,7 +114,11 @@ export function FilmCard({ film }: { film: Film }) {
         <span className="text-base leading-none">🎬</span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-semibold">{film.title}</span>
+            <EditableText
+              value={film.title}
+              onSave={(v) => updateFilm(film.id, { title: v })}
+              className="font-semibold"
+            />
             <span className={`text-[9px] uppercase tracking-wide ${statusColor}`}>{film.status}</span>
           </div>
           <div className="mt-0.5 text-[10px] text-[var(--text-dim)]">
@@ -69,42 +130,58 @@ export function FilmCard({ film }: { film: Film }) {
 
       {!collapsed && (
         <>
+          {/* Style */}
+          <div className="mt-2 text-[10px] text-[var(--text-muted)]">
+            <span className="font-semibold text-[var(--text-dim)]">Style:</span>{" "}
+            <EditableText value={film.style} onSave={(v) => updateFilm(film.id, { style: v })} />
+          </div>
+
+          {/* Character lock */}
           {film.characterLock && (
-            <div className="mt-2 text-[10px] text-[var(--text-muted)]">
-              <span className="font-semibold text-[var(--text-dim)]">Character lock:</span> {film.characterLock}
+            <div className="mt-1 text-[10px] text-[var(--text-muted)]">
+              <span className="font-semibold text-[var(--text-dim)]">Character lock:</span>{" "}
+              <EditableText value={film.characterLock} onSave={(v) => updateFilm(film.id, { characterLock: v })} />
             </div>
           )}
 
+          {/* Shots — each field editable */}
           <div className="mt-2 space-y-1.5">
-            {film.shots.map((shot) => (
+            {film.shots.map((shot, idx) => (
               <div key={shot.index} className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[10px] font-semibold text-[var(--text-muted)]">
-                    Shot {shot.index} — {shot.title}
+                    Shot {shot.index} —{" "}
+                    <EditableText
+                      value={shot.title}
+                      onSave={(v) => updateShot(idx, { title: v })}
+                    />
                   </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <button type="button" onClick={() => copyShot(shot.description)}
-                      className="rounded px-1.5 py-0.5 text-[9px] text-[var(--text-dim)] hover:bg-white/[0.06]">
-                      ⎘ copy
-                    </button>
-                    <button type="button" onClick={() => editShot(shot.description)}
-                      className="rounded px-1.5 py-0.5 text-[9px] text-[var(--text-dim)] hover:bg-white/[0.06]">
-                      ✎ edit
-                    </button>
-                  </div>
+                  <button type="button" onClick={() => navigator.clipboard.writeText(shot.description)}
+                    className="shrink-0 rounded px-1.5 py-0.5 text-[9px] text-[var(--text-dim)] hover:bg-white/[0.06]">
+                    ⎘ copy
+                  </button>
                 </div>
                 <div className="mt-1 flex items-center gap-1.5 text-[9px] text-orange-300/80">
                   <span>{getCameraEmoji(shot.camera)}</span>
-                  <span className="font-mono">{shot.camera}</span>
+                  <EditableText
+                    value={shot.camera}
+                    onSave={(v) => updateShot(idx, { camera: v })}
+                    className="font-mono"
+                  />
                   <span className="text-[var(--text-dim)]">· {shot.duration}s</span>
                 </div>
                 <div className="mt-1 text-[10px] leading-relaxed text-[var(--text-muted)]">
-                  {shot.description}
+                  <EditableText
+                    value={shot.description}
+                    onSave={(v) => updateShot(idx, { description: v })}
+                    multiline
+                  />
                 </div>
               </div>
             ))}
           </div>
 
+          {/* Actions */}
           {film.status !== "applied" && (
             <div className="mt-3 flex items-center gap-2">
               <button type="button" onClick={applyNow}
@@ -116,7 +193,7 @@ export function FilmCard({ film }: { film: Film }) {
                 🎲 Regenerate
               </button>
               <span className="text-[9px] italic text-[var(--text-dim)]">
-                or type &ldquo;apply them&rdquo;
+                click any text to edit in place
               </span>
             </div>
           )}
