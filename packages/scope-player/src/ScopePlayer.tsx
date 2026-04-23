@@ -88,12 +88,25 @@ export function ScopePlayer({
     return () => cancelAnimationFrame(animFrameRef.current);
   }, []);
 
-  // Attach to external stream (started by agent tool)
+  // Attach to external stream (started by agent tool).
+  // If the stream ID changes mid-flight (agent started a new stream),
+  // stop the old one and attach to the new one.
+  const prevStreamIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (externalStreamId && state.status === "idle") {
+    if (!externalStreamId) return;
+    if (externalStreamId === prevStreamIdRef.current) return; // same stream, no-op
+    prevStreamIdRef.current = externalStreamId;
+
+    if (state.status !== "idle") {
+      // Already running on a different stream — stop first, then re-attach
+      console.log(`[ScopePlayer] Stream changed ${state.streamId?.slice(0, 8)} → ${externalStreamId.slice(0, 8)}, re-attaching`);
+      stop().then(() => {
+        attach(externalStreamId);
+      });
+    } else {
       attach(externalStreamId);
     }
-  }, [externalStreamId, state.status, attach]);
+  }, [externalStreamId, state.status, state.streamId, attach, stop]);
 
   // Auto-start if initialParams provided (standalone mode)
   useEffect(() => {

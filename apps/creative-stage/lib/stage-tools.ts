@@ -761,9 +761,13 @@ export function createStageTools(ctx: StageToolContext) {
 
         ctx.setStreamSource?.(type, url, url.split("/").pop()?.slice(0, 25));
 
-        // Also set noise_scale if provided
-        if (args.noise_scale !== undefined && ctx.streamId) {
-          await ctx.controlStream({ noise_scale: args.noise_scale as number });
+        // Flush KV cache so pipeline picks up new input + set noise_scale
+        if (ctx.streamId) {
+          const controlParams: Record<string, unknown> = {
+            reset_cache: true,
+            noise_scale: (args.noise_scale as number) ?? 0.4,
+          };
+          await ctx.controlStream(controlParams);
         }
 
         return JSON.stringify({

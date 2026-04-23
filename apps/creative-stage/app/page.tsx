@@ -442,15 +442,25 @@ export default function Stage() {
         setStreamSource({ type: srcType, url: dropped.url, label: dropped.title });
       }
 
+      // Flush KV cache + lower noise_scale so the pipeline picks up
+      // the new input frames. Without reset_cache, the pipeline keeps
+      // generating from its cached latent state and ignores the input.
+      const sdk = getSdkConfig();
+      const controlParams: Record<string, unknown> = {
+        reset_cache: true,
+        noise_scale: 0.4, // lower = more faithful to input
+      };
       // Also apply VACE for images (structural guidance)
       if (dropped.type === "image") {
-        const sdk = getSdkConfig();
-        fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
-          body: JSON.stringify({ type: "parameters", params: { vace_enabled: true, vace_ref_images: [dropped.url], vace_context_scale: 0.8 } }),
-        }).catch(() => {});
+        controlParams.vace_enabled = true;
+        controlParams.vace_ref_images = [dropped.url];
+        controlParams.vace_context_scale = 0.8;
       }
+      fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
+        body: JSON.stringify({ type: "parameters", params: controlParams }),
+      }).catch(() => {});
 
       vaceAppliedRef.current.add(dropped.refId);
       store.connect(dropped.refId, "live-output", { action: srcType === "video" ? "video-source" : "image-source" });
