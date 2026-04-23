@@ -299,18 +299,58 @@ function selectCapability(
     case "generate": {
       // Text-to-video path: ONLY if the prompt has an unambiguous video
       // intent (duration + video noun, or "make a video" phrasing).
-      // Plain "cinematic watercolor" inherited from a style context
-      // should NOT fire this branch.
       if (asksForVideo) {
+        const wants4KGen = /\b(4k|ultra|highest.quality|cinema|premium)\b/.test(lowerUser);
+        const hasKlingT2V = !!valid && valid.some((c) => c.name === "kling-o3-t2v");
+        if (wants4KGen && hasKlingT2V) return { capability: "kling-o3-t2v", type: "video" };
         if (hasVeoT2V) return { capability: "veo-t2v", type: "video" };
         if (valid && valid.some((c) => c.name === "ltx-t2v")) {
           return { capability: "ltx-t2v", type: "video" };
         }
       }
-      const hint = lowerHint;
-      if (hint.includes("fast") || hint.includes("draft")) return { capability: "flux-schnell", type: "image" };
-      if (hint.includes("professional") || hint.includes("illustration")) return { capability: "recraft-v4", type: "image" };
-      if (hint.includes("photo")) return { capability: "flux-dev", type: "image" };
+
+      // Smart image model selection — match style to model strengths.
+      // Check both styleHint (from project style guide) and promptText
+      // (which includes session context prefix with style/characters).
+      const allText = `${lowerHint} ${lowerPrompt}`.toLowerCase();
+
+      // GPT Image 2 — best for: text rendering, logos, cartoon/anime
+      // illustration, product shots, infographics, children's book art
+      const wantsGptImage = /\b(logo|text|label|caption|infographic|product|briefing|diagram|ui|mockup|wireframe|typography)\b/.test(allText)
+        || (/\b(cartoon|comic|manga|children.s.book|cel.shad|flat.illustr|vector|pixel.art|lego|chibi)\b/.test(allText)
+            && !!valid && valid.some((c) => c.name === "gpt-image"));
+      if (wantsGptImage && valid?.some((c) => c.name === "gpt-image")) {
+        return { capability: "gpt-image", type: "image" };
+      }
+
+      // Recraft V4 — best for: professional illustration, graphic design,
+      // editorial art, icons, brand assets, stylized renders
+      const wantsRecraft = /\b(illustration|editorial|graphic.design|icon|brand|vector.art|poster|magazine|book.cover|concept.art|professional)\b/.test(allText);
+      if (wantsRecraft && valid?.some((c) => c.name === "recraft-v4")) {
+        return { capability: "recraft-v4", type: "image" };
+      }
+
+      // Seedream 5 Lite — best for: photorealistic, studio photography,
+      // portrait, landscape, architecture, product photography
+      const wantsSeedream = /\b(photorealistic|photo.realistic|studio.photo|portrait.photo|dslr|raw.photo|architecture.photo|real.photo|hyper.?realistic)\b/.test(allText);
+      if (wantsSeedream && valid?.some((c) => c.name === "seedream-5-lite")) {
+        return { capability: "seedream-5-lite", type: "image" };
+      }
+
+      // Gemini Image — best for: creative/artistic, painterly, watercolor,
+      // impressionist, abstract art, mixed media
+      const wantsGemini = /\b(watercolor|oil.paint|impressionis|van.gogh|monet|abstract.art|mixed.media|gouache|pastel.painting|acrylic)\b/.test(allText);
+      if (wantsGemini && valid?.some((c) => c.name === "gemini-image")) {
+        return { capability: "gemini-image", type: "image" };
+      }
+
+      // Flux Schnell — speed priority
+      if (/\b(fast|draft|quick|preview|sketch)\b/.test(allText)) {
+        return { capability: "flux-schnell", type: "image" };
+      }
+
+      // Flux Dev — reliable default for everything else (cinematic, Ghibli,
+      // anime, fantasy, sci-fi, general creative)
       return { capability: "flux-dev", type: "image" };
     }
     case "restyle":
