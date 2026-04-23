@@ -127,9 +127,34 @@ async function streamApply(idOrEmpty: string): Promise<string> {
     const streamId = (streamData?.stream_id || streamData?.message?.toString().match(/template=([^,]+)/)?.[1] || "") as string;
 
     store.markStreaming(plan.id, streamId);
+    say(`⏳ Stream warming up — scenes will start when first frame arrives…`);
+
+    // 3. Wait for stream to actually produce frames before scheduling transitions.
+    // scope_start dispatches to CameraWidget which handles the 30-90s warm-up.
+    // We wait for the stream card to show frames (polling canvas for the card).
+    await new Promise<void>((resolve) => {
+      let checks = 0;
+      const maxChecks = 180; // 3 min max wait
+      const checkInterval = setInterval(() => {
+        checks++;
+        try {
+          const { useCanvasStore } = require("@/lib/canvas/store");
+          const cards = useCanvasStore.getState().cards;
+          const streamCard = cards.find((c: { type: string }) => c.type === "stream");
+          // Stream card exists and has a URL = frames are flowing
+          if (streamCard?.url || checks > maxChecks) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        } catch {
+          if (checks > maxChecks) { clearInterval(checkInterval); resolve(); }
+        }
+      }, 1000);
+    });
+
     say(`🔴 Stream live — Scene 1: ${firstScene.title} (${firstScene.duration}s)`);
 
-    // 3. NOW schedule prompt transitions — clock starts from first frame
+    // Scene transitions start NOW (stream is confirmed live)
     let sceneElapsed = 0;
     for (let i = 1; i < plan.scenes.length; i++) {
       const prevDuration = plan.scenes[i - 1].duration;
