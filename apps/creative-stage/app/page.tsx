@@ -144,8 +144,16 @@ export default function Stage() {
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pendingPlayRef = useRef(false);
 
-  // Right-click context menu
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; artifactId: string } | null>(null);
+  // Right-click context menu (artifactId = null means canvas-level)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; artifactId: string | null } | null>(null);
+  // Styled prompt dialog
+  const [promptDialog, setPromptDialog] = useState<{
+    title: string; placeholder: string; value: string;
+    resolve: (v: string | null) => void;
+  } | null>(null);
+  const styledPrompt = useCallback((title: string, placeholder: string): Promise<string | null> => {
+    return new Promise((resolve) => setPromptDialog({ title, placeholder, value: "", resolve }));
+  }, []);
 
   // Scene set tabs — each prompt creates a scene set, tabs let you switch
   interface SceneSet { id: string; title: string; scenes: Scene[]; audioUrl?: string | null }
@@ -525,7 +533,10 @@ export default function Stage() {
   return (
     <div style={S.root}>
       {/* ─── Canvas Area ─── */}
-      <div style={S.canvasArea}>
+      <div style={S.canvasArea} onContextMenu={(e) => {
+        e.preventDefault();
+        setCtxMenu({ x: e.clientX, y: e.clientY, artifactId: null });
+      }}>
         <InfiniteBoard
           viewport={viewport}
           onViewportChange={(v) => setViewport((prev) => ({ ...prev, ...v }))}
@@ -594,7 +605,7 @@ export default function Stage() {
             >
               <div
                 style={S.cardContent}
-                onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, artifactId: a.id }); }}
+                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, artifactId: a.id }); }}
               >
                 {a.url && a.type === "image" && <img src={a.url} alt={a.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 {a.url && a.type === "video" && (
@@ -912,37 +923,39 @@ export default function Stage() {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {(() => {
+            {ctxMenu.artifactId ? (() => {
+              /* ── Card-level menu ── */
               const art = arts.find((a) => a.id === ctxMenu.artifactId);
               if (!art) return null;
               const isImage = art.type === "image" && art.url;
+              const isVideo = art.type === "video" && art.url;
               return (
                 <>
+                  {/* Set as stream source */}
+                  {(isImage || isVideo) && streamIdRef.current && (
+                    <CtxMenuItem label="Set as Stream Source" icon="📡" onClick={() => {
+                      setCtxMenu(null);
+                      const srcType = isVideo ? "video" as const : "image" as const;
+                      if (setSourceFnRef.current && art.url) {
+                        setSourceFnRef.current({ type: srcType, url: art.url, label: art.title });
+                        setStreamSource({ type: srcType, url: art.url, label: art.title });
+                        chat.getState().addMessage(`${srcType} source set: "${art.title}" → Live Output`, "system");
+                      }
+                    }} />
+                  )}
                   {isImage && (
                     <>
-                      <CtxMenuItem label="Product Briefing (GPT Image)" icon="📋" onClick={() => {
+                      <CtxMenuItem label="Animate (Seedance)" icon="🎬" onClick={async () => {
                         setCtxMenu(null);
-                        chat.getState().addMessage(`Create a professional product briefing using this image: ${art.url}`, "user");
-                        handleSend(`Create a product briefing card using gpt-image-edit for this image: ${art.url}. Add price, specs, and callouts.`);
+                        const prompt = await styledPrompt("Animate Image", "Describe the motion…");
+                        if (prompt) handleSend(`Animate this image into a cinematic video: ${art.url}. Motion: ${prompt}`);
                       }} />
-                      <CtxMenuItem label="Edit with GPT Image" icon="✏️" onClick={() => {
+                      <CtxMenuItem label="Edit with GPT Image" icon="✏️" onClick={async () => {
                         setCtxMenu(null);
-                        const prompt = window.prompt("What would you like to change?");
+                        const prompt = await styledPrompt("Edit Image", "What to change?");
                         if (prompt) handleSend(`Use gpt-image-edit to edit this image: ${art.url}. Change: ${prompt}`);
                       }} />
-                      <div style={{ height: 1, background: "rgba(255,255,255,0.05)", margin: "3px 8px" }} />
                     </>
-                  )}
-                  <CtxMenuItem label="Generate with GPT Image" icon="🎨" onClick={() => {
-                    setCtxMenu(null);
-                    const prompt = window.prompt("Describe what to generate:");
-                    if (prompt) handleSend(`Generate an image using gpt-image: ${prompt}`);
-                  }} />
-                  {isImage && (
-                    <CtxMenuItem label="Animate (seedance)" icon="🎬" onClick={() => {
-                      setCtxMenu(null);
-                      handleSend(`Animate this image into a 5-second video using seedance-i2v: ${art.url}`);
-                    }} />
                   )}
                   <div style={{ height: 1, background: "rgba(255,255,255,0.05)", margin: "3px 8px" }} />
                   <CtxMenuItem label="Delete" icon="🗑" danger onClick={() => {
@@ -951,7 +964,107 @@ export default function Stage() {
                   }} />
                 </>
               );
-            })()}
+            })() : (
+              /* ── Canvas-level menu ── */
+              <>
+                <div style={{ padding: "4px 14px 2px", fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: 1 }}>Create</div>
+                <CtxMenuItem label="Image" icon="🖼" onClick={async () => {
+                  setCtxMenu(null);
+                  const prompt = await styledPrompt("Create Image", "Describe the image…");
+                  if (prompt) handleSend(`generate an image: ${prompt}`);
+                }} />
+                <CtxMenuItem label="Video" icon="🎬" onClick={async () => {
+                  setCtxMenu(null);
+                  const prompt = await styledPrompt("Create Video", "Describe the video…");
+                  if (prompt) handleSend(`create a video: ${prompt}`);
+                }} />
+                <CtxMenuItem label="Music" icon="🎵" onClick={async () => {
+                  setCtxMenu(null);
+                  const prompt = await styledPrompt("Create Music", "Mood, genre, tempo…");
+                  if (prompt) handleSend(`generate background music: ${prompt}`);
+                }} />
+                <CtxMenuItem label="GPT Image (text/logos)" icon="🎨" onClick={async () => {
+                  setCtxMenu(null);
+                  const prompt = await styledPrompt("GPT Image 2", "Describe what to generate…");
+                  if (prompt) handleSend(`Generate an image using gpt-image: ${prompt}`);
+                }} />
+                <div style={{ height: 1, background: "rgba(255,255,255,0.05)", margin: "3px 8px" }} />
+                <div style={{ padding: "4px 14px 2px", fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: 1 }}>Import</div>
+                <CtxMenuItem label="From Computer" icon="📁" onClick={() => {
+                  setCtxMenu(null);
+                  const input = document.createElement("input");
+                  input.type = "file";
+                  input.accept = "image/*,video/*,audio/*";
+                  input.onchange = () => {
+                    const file = input.files?.[0];
+                    if (!file) return;
+                    const url = URL.createObjectURL(file);
+                    const isAudio = file.type.startsWith("audio");
+                    const isVideo = !isAudio && file.type.startsWith("video");
+                    const type = isAudio ? "audio" as const : isVideo ? "video" as const : "image" as const;
+                    artifacts.getState().add({
+                      type,
+                      title: file.name.slice(0, 30),
+                      url,
+                      refId: `import-${Date.now()}`,
+                      x: 100, y: 100, w: isVideo ? 320 : 200, h: isVideo ? 200 : 130,
+                    });
+                    chat.getState().addMessage(`Imported: ${file.name}`, "system");
+                  };
+                  input.click();
+                }} />
+                <CtxMenuItem label="From URL" icon="🔗" onClick={async () => {
+                  setCtxMenu(null);
+                  const url = await styledPrompt("Import from URL", "Paste image, video, or audio URL");
+                  if (!url?.trim()) return;
+                  const isAudio = /\.(wav|mp3|ogg|m4a|aac|flac)(\?|$)/i.test(url);
+                  const isVideo = !isAudio && /\.(mp4|webm|mov)(\?|$)/i.test(url);
+                  const type = isAudio ? "audio" as const : isVideo ? "video" as const : "image" as const;
+                  artifacts.getState().add({
+                    type,
+                    title: url.split("/").pop()?.split("?")[0]?.slice(0, 30) || "Imported",
+                    url: url.trim(),
+                    refId: `import-${Date.now()}`,
+                    x: 100, y: 100, w: isVideo ? 320 : 200, h: isVideo ? 200 : 130,
+                  });
+                  chat.getState().addMessage(`Imported from URL`, "system");
+                }} />
+              </>
+            )}
+          </div>
+        </div>
+      )}
+      {/* ─── Styled Prompt Dialog ─── */}
+      {promptDialog && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 11000, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "20vh", background: "rgba(0,0,0,0.5)" }}
+          onClick={() => { promptDialog.resolve(null); setPromptDialog(null); }}
+        >
+          <div
+            style={{ width: 340, borderRadius: 16, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(22,22,28,0.98)", padding: 16, boxShadow: "0 16px 48px rgba(0,0,0,0.6)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#e2e8f0" }}>{promptDialog.title}</div>
+            <input
+              autoFocus
+              type="text"
+              placeholder={promptDialog.placeholder}
+              value={promptDialog.value}
+              onChange={(e) => setPromptDialog({ ...promptDialog, value: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && promptDialog.value.trim()) { promptDialog.resolve(promptDialog.value.trim()); setPromptDialog(null); }
+                if (e.key === "Escape") { promptDialog.resolve(null); setPromptDialog(null); }
+              }}
+              style={{
+                marginTop: 8, width: "100%", borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)",
+                background: "rgba(255,255,255,0.05)", padding: "8px 12px", color: "#e2e8f0",
+                fontSize: 13, outline: "none", fontFamily: "inherit",
+              }}
+            />
+            <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={() => { promptDialog.resolve(null); setPromptDialog(null); }} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: "transparent", color: "#888", cursor: "pointer", fontSize: 12 }}>Cancel</button>
+              <button onClick={() => { if (promptDialog.value.trim()) { promptDialog.resolve(promptDialog.value.trim()); setPromptDialog(null); } }} disabled={!promptDialog.value.trim()} style={{ padding: "6px 16px", borderRadius: 6, border: "none", background: promptDialog.value.trim() ? "#6366f1" : "rgba(99,102,241,0.3)", color: "#fff", cursor: promptDialog.value.trim() ? "pointer" : "default", fontSize: 12, fontWeight: 500 }}>OK</button>
+            </div>
           </div>
         </div>
       )}

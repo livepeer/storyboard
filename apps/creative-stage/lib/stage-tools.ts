@@ -661,6 +661,75 @@ export function createStageTools(ctx: StageToolContext) {
     },
 
     {
+      name: "stage_generate",
+      description: "Generate an image or short video on the canvas. Use this when the user wants to create a visual asset (key frame, reference image, or video clip) without starting a live stream.",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string", description: "Description of what to generate" },
+          type: { type: "string", enum: ["image", "video"], description: "What to create. Default: image" },
+          model: { type: "string", description: "Optional model: flux-dev, gpt-image, seedance-i2v, seedream-5-lite. Default: flux-dev for images, seedance-i2v for video" },
+        },
+        required: ["prompt"],
+      },
+      async execute(args: Record<string, unknown>) {
+        const prompt = args.prompt as string;
+        const type = (args.type as string) || "image";
+        const isVideo = type === "video";
+        const model = (args.model as string) || (isVideo ? "seedance-i2v" : "flux-dev");
+
+        if (!ctx.apiKey) {
+          return JSON.stringify({ error: "No API key — open Settings" });
+        }
+
+        ctx.say(`Generating ${type}: "${prompt.slice(0, 50)}"…`);
+
+        try {
+          const resp = await fetch(`${ctx.sdkUrl}/inference`, {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              capability: model,
+              prompt,
+              params: isVideo ? { duration: "5" } : {},
+            }),
+          });
+
+          if (!resp.ok) {
+            const text = await resp.text().catch(() => "");
+            return JSON.stringify({ error: `Generation failed (${resp.status}): ${text.slice(0, 100)}` });
+          }
+
+          const data = await resp.json();
+          const url = extractUrl(data);
+          if (!url) {
+            return JSON.stringify({ error: "No URL in response" });
+          }
+
+          const refId = `gen-${Date.now()}`;
+          ctx.addArtifact({
+            type: isVideo ? "video" : "image",
+            title: prompt.slice(0, 30),
+            url,
+            refId,
+            x: 100 + Math.random() * 200,
+            y: 50 + Math.random() * 100,
+          });
+
+          return JSON.stringify({
+            status: "generated",
+            type,
+            refId,
+            url,
+            message: `${type} created: ${refId}. Drag onto Live Output to use as stream source.`,
+          });
+        } catch (e) {
+          return JSON.stringify({ error: `Generation error: ${(e as Error).message}` });
+        }
+      },
+    },
+
+    {
       name: "stage_source",
       description: "Set the video/image input source for the live stream. The source content is published to the pipeline instead of blank frames, enabling real video-to-video transformation. Use noise_scale to control how much the AI transforms the input (0.2=faithful, 0.8=creative). Drag an image/video card onto the Live Output for the same effect.",
       parameters: {
