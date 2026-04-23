@@ -24,6 +24,7 @@ export { createCommandRouter, type CommandHandler, type CommandRouter } from "./
 export { createCapabilityResolver, type CapabilityResult, type CapabilityResolverConfig, type CapabilityResolver } from "./routing/capability-resolver";
 export { extractFalError, isRecoverableFailure } from "./routing/fal-errors";
 export { createIntentClassifier, type IntentRule, type IntentClassifier, type IntentContext } from "./routing/intent-classifier";
+export { routeModel, getModelProfiles, registerModelProfile, recordModelLatency, getModelStats, type ModelProfile, type RouteRequest, type RouteResult } from "./routing/model-router";
 
 // Streaming — Pipeline Registry & Recipes
 export { createPipelineRegistry } from "./streaming/pipeline-registry";

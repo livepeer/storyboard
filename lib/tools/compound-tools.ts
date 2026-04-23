@@ -6,6 +6,7 @@ import { useSkillStore } from "@/lib/skills/store";
 import { useChatStore } from "@/lib/chat/store";
 import { useSessionContext } from "@/lib/agents/session-context";
 import { useProjectStore } from "@/lib/projects/store";
+import { routeModel, recordModelLatency } from "@livepeer/creative-kit";
 import type { CardType } from "@/lib/canvas/types";
 
 /**
@@ -309,32 +310,19 @@ function selectCapability(
         }
       }
 
-      // Smart image model selection. Default is flux-dev (fastest, most
-      // reliable). Other models only when the USER explicitly requests
-      // them or the prompt has very specific keywords that strongly
-      // indicate a better model. Style context alone (e.g., "Van Gogh"
-      // from /story) does NOT override — flux-dev handles all styles well.
-      const allText = `${lowerHint} ${lowerPrompt}`.toLowerCase();
-
-      // GPT Image 2 — ONLY for text-heavy content that flux can't render
-      const wantsGptImage = /\b(logo|text.overlay|label|caption|infographic|diagram|ui.mockup|wireframe|typography|readable.text)\b/.test(allText);
-      if (wantsGptImage && valid?.some((c) => c.name === "gpt-image")) {
-        return { capability: "gpt-image", type: "image" };
-      }
-
-      // Explicit user request for a specific model (from user text, not style context)
-      if (/\b(using\s+)?recraft\b/.test(lowerUser) && valid?.some((c) => c.name === "recraft-v4")) {
-        return { capability: "recraft-v4", type: "image" };
-      }
-      if (/\b(using\s+)?seedream\b/.test(lowerUser) && valid?.some((c) => c.name === "seedream-5-lite")) {
-        return { capability: "seedream-5-lite", type: "image" };
-      }
-      if (/\b(using\s+)?gemini.image\b/.test(lowerUser) && valid?.some((c) => c.name === "gemini-image")) {
-        return { capability: "gemini-image", type: "image" };
-      }
-
-      // Flux Dev — fast, reliable default for ALL styles
-      return { capability: "flux-dev", type: "image" };
+      // Smart model router — scores speed (60%), style match (30%), capacity (10%).
+      // flux-dev wins by default (speed=9) unless the prompt has strong style
+      // signals that favor another model (e.g., "logo" → gpt-image).
+      const liveSet = new Set((valid || []).map((c: { name: string }) => c.name));
+      const routed = routeModel({
+        action: "generate",
+        prompt: lowerPrompt,
+        styleHint: lowerHint,
+        userText: lowerUser,
+        availableModels: liveSet.size > 0 ? liveSet : undefined,
+      });
+      console.log(`[selectCapability] generate → ${routed.model} (${routed.reason})`);
+      return { capability: routed.model, type: routed.type as CardType };
     }
     case "restyle":
       return { capability: "kontext-edit", type: "image" };
@@ -702,6 +690,7 @@ export const createMediaTool: ToolDefinition = {
 
           if (url && !effectiveError) {
             // Success — commit and break out of the attempt loop
+            recordModelLatency(currentCap, elapsed); // feed self-learning router
             const genMeta = { capability: currentCap, prompt: effectivePrompt, elapsed };
             canvas.updateCard(card.id, { url, error: undefined, ...genMeta });
             results.push({ refId, cardId: card.id, url, capability: currentCap, elapsed });
