@@ -157,8 +157,16 @@ export default function Stage() {
     return new Promise((resolve) => setPromptDialog({ title, placeholder, value: "", resolve }));
   }, []);
 
-  // Scene set tabs — each prompt creates a scene set, tabs let you switch
-  interface SceneSet { id: string; title: string; scenes: Scene[]; audioUrl?: string | null }
+  // Scene set tabs — each prompt creates a scene set, tabs let you switch.
+  // Audio is ANCHORED to the set where it was generated.
+  interface SceneSet {
+    id: string;
+    title: string;
+    scenes: Scene[];
+    audioUrl?: string | null;
+    musicPrompt?: string | null;
+    bpm?: number | null;
+  }
   const sceneSetsRef = useRef<SceneSet[]>([]);
   const [activeSetId, setActiveSetId] = useState<string | null>(null);
   const [sceneSets, setSceneSets] = useState<Array<{ id: string; title: string; sceneCount: number }>>([]);
@@ -173,6 +181,26 @@ export default function Stage() {
   // Helper to sync scene sets UI
   const syncSceneSets = useCallback(() => {
     setSceneSets(sceneSetsRef.current.map((s) => ({ id: s.id, title: s.title, sceneCount: s.scenes.length })));
+  }, []);
+
+  /** Save current audio state into the active scene set (anchor audio to set). */
+  const saveAudioToActiveSet = useCallback(() => {
+    if (!activeSetId) return;
+    const cur = sceneSetsRef.current.find((s) => s.id === activeSetId);
+    if (cur) {
+      cur.audioUrl = audioUrl;
+      cur.musicPrompt = musicPrompt;
+      cur.bpm = bpm;
+    }
+  }, [activeSetId, audioUrl, musicPrompt, bpm]);
+
+  /** Load audio state from a scene set (restore anchored audio). */
+  const loadAudioFromSet = useCallback((set: SceneSet) => {
+    if (audioRef.current) audioRef.current.pause();
+    setAudioUrl(set.audioUrl ?? null);
+    setMusicPrompt(set.musicPrompt ?? null);
+    setBpm(set.bpm ?? null);
+    setAudioPaused(false);
   }, []);
 
   // Play/pause audio when URL changes
@@ -263,34 +291,50 @@ export default function Stage() {
       setScenes: (scenes) => {
         const indexed: Scene[] = scenes.map((s, i) => ({ ...s, index: i }));
 
-        // Save audio to the CURRENT set before switching away
-        if (activeSetId) {
-          const cur = sceneSetsRef.current.find((s) => s.id === activeSetId);
-          if (cur) { cur.audioUrl = audioUrl; }
-        }
+        // Anchor: save audio to the CURRENT set before switching away
+        saveAudioToActiveSet();
 
         perfRef.current.setScenes(indexed);
         setPerfState(perfRef.current.getState());
 
-        // Create a new scene set tab — no audio (music belongs to the set that generated it)
+        // Create a new scene set tab — no audio (music is anchored to its origin set)
         const firstScene = scenes[0];
         const name = (firstScene?.title || firstScene?.prompt || "")
           .replace(/^[^,]*,\s*/, "").split(/[,.]/).at(0)?.trim().slice(0, 25)
           || `Set ${sceneSetsRef.current.length + 1}`;
         const setId = `set-${Date.now()}`;
-        sceneSetsRef.current.push({ id: setId, title: name, scenes: indexed, audioUrl: null });
+        sceneSetsRef.current.push({ id: setId, title: name, scenes: indexed });
         setActiveSetId(setId);
         syncSceneSets();
 
-        // Stop playing old set's music — new set has none yet
-        if (audioRef.current) audioRef.current.pause();
-        setAudioUrl(null);
-        setMusicPrompt(null);
+        // New set has no audio — clear playback
+        loadAudioFromSet({ id: setId, title: name, scenes: indexed });
       },
       playPerformance: () => { perfRef.current.play(controlStreamFn, setPerfState); },
       stopPerformance: () => { perfRef.current.stop(); setPerfState(perfRef.current.getState()); },
       playWhenReady: () => { pendingPlayRef.current = true; },
-      setAudioUrl, setBpm, setMusicPrompt,
+      setAudioUrl: (url: string) => {
+        setAudioUrl(url);
+        // Anchor: immediately save to active set so it persists across tab switches
+        if (activeSetId) {
+          const cur = sceneSetsRef.current.find((s) => s.id === activeSetId);
+          if (cur) cur.audioUrl = url;
+        }
+      },
+      setBpm: (b: number) => {
+        setBpm(b);
+        if (activeSetId) {
+          const cur = sceneSetsRef.current.find((s) => s.id === activeSetId);
+          if (cur) cur.bpm = b;
+        }
+      },
+      setMusicPrompt: (p: string) => {
+        setMusicPrompt(p);
+        if (activeSetId) {
+          const cur = sceneSetsRef.current.find((s) => s.id === activeSetId);
+          if (cur) cur.musicPrompt = p;
+        }
+      },
       setStreamSource: (type: "blank" | "image" | "video", url?: string, label?: string) => {
         const src = { type, url, label } as StreamSource;
         if (setSourceFnRef.current) setSourceFnRef.current(src);
@@ -300,12 +344,13 @@ export default function Stage() {
       getSceneCount: () => perfRef.current.scenes.length,
       saveSceneSet: () => {
         if (perfRef.current.scenes.length === 0) return;
-        // Update existing set or create new one
         if (activeSetId) {
           const existing = sceneSetsRef.current.find((s) => s.id === activeSetId);
           if (existing) {
             existing.scenes = [...perfRef.current.scenes];
             existing.audioUrl = audioUrl;
+            existing.musicPrompt = musicPrompt;
+            existing.bpm = bpm;
           }
         }
         syncSceneSets();
@@ -731,8 +776,17 @@ export default function Stage() {
                 setAudioUrl(newUrl);
                 setMusicPrompt(newPrompt);
                 setAudioPaused(false);
-                const bpmMatch = newPrompt.match(/(\d{2,3})\s*bpm/i);
-                if (bpmMatch) setBpm(parseInt(bpmMatch[1]));
+                const newBpm = newPrompt.match(/(\d{2,3})\s*bpm/i);
+                if (newBpm) setBpm(parseInt(newBpm[1]));
+                // Anchor: save regenerated audio to active set immediately
+                if (activeSetId) {
+                  const cur = sceneSetsRef.current.find((s) => s.id === activeSetId);
+                  if (cur) {
+                    cur.audioUrl = newUrl;
+                    cur.musicPrompt = newPrompt;
+                    if (newBpm) cur.bpm = parseInt(newBpm[1]);
+                  }
+                }
                 chat.getState().addMessage("Music regenerated!", "system");
               } else {
                 chat.getState().addMessage("Music regen: no audio URL in response", "system");
@@ -790,26 +844,22 @@ export default function Stage() {
             const target = sceneSetsRef.current[idx];
             if (!target || target.id === activeSetId) return;
 
-            // Save current scenes back
+            // Anchor: save current set's scenes + audio before switching
+            saveAudioToActiveSet();
             if (activeSetId) {
               const cur = sceneSetsRef.current.find((s) => s.id === activeSetId);
-              if (cur) { cur.scenes = [...perfRef.current.scenes]; cur.audioUrl = audioUrl; }
+              if (cur) cur.scenes = [...perfRef.current.scenes];
             }
 
-            // Switch to target scene set (same stream, different scenes)
+            // Switch to target scene set
             perfRef.current.stop();
             perfRef.current.setScenes(target.scenes);
             setPerfState(perfRef.current.getState());
             setActiveSetId(target.id);
             syncSceneSets();
 
-            // Switch audio — pause current, play target's
-            if (audioRef.current) audioRef.current.pause();
-            if (target.audioUrl) {
-              setAudioUrl(target.audioUrl);
-            } else {
-              setAudioUrl(null);
-            }
+            // Restore target set's anchored audio
+            loadAudioFromSet(target);
 
             // Smooth transition to new tab: slerp morph into first scene,
             // then start the timeline after the morph completes.
