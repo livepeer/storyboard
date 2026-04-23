@@ -1,5 +1,5 @@
 {
   "buildCommand": "cd ../.. && npm run build:workspaces && cd apps/creative-stage && next build",
-  "installCommand": "cd ../.. && bun install",
+  "installCommand": "cd ../.. && bun install --frozen-lockfile",
   "framework": "nextjs"
 }
