@@ -7,7 +7,7 @@
  */
 
 import { create } from "zustand";
-import type { Story, StoryListItem, StoryStatus } from "./types";
+import type { Story, StoryScene, StoryListItem, StoryStatus } from "./types";
 import { STORY_STORE_CAP, STORY_DRAFT_TTL_MS } from "./types";
 
 const STORAGE_KEY = "storyboard:stories";
