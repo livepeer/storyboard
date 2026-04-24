@@ -8,6 +8,7 @@ export { createArtifactStore, type ArtifactStoreOptions } from "./stores/create-
 export { createChatStore } from "./stores/create-chat-store";
 export { createProjectStore, type ProjectStoreOptions } from "./stores/create-project-store";
 export { createGroupManager } from "./stores/create-group-manager";
+export { createHistoryManager, type HistoryManager, type CanvasSnapshot, type NamedSnapshot } from "./stores/history-manager";
 export { createConversationContext, type WorkItem, type WorkItemType, type ConversationContextState } from "./stores/create-conversation-context";
 export type {
   PipelineItem, Project, ProjectPipeline, ItemStatus, ProjectStatus,
