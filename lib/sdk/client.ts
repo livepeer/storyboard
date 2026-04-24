@@ -63,6 +63,12 @@ export async function sdkFetch<T = unknown>(
 
       if (!resp.ok) {
         const err = await resp.text();
+        // Auto-retry 503 (no GPU available) once after 3s
+        if (resp.status === 503 && attempt < MAX_RETRIES) {
+          console.warn(`[SDK] ${path} 503 (no GPU), retrying in 3s (attempt ${attempt + 1})`);
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
         throw new Error(`HTTP ${resp.status}: ${err.slice(0, 200)}`);
       }
 

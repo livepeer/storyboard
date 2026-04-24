@@ -543,7 +543,12 @@ export function Card({ card }: { card: CardData }) {
             color: "#c4b5fd",
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: prompt ? 2 : 0 }}>
-              <span style={{ fontWeight: 600, color: colors.text }}>{cap || "generate"}</span>
+              <span style={{ fontWeight: 600, color: colors.text }} title={card.routeReason || "auto-selected"}>
+                {cap || "generate"}
+                {card.routeReason && card.routeReason !== "auto" && (
+                  <span style={{ fontWeight: 400, fontSize: 8, color: "#a78bfa", marginLeft: 4 }}>({card.routeReason})</span>
+                )}
+              </span>
               <span style={{ color: "#34d399" }}>
                 {elapsed ? `${(elapsed / 1000).toFixed(1)}s` : ""}
               </span>

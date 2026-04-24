@@ -486,6 +486,8 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
       const summary = await executePlan(plan);
       if (summary) {
         say(summary, "agent");
+        // Satisfaction feedback — ask if they're happy with results
+        say("Happy with the results? Pick favorites and right-click → keep, or type to iterate.", "system");
         return { handled: true };
       }
     }

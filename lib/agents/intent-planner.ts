@@ -146,8 +146,22 @@ async function executeComparisonPlan(plan: IntentPlan): Promise<string> {
   }));
   const result = await executeTool("create_media", { steps });
   if (result.success) {
-    const data = result.data as { results?: Array<{ refId: string; capability: string }> };
+    const data = result.data as { results?: Array<{ refId: string; capability: string; cardId?: string }> };
     const summary = data?.results?.map((r) => `${r.refId} (${r.capability})`).join(", ");
+
+    // Auto-arrange comparison cards in a row so user can see them side by side
+    try {
+      const { useCanvasStore } = await import("@/lib/canvas/store");
+      const canvas = useCanvasStore.getState();
+      const resultCards = data?.results || [];
+      const positions = resultCards.map((r, i) => {
+        const card = canvas.cards.find((c) => c.refId === r.refId);
+        if (!card) return null;
+        return { cardId: card.id, x: 40 + i * 350, y: 80, w: 320, h: 280 };
+      }).filter(Boolean) as Array<{ cardId: string; x: number; y: number; w: number; h: number }>;
+      if (positions.length > 0) canvas.applyLayout(positions);
+    } catch { /* layout is best-effort */ }
+
     return `Model comparison: ${plan.models!.length} versions — ${summary}`;
   }
   return `Comparison failed: ${result.error || "check canvas"}`;

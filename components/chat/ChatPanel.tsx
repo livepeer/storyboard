@@ -7,7 +7,7 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { createVoiceInput, isSpeechRecognitionSupported, ConfirmationCard, type ConfirmationRequest } from "@livepeer/creative-kit";
 import { MessageBubble } from "./MessageBubble";
 import { ToolPill } from "./ToolPill";
-import { QuickActions } from "./QuickActions";
+import { QuickActions, savePromptToHistory } from "./QuickActions";
 import { parseCommand, executeCommand } from "@/lib/skills/commands";
 import { isApplyPendingIntent, applyPendingStory, isStoryContinuationIntent, continueStory } from "@/lib/story/commands";
 import { isFilmApplyIntent, applyPendingFilm } from "@/lib/film/commands";
@@ -239,6 +239,7 @@ export function ChatPanel() {
     async (text: string) => {
       activeCount.current++;
       addMessage(text, "user");
+      savePromptToHistory(text);
 
       // Step 1: Classify intent
       const { useProjectStore } = await import("@/lib/projects/store");

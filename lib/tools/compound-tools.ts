@@ -544,14 +544,17 @@ export const createMediaTool: ToolDefinition = {
 
       let capability: string;
       let type: CardType;
+      let routeReason = "auto";
       const explicitOverride = step.model_override || ("modelHint" in styled ? styled.modelHint : undefined) as string | undefined;
 
       if (explicitOverride) {
         // Explicit model override always wins (no locking)
         ({ capability, type } = selectCapability(step.action, step.style_hint, explicitOverride, !!stepSourceUrl, effectivePrompt));
+        routeReason = "user override";
       } else if (lockedCapability[step.action]) {
         // Reuse the model selected for the first step of this action
         ({ capability, type } = lockedCapability[step.action]);
+        routeReason = "model locked (consistency)";
       } else {
         // First step of this action — select and lock
         ({ capability, type } = selectCapability(step.action, step.style_hint, undefined, !!stepSourceUrl, effectivePrompt));
@@ -629,6 +632,7 @@ export const createMediaTool: ToolDefinition = {
             // Override capability to kontext-edit — it's the only model that
             // preserves the reference face. Text-to-image models ignore image_url.
             capability = "kontext-edit";
+            routeReason = "face lock active";
             console.log(`[create_media] Face lock active (${faceLock.refId}) → kontext-edit`);
           } else if (step.action === "animate" && !step.source_url) {
             params.image_url = faceLock.url;
@@ -656,6 +660,7 @@ export const createMediaTool: ToolDefinition = {
       const _effectivePrompt = effectivePrompt;
       const _attemptChain = [...attemptChain];
       const _rawDuration = rawDuration;
+      const _routeReason = routeReason;
 
       inferenceTasks.push(async () => {
         let stepDone = false;
@@ -738,7 +743,8 @@ export const createMediaTool: ToolDefinition = {
 
             if (url && !effectiveError) {
               recordModelLatency(currentCap, elapsed);
-              const genMeta = { capability: currentCap, prompt: _effectivePrompt, elapsed };
+              const fallbackNote = attemptIdx > 0 ? ` (fallback from ${_attemptChain[0]})` : "";
+              const genMeta = { capability: currentCap, prompt: _effectivePrompt, elapsed, routeReason: _routeReason + fallbackNote };
               canvas.updateCard(_card.id, { url, error: undefined, ...genMeta });
               results[_i] = { refId: _refId, cardId: _card.id, url, capability: currentCap, elapsed };
               if (_step.depends_on !== undefined && results[_step.depends_on]) {

@@ -22,6 +22,8 @@ export interface Card extends Artifact {
   coverText?: { title: string; subtitle?: string; stats?: string };
   /** Generation time in ms */
   elapsed?: number;
+  /** Why this model was chosen: "auto", "face lock", "user override", "fallback from X" */
+  routeReason?: string;
   /** Pinned cards stay fixed on screen when panning/zooming */
   pinned?: boolean;
   /** Screen-space position captured at pin time */
