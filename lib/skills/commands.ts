@@ -1459,22 +1459,27 @@ async function handleRender(args: string): Promise<string> {
   }
 
   const { useChatStore } = await import("@/lib/chat/store");
-  useChatStore.getState().addMessage(`Rendering ${cards.length} cards into video...`, "system");
+  const progressMsg = useChatStore.getState().addMessage(`Rendering ${cards.length} cards... 0%`, "system");
 
   try {
     const { renderProject } = await import("@livepeer/creative-kit");
+    let lastPct = -1;
     const result = await renderProject({
       cards,
       musicSource: musicUrl,
       transition: "crossfade",
       transitionDuration: 0.5,
       onProgress: (pct) => {
-        const pctInt = Math.round(pct * 100);
-        if (pctInt % 25 === 0 && pctInt > 0) {
-          useChatStore.getState().addMessage(`Rendering: ${pctInt}%`, "system");
+        const pctInt = Math.min(Math.round(pct * 100), 100);
+        if (pctInt !== lastPct) {
+          lastPct = pctInt;
+          useChatStore.getState().updateMessage(progressMsg.id, `Rendering ${cards.length} cards... ${pctInt}%`);
         }
       },
     });
+
+    // Update progress to done
+    useChatStore.getState().updateMessage(progressMsg.id, `Rendered ${cards.length} cards — ${result.duration.toFixed(1)}s video (${(result.size / 1024 / 1024).toFixed(1)}MB)`);
 
     // Add rendered video to canvas
     const cardNum = canvas.cards.length + 1;

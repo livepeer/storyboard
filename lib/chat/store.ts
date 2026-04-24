@@ -17,6 +17,7 @@ interface ChatState {
   isProcessing: boolean;
 
   addMessage: (text: string, role: MessageRole) => ChatMessage;
+  updateMessage: (id: string, text: string) => void;
   setProcessing: (v: boolean) => void;
   clearMessages: () => void;
 }
@@ -42,6 +43,11 @@ export const useChatStore = create<ChatState>((set) => ({
     set((s) => ({ messages: [...s.messages, msg] }));
     return msg;
   },
+
+  updateMessage: (id, text) =>
+    set((s) => ({
+      messages: s.messages.map((m) => (m.id === id ? { ...m, text } : m)),
+    })),
 
   setProcessing: (v) => set({ isProcessing: v }),
 
