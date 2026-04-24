@@ -129,6 +129,16 @@ async function proxyToGemini(body: Record<string, unknown>, model: string) {
         parameters: t.function.parameters,
       })),
     }];
+    // Force Gemini to call a tool on the FIRST turn (user message → tool call).
+    // Without this, Gemini often returns empty STOP for simple requests.
+    // On subsequent turns (after tool results), allow text responses.
+    const hasToolResults = contents.some((c: unknown) => {
+      const parts = (c as { parts?: Array<{ functionResponse?: unknown }> }).parts;
+      return parts?.some((p) => p.functionResponse);
+    });
+    if (!hasToolResults) {
+      geminiBody.tool_config = { function_calling_config: { mode: "ANY" } };
+    }
   }
 
   const resp = await fetch(
