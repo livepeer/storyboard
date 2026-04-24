@@ -63,3 +63,4 @@ export { planRemix, detectRemixIntent, type RemixRequest, type RemixPlan, type R
 export { createVoiceInput, isSpeechRecognitionSupported, type VoiceInput, type VoiceInputOptions } from "./agent/voice-input";
 export { exportToJson, buildVideoManifest, buildStoryboardHtml, listSocialPlatforms, getSocialSpecs, type ExportFormat, type ExportOptions, type ExportResult, type ExportableScene, type SocialPlatform } from "./agent/export-pipeline";
 export { executeDAG, buildProjectDAG, type DAGNode, type DAGResult, type DAGOptions } from "./agent/dag-executor";
+export { buildVariationSteps, type VariationOptions, type VariationStep } from "./agent/variation-engine";
