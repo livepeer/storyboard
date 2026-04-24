@@ -20,6 +20,7 @@ import { useSkillStore } from "@/lib/skills/store";
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [trainingOpen, setTrainingOpen] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   useEffect(() => {
     // Fetch live capabilities and skill registry
@@ -48,8 +49,12 @@ export default function Home() {
 
     setMounted(true);
 
-    // Undo/redo keyboard shortcuts
-    const undoHandler = (e: KeyboardEvent) => {
+    // Keyboard shortcuts
+    const keyHandler = (e: KeyboardEvent) => {
+      // Don't intercept when typing in an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+
       if ((e.metaKey || e.ctrlKey) && e.key === "z") {
         e.preventDefault();
         import("@/lib/canvas/store").then((m) => {
@@ -57,9 +62,23 @@ export default function Home() {
           else m.useCanvasStore.getState().undo();
         });
       }
+      // ? → shortcuts modal
+      if (e.key === "?" && !e.metaKey && !e.ctrlKey) {
+        setShowShortcuts((v) => !v);
+      }
+      // Delete/Backspace → remove selected cards
+      if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey) {
+        import("@/lib/canvas/store").then((m) => {
+          const s = m.useCanvasStore.getState();
+          if (s.selectedCardIds.size > 0) {
+            for (const id of s.selectedCardIds) s.removeCard(id);
+            s.clearSelection();
+          }
+        });
+      }
     };
-    window.addEventListener("keydown", undoHandler);
-    return () => window.removeEventListener("keydown", undoHandler);
+    window.addEventListener("keydown", keyHandler);
+    return () => window.removeEventListener("keydown", keyHandler);
   }, []);
 
   // Render nothing on server — avoids all hydration mismatches from
@@ -74,6 +93,33 @@ export default function Home() {
       <ContextMenu />
       <CameraWidget />
       <TrainingModal open={trainingOpen} onClose={() => setTrainingOpen(false)} />
+
+      {/* Keyboard shortcuts modal */}
+      {showShortcuts && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60" onClick={() => setShowShortcuts(false)}>
+          <div className="w-80 rounded-xl bg-[#1a1a2e] p-5 shadow-2xl border border-white/10" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-white mb-3">Keyboard Shortcuts</h3>
+            <div className="space-y-1.5 text-xs text-gray-300">
+              {[
+                ["Cmd+Z", "Undo"],
+                ["Cmd+Shift+Z", "Redo"],
+                ["Delete / Backspace", "Remove selected cards"],
+                ["Right-click card", "Context menu (restyle, animate, etc.)"],
+                ["Double-click image", "Fullscreen view"],
+                ["Shift+drag", "Lasso select"],
+                ["Scroll wheel", "Zoom canvas"],
+                ["?", "Toggle this help"],
+              ].map(([key, desc]) => (
+                <div key={key} className="flex justify-between">
+                  <kbd className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-mono text-purple-300">{key}</kbd>
+                  <span className="text-gray-400">{desc}</span>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setShowShortcuts(false)} className="mt-4 w-full rounded bg-white/10 py-1.5 text-xs text-white hover:bg-white/20 transition-colors">Close</button>
+          </div>
+        </div>
+      )}
     </>
   );
 }
