@@ -87,17 +87,24 @@ export const useCanvasStore = create<CanvasState>()(
   selectedEdgeIdx: -1,
 
   undo: () => {
-    const { cards, edges } = get();
+    const { cards } = get();
     const prev = history.undo();
     if (!prev) return;
-    // Save current state for redo (undo() already pushed to redo stack)
     set({ cards: prev.cards as Card[], edges: prev.edges as ArrowEdge[] });
+    // Chat feedback
+    const diff = cards.length - (prev.cards?.length || 0);
+    const msg = diff > 0 ? `Undone: removed ${diff} card${diff > 1 ? "s" : ""}` : diff < 0 ? `Undone: restored ${-diff} card${-diff > 1 ? "s" : ""}` : "Undone";
+    try { import("@/lib/chat/store").then((m) => m.useChatStore.getState().addMessage(msg, "system")); } catch {}
   },
 
   redo: () => {
+    const { cards } = get();
     const next = history.redo();
     if (!next) return;
     set({ cards: next.cards as Card[], edges: next.edges as ArrowEdge[] });
+    const diff = (next.cards?.length || 0) - cards.length;
+    const msg = diff > 0 ? `Redone: restored ${diff} card${diff > 1 ? "s" : ""}` : diff < 0 ? `Redone: removed ${-diff} card${-diff > 1 ? "s" : ""}` : "Redone";
+    try { import("@/lib/chat/store").then((m) => m.useChatStore.getState().addMessage(msg, "system")); } catch {}
   },
 
   canUndo: () => history.canUndo,
@@ -320,6 +327,14 @@ export const useCanvasStore = create<CanvasState>()(
         if (state?.cards?.length) {
           const maxId = Math.max(...state.cards.map((c) => parseInt(c.id) || 0));
           if (maxId >= nextCardId) nextCardId = maxId + 1;
+
+          // Detect blob URLs that won't survive refresh — mark as expired
+          for (const card of state.cards) {
+            if (card.url && card.url.startsWith("blob:")) {
+              card.error = "Local media expired after refresh. Use /render or /mix again to regenerate, or /save canvas before closing.";
+              card.url = undefined;
+            }
+          }
         }
       },
     },

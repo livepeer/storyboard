@@ -881,6 +881,22 @@ export const createMediaTool: ToolDefinition = {
       });
     } catch { /* non-critical */ }
 
+    // Contextual "what next?" suggestions
+    const successResults = results.filter((r) => !r.error && r.url);
+    if (successResults.length > 0) {
+      const firstRef = successResults[0].refId;
+      const isImage = successResults[0].capability && !successResults[0].capability.includes("i2v") && !successResults[0].capability.includes("t2v");
+      const suggestions: string[] = [];
+      if (isImage && successResults.length === 1) {
+        suggestions.push(`/vary ${firstRef}`, `Right-click → Animate`, `Right-click → Restyle`);
+      } else if (successResults.length > 1) {
+        suggestions.push(`/render`, `/export social all`, `Right-click any card for options`);
+      }
+      if (suggestions.length > 0) {
+        useChatStore.getState().addMessage(`Try next: ${suggestions.join("  |  ")}`, "system");
+      }
+    }
+
     return {
       success: results.every((r) => !r.error),
       data: {

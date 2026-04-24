@@ -81,6 +81,10 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleExport(cmd.args);
     case "save":
       return saveCards(cmd.args);
+    case "load":
+      return handleLoad(cmd.args);
+    case "gallery":
+      return handleGallery();
     case "context":
       return showContext(cmd.args);
     case "context/gen":
@@ -183,6 +187,9 @@ function showHelp(): string {
     "  /layout list                Show available layout presets",
     "  /save [refId]               Save card(s) to file",
     "  /export                     Export canvas as JSON (copied to clipboard)",
+    "  /save canvas                Export entire canvas as portable JSON file",
+    "  /load canvas                Import a saved canvas JSON file",
+    "  /gallery                    Browse all cards with media as a list",
     "  /export social <platform>   Export cards cropped for Instagram/TikTok/YouTube/Twitter/all",
     "  /render [project] [--music card]  Render canvas into a single video with transitions",
     "  /vary <card-refId>          Generate 4 variations of a card (pick your favorite)",
@@ -658,6 +665,26 @@ async function saveCards(args: string): Promise<string> {
     }
   }
 
+  // /save canvas — export entire canvas as a portable JSON file
+  if (arg === "canvas") {
+    const data = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      cards: canvasState.cards,
+      edges: canvasState.edges,
+      viewport: canvasState.viewport,
+    };
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `storyboard-canvas-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    return `Canvas exported (${canvasState.cards.length} cards, ${canvasState.edges.length} edges). Download started.`;
+  }
+
   // /save <refId> — save a specific card
   const card = canvasState.cards.find(
     (c) => c.refId.toLowerCase() === arg || c.id === arg
@@ -668,7 +695,7 @@ async function saveCards(args: string): Promise<string> {
     return ok ? `Saved ${card.refId}.` : `Failed to save ${card.refId}.`;
   }
 
-  return `Usage: /save — selected or all | /save all | /save <refId> | /save episode <name>`;
+  return `Usage: /save — selected or all | /save all | /save <refId> | /save canvas | /save episode <name>`;
 }
 
 async function handleTryonVideo(args: string): Promise<string> {
@@ -1484,16 +1511,36 @@ async function handleRender(args: string): Promise<string> {
     // Add rendered video to canvas
     const cardNum = canvas.cards.length + 1;
     const refId = `render-${cardNum}`;
+    // Try to upload blob to persistent storage so it survives refresh
+    let persistentUrl = result.url;
+    try {
+      const blob = await fetch(result.url).then((r) => r.blob());
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+      const uploadResp = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataUrl, fileName: result.fileName }),
+      });
+      if (uploadResp.ok) {
+        const { url: uploaded } = await uploadResp.json();
+        if (uploaded) persistentUrl = uploaded;
+      }
+    } catch { /* fallback to blob URL */ }
+
     const renderCard = useCanvasStore.getState().addCard({
       type: "video",
       title: `Rendered: ${cards.length} scenes`,
       refId,
-      url: result.url,
+      url: persistentUrl,
     });
 
     // Auto-download
     const a = document.createElement("a");
-    a.href = result.url;
+    a.href = result.url; // use blob URL for download (faster)
     a.download = result.fileName;
     a.click();
 
@@ -1620,4 +1667,59 @@ async function handleExport(args: string): Promise<string> {
 
   // Default: original JSON export
   return exportCanvas();
+}
+
+async function handleLoad(args: string): Promise<string> {
+  const sub = args.trim().toLowerCase();
+  if (sub !== "canvas") return "Usage: /load canvas — import a previously saved canvas JSON file";
+
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) { resolve("No file selected."); return; }
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        if (!data.cards || !Array.isArray(data.cards)) {
+          resolve("Invalid canvas file — no cards array found.");
+          return;
+        }
+        const canvas = useCanvasStore.getState();
+        // Push current state for undo
+        const { history } = await import("@/lib/canvas/store");
+        history.pushUndo({ cards: canvas.cards, edges: canvas.edges });
+        // Replace canvas state
+        useCanvasStore.setState({
+          cards: data.cards,
+          edges: data.edges || [],
+        });
+        resolve(`Loaded ${data.cards.length} cards and ${(data.edges || []).length} edges from "${file.name}". Cmd+Z to undo.`);
+      } catch (e) {
+        resolve(`Failed to load: ${e instanceof Error ? e.message : "invalid JSON"}`);
+      }
+    };
+    input.click();
+  });
+}
+
+function handleGallery(): string {
+  const cards = useCanvasStore.getState().cards.filter((c) => c.url);
+  if (cards.length === 0) return "No cards with media on the canvas.";
+
+  const lines = cards.map((c) => {
+    const model = c.capability ? ` [${c.capability}]` : "";
+    const prompt = c.prompt ? ` — ${c.prompt.slice(0, 40)}` : "";
+    return `**${c.refId}**${model}${prompt}`;
+  });
+
+  return [
+    `**Gallery** — ${cards.length} cards`,
+    "",
+    ...lines,
+    "",
+    "Right-click any card on canvas for options. Double-click to zoom in.",
+  ].join("\n");
 }
