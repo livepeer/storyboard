@@ -175,6 +175,16 @@ export class StoryboardGeminiProvider implements LLMProvider {
     const contents: GeminiMessage[] = [];
     let systemText = "";
 
+    // Build tool_call_id → function name map so tool results can resolve their name
+    const callIdToName = new Map<string, string>();
+    for (const m of req.messages) {
+      if (m.role === "assistant" && m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          if (tc.id) callIdToName.set(tc.id, tc.name);
+        }
+      }
+    }
+
     for (const m of req.messages) {
       if (m.role === "system") {
         systemText += (systemText ? "\n" : "") + m.content;
@@ -209,7 +219,7 @@ export class StoryboardGeminiProvider implements LLMProvider {
           parts: [
             {
               functionResponse: {
-                name: m.tool_name ?? "",
+                name: m.tool_name || (m.tool_call_id ? callIdToName.get(m.tool_call_id) : undefined) || "unknown_tool",
                 response: responseObj,
               },
             },
