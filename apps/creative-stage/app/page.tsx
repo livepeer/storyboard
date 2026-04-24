@@ -775,14 +775,27 @@ export default function Stage() {
       const statusMsg = chat.getState().addMessage(`Source: "${dropped.title}" → analyzing...`, "system");
       sourceStatusMsgRef.current = statusMsg.id;
 
-      // Step 2: Analyze image in background → inject as prompt
+      // Step 2: Analyze image via server-side API → inject as stream prompt
       if (srcType === "image") {
         (async () => {
           try {
-            const { analyzeImage } = await import("@/lib/tools/image-analysis");
-            const result = await analyzeImage(dropped.url!);
-            if (result.ok) {
-              const { analysis } = result;
+            const imgResp = await fetch(dropped.url!);
+            const blob = await imgResp.blob();
+            if (blob.size > 10_000_000) throw new Error("Image too large");
+            const buf = await blob.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            let bin = "";
+            for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+            const b64 = btoa(bin);
+
+            const analyzeResp = await fetch("/api/analyze", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ imageBase64: b64, mimeType: blob.type || "image/jpeg" }),
+            });
+            const result = await analyzeResp.json() as { ok: boolean; analysis?: Record<string, string> };
+            if (result.ok && result.analysis) {
+              const analysis = result.analysis;
               const streamPrompt = [
                 analysis.style,
                 analysis.palette ? `color palette: ${analysis.palette}` : "",
