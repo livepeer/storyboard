@@ -40,6 +40,8 @@ export { resolveStyle, buildPrefix, buildMotionPrefix, mergeWithEpisode, type St
 export { buildAttemptChain, executeWithFallback, type FallbackChains, type InferenceCall, type InferenceResult, type FallbackOptions } from "./routing/fallback-handler";
 export { checkSceneGate, checkRegenerateGate, checkModelGate, configureGates, type GateCheck, type GateConfig } from "./agent/confirmation-gates";
 export { ConfirmationCard, type ConfirmationRequest } from "./ui/ConfirmationCard";
+export { PipelineTraceView } from "./ui/PipelineTrace";
+export { createTrace, tracePhase, traceCompleted, traceError, finalizeTrace, formatTraceSummary, type PipelineTrace, type TraceEvent } from "./agent/trace";
 
 // Utils
 export { resizeImageForModel } from "./utils/resize-image";
