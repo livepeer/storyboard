@@ -37,6 +37,7 @@ export { createRequestContext, type RequestContext } from "./agent/request-conte
 export { createRequestQueue, type RequestQueue, type ProcessFn } from "./agent/request-queue";
 export { humanizeError, classifyError, isRecoverable, type AgentError } from "./agent/errors";
 export { resolveStyle, buildPrefix, buildMotionPrefix, mergeWithEpisode, type StyleResolution, type CreativeContextLike, type SkillOverride } from "./agent/context-merger";
+export { buildAttemptChain, executeWithFallback, type FallbackChains, type InferenceCall, type InferenceResult, type FallbackOptions } from "./routing/fallback-handler";
 
 // Utils
 export { resizeImageForModel } from "./utils/resize-image";
