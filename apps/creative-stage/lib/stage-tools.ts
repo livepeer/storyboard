@@ -15,7 +15,7 @@ interface ResolvedRecipe {
   extras?: Record<string, unknown>;
 }
 
-function resolveStageRecipe(recipeId?: string): ResolvedRecipe {
+export function resolveStageRecipe(recipeId?: string): ResolvedRecipe {
   const recipe = recipeId ? registry.getRecipe(recipeId) : undefined;
   if (recipe) {
     const d = recipe.defaults as Record<string, unknown>;
@@ -51,7 +51,7 @@ function buildStreamGraph(pipelineId = "longlive") {
 /** Stream start params that enable video-to-video mode.
  *  input_mode: "video" is THE gating parameter — without it, published
  *  frames are completely dropped by the pipeline. */
-function buildStreamStartParams(recipe: ResolvedRecipe, prompt: string, noise: number, vaceRefUrl?: string) {
+export function buildStreamStartParams(recipe: ResolvedRecipe, prompt: string, noise: number, vaceRefUrl?: string) {
   const params: Record<string, unknown> = {
     prompt,
     prompts: prompt,

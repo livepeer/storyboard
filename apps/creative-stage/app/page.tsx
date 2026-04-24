@@ -12,7 +12,7 @@ import {
 import { ScopePlayer, type ScopeStreamState, type StreamSource } from "@livepeer/scope-player";
 import type { ScopeParams } from "@livepeer/scope-player";
 import { AgentRunner, ToolRegistry, WorkingMemoryStore, SessionMemoryStore } from "@livepeer/agent";
-import { createStageTools, type StageToolContext } from "../lib/stage-tools";
+import { createStageTools, resolveStageRecipe, buildStreamStartParams, type StageToolContext } from "../lib/stage-tools";
 import { PerformanceEngine, type PerformanceState, type Scene } from "../lib/performance";
 import { STAGE_SYSTEM_PROMPT } from "../lib/stage-prompt";
 import { SceneStrip } from "../components/SceneStrip";
@@ -341,38 +341,133 @@ export default function Stage() {
     const sdk = getSdkConfig();
     const say = (msg: string) => chat.getState().addMessage(msg, "system");
 
-    // /demo command — one-command wow moment
+    // /demo command — full pipeline: image → music → stream → scenes → auto-play
     if (text.trim().startsWith("/demo")) {
       const concept = text.trim().slice(5).trim() || "dreamy sunset landscape";
-      say(`Starting demo: "${concept}" — generating image, stream, music, and performance...`);
-      // Step 1: Generate key image
-      try {
-        const hdrs = { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) };
-        const imgResp = await fetch(`${sdk.url}/inference`, {
+      if (!sdk.key) { say("Set your API key first (gear icon, top-right)."); return; }
+      const hdrs = { "Content-Type": "application/json", Authorization: `Bearer ${sdk.key}` };
+
+      say(`Demo: "${concept}" — generating image, music, stream, and performance...`);
+
+      // Step 1: Generate key image + music in parallel
+      let imgUrl: string | undefined;
+      let musicUrl: string | undefined;
+      const [imgResult, musicResult] = await Promise.allSettled([
+        // Image
+        fetch(`${sdk.url}/inference`, {
           method: "POST", headers: hdrs,
           body: JSON.stringify({ capability: "flux-dev", prompt: `cinematic ${concept}, beautiful lighting`, params: {} }),
-        });
-        if (imgResp.ok) {
-          const imgData = await imgResp.json();
-          const imgUrl = imgData.image_url || imgData.images?.[0]?.url || imgData.data?.images?.[0]?.url;
-          if (imgUrl) {
-            artifacts.getState().add({ type: "image", title: `Demo: ${concept}`, url: imgUrl, refId: `demo-${Date.now()}`, x: 50, y: 50, w: 320, h: 280 });
-            say("Image generated. Starting live stream...");
-          }
-        }
-      } catch { say("Image generation skipped"); }
-      // Step 2: Start stream with scenes
+        }).then(async (r) => {
+          if (!r.ok) return null;
+          const d = await r.json();
+          return d.image_url || d.images?.[0]?.url || d.data?.images?.[0]?.url || null;
+        }),
+        // Music
+        fetch(`${sdk.url}/inference`, {
+          method: "POST", headers: hdrs,
+          body: JSON.stringify({
+            capability: "music",
+            prompt: `cinematic ${concept} soundtrack, orchestral, emotional`,
+            params: {
+              prompt: `cinematic ${concept} soundtrack, orchestral, emotional`,
+              lyrics_prompt: `[Intro]\n[Verse]\ncinematic ${concept}\n[Chorus]\n${concept} theme\n[Outro]`,
+            },
+          }),
+        }).then(async (r) => {
+          if (!r.ok) return null;
+          const d = await r.json();
+          return d.audio_url || d.data?.audio?.url || d.url || null;
+        }),
+      ]);
+
+      if (imgResult.status === "fulfilled" && imgResult.value) {
+        imgUrl = imgResult.value;
+        artifacts.getState().add({ type: "image", title: `Demo: ${concept}`, url: imgUrl, refId: `demo-img-${Date.now()}`, x: 50, y: 50, w: 320, h: 280 });
+        say("Image generated.");
+      } else { say("Image generation failed — continuing without."); }
+
+      if (musicResult.status === "fulfilled" && musicResult.value) {
+        musicUrl = musicResult.value;
+        setAudioUrl(musicUrl as string);
+        setMusicPrompt(`cinematic ${concept}`);
+        setBpm(90); // cinematic default
+        say("Music generated.");
+      } else { say("Music generation failed — continuing without."); }
+
+      // Step 2: Create scenes
       const scenes = [
-        { title: "Opening", prompt: `wide establishing shot, ${concept}, cinematic`, preset: "cinematic", duration: 8 },
-        { title: "Close-up", prompt: `close-up detail, ${concept}, dramatic lighting`, preset: "dreamy", duration: 8 },
-        { title: "Abstract", prompt: `abstract expressionist interpretation of ${concept}`, preset: "abstract", duration: 6 },
-        { title: "Finale", prompt: `golden hour, ${concept}, breathtaking beauty`, preset: "painterly", duration: 8 },
+        { title: "Opening", prompt: `wide establishing shot, ${concept}, cinematic golden hour`, preset: "cinematic", duration: 10 },
+        { title: "Close-up", prompt: `intimate close-up detail, ${concept}, dramatic rim lighting`, preset: "dreamy", duration: 8 },
+        { title: "Abstract", prompt: `abstract expressionist interpretation, ${concept}, bold colors`, preset: "abstract", duration: 6 },
+        { title: "Finale", prompt: `breathtaking panorama, ${concept}, magical golden light`, preset: "painterly", duration: 10 },
       ];
-      // Create scenes via context
-      const indexed = scenes.map((s, i) => ({ ...s, index: i }));
+      const indexed: Scene[] = scenes.map((s, i) => ({ ...s, index: i }));
       perfRef.current.setScenes(indexed);
       setPerfState(perfRef.current.getState());
-      say(`4 scenes created. Type "start a ${concept} stream" to begin streaming, or use the chat to ask the agent.`);
+
+      // Save as a scene set
+      const setId = `demo-${Date.now()}`;
+      sceneSetsRef.current.push({ id: setId, title: `Demo: ${concept}`, scenes: indexed, audioUrl: musicUrl ?? undefined, musicPrompt: `cinematic ${concept}`, bpm: 90 });
+      setActiveSetId(setId);
+      syncSceneSets();
+
+      say(`4 scenes + music ready. Starting stream...`);
+
+      // Step 3: Start stream with first scene
+      try {
+        const startResp = await fetch(`${sdk.url}/stream/start`, {
+          method: "POST", headers: hdrs,
+          body: JSON.stringify({
+            model_id: "scope",
+            params: buildStreamStartParams(
+              resolveStageRecipe(undefined),
+              scenes[0].prompt,
+              0.5,
+              imgUrl, // use generated image as VACE reference
+            ),
+          }),
+        });
+        if (startResp.ok) {
+          const startData = await startResp.json();
+          if (startData.stream_id) {
+            streamIdRef.current = startData.stream_id;
+            setActiveStreamId(startData.stream_id);
+            // Auto-play performance when stream becomes ready
+            pendingPlayRef.current = true;
+            say(`Stream started (${startData.stream_id}). Performance will auto-play when ready.`);
+
+            // If music is playing, enable beat sync
+            if (musicUrl) {
+              setTimeout(async () => {
+                if (!streamIdRef.current) return;
+                try {
+                  await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+                    method: "POST", headers: hdrs,
+                    body: JSON.stringify({
+                      type: "parameters",
+                      params: { modulation: { noise_scale: { enabled: true, shape: "cosine", rate: "bar", depth: 0.3 } } },
+                    }),
+                  });
+                  say("Beat sync enabled.");
+                } catch {}
+              }, 3000);
+            }
+          }
+        } else {
+          say("Stream start failed — you can start manually by asking the agent.");
+        }
+      } catch (e) {
+        say(`Stream error: ${(e as Error).message}. You can start manually.`);
+      }
+
+      // Start audio playback
+      if (musicUrl && audioRef.current) {
+        audioRef.current.src = musicUrl;
+        audioRef.current.loop = true;
+        audioRef.current.play().catch(() => {});
+      }
+
+      say("Demo running! The stream will travel through all 4 scenes automatically.");
       return;
     }
 
