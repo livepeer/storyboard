@@ -9,27 +9,39 @@ export async function generateStreamPlan(
   const trimmed = userPrompt.trim();
   if (trimmed.length < 3) return { ok: false, error: "Give me a concept for the stream." };
 
-  let resp: Response;
+  // Route through SDK's gemini-text (BYOC has the key — no local env var needed)
+  let text = "";
+  let tokens = { input: 0, output: 0 };
+  const fullPrompt = `${STREAM_SYSTEM_PROMPT}\n\nUser request: ${trimmed}`;
+
   try {
-    resp = await fetch("/api/agent/gemini", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gemini-2.5-flash",
-        contents: [{ role: "user", parts: [{ text: trimmed }] }],
-        system_instruction: { parts: [{ text: STREAM_SYSTEM_PROMPT }] },
-      }),
-    });
-  } catch (e) {
-    return { ok: false, error: `Can't reach stream director: ${e instanceof Error ? e.message : "unknown"}` };
+    const { runInference } = await import("@/lib/sdk/client");
+    const result = await runInference({ capability: "gemini-text", prompt: fullPrompt, params: {} });
+    const r = result as Record<string, unknown>;
+    const d = (r.data ?? r) as Record<string, unknown>;
+    text = (d.text as string)
+      ?? (d.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }>)?.[0]?.content?.parts?.map((p) => p.text || "").join("")
+      ?? (r.text as string) ?? "";
+  } catch {
+    try {
+      const resp = await fetch("/api/agent/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gemini-2.5-flash",
+          contents: [{ role: "user", parts: [{ text: trimmed }] }],
+          system_instruction: { parts: [{ text: STREAM_SYSTEM_PROMPT }] },
+        }),
+      });
+      if (!resp.ok) return { ok: false, error: `Stream director error ${resp.status}` };
+      const payload = await resp.json();
+      tokens = extractGeminiTokens(payload);
+      text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
+        .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+    } catch (e2) {
+      return { ok: false, error: `Can't reach stream director: ${(e2 as Error).message}` };
+    }
   }
-
-  if (!resp.ok) return { ok: false, error: `Stream director error ${resp.status}` };
-
-  const payload = await resp.json();
-  const tokens = extractGeminiTokens(payload);
-  const text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
-    .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
   if (!text) return { ok: false, error: "Empty response from stream director." };
 
   const parsed = extractJsonObject(text);

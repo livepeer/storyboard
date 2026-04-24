@@ -20,30 +20,43 @@ export async function generateFilm(
     console.log(`[Film] Auto-detected skill: ${skill} (${s.name})`);
   }
 
-  let resp: Response;
+  // Route through SDK's gemini-text capability (BYOC has the key).
+  // Falls back to /api/agent/gemini if SDK is unreachable.
+  let text = "";
+  let tokens = { input: 0, output: 0 };
+  const fullPrompt = `${FILM_SYSTEM_PROMPT}${skillPrompt}\n\nUser request: ${trimmed}`;
+
   try {
-    resp = await fetch("/api/agent/gemini", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gemini-2.5-flash",
-        contents: [{ role: "user", parts: [{ text: trimmed }] }],
-        system_instruction: { parts: [{ text: FILM_SYSTEM_PROMPT + skillPrompt }] },
-      }),
-    });
-  } catch (e) {
-    return { ok: false, error: `Can't reach film director: ${e instanceof Error ? e.message : "network error"}` };
+    const { runInference } = await import("@/lib/sdk/client");
+    const result = await runInference({ capability: "gemini-text", prompt: fullPrompt, params: {} });
+    const r = result as Record<string, unknown>;
+    const data = (r.data ?? r) as Record<string, unknown>;
+    text = (data.text as string)
+      ?? (data.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }>)?.[0]?.content?.parts?.map((p) => p.text || "").join("")
+      ?? (r.text as string) ?? "";
+  } catch {
+    try {
+      const resp = await fetch("/api/agent/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gemini-2.5-flash",
+          contents: [{ role: "user", parts: [{ text: trimmed }] }],
+          system_instruction: { parts: [{ text: FILM_SYSTEM_PROMPT + skillPrompt }] },
+        }),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => "");
+        return { ok: false, error: `Film director error ${resp.status}: ${errText.slice(0, 140)}` };
+      }
+      const payload = await resp.json();
+      tokens = extractGeminiTokens(payload);
+      text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
+        .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+    } catch (e2) {
+      return { ok: false, error: `Can't reach film director: ${(e2 as Error).message}` };
+    }
   }
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    return { ok: false, error: `Film director error ${resp.status}: ${text.slice(0, 140)}` };
-  }
-
-  const payload = await resp.json();
-  const tokens = extractGeminiTokens(payload);
-  const text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
-    .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
   if (!text) return { ok: false, error: "Film director returned empty response." };
 
   const parsed = extractJsonObject(text);

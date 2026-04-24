@@ -313,19 +313,13 @@ Output STRICT JSON only. No code fences.
 {"scenes": [{"index": 1, "title": "short title", "prompt": "scene prompt", "preset": "cinematic", "noise_scale": 0.5}]}`;
 
   try {
-    const resp = await fetch("/api/agent/gemini", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gemini-2.5-flash",
-        contents: [{ role: "user", parts: [{ text: PTRAVEL_PROMPT }] }],
-      }),
-    });
-    if (!resp.ok) return `Scene generation failed: ${resp.status}`;
-
-    const payload = await resp.json();
-    const text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
-      .candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
+    const { runInference } = await import("@/lib/sdk/client");
+    const result = await runInference({ capability: "gemini-text", prompt: PTRAVEL_PROMPT, params: {} });
+    const r = result as Record<string, unknown>;
+    const d = (r.data ?? r) as Record<string, unknown>;
+    const text = (d.text as string)
+      ?? (d.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }>)?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("")
+      ?? (r.text as string) ?? "";
 
     const { extractJsonObject } = await import("@/lib/story/generator");
     const parsed = extractJsonObject(text) as Record<string, unknown> | null;

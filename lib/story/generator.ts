@@ -160,38 +160,54 @@ export async function generateStory(
 
   const systemPrompt = await getStorytellerPrompt();
 
-  let resp: Response;
+  // Route through SDK's gemini-text capability (uses the BYOC adapter's
+  // Gemini API key — no local GEMINI_API_KEY env var needed).
+  // Falls back to /api/agent/gemini if SDK is unreachable.
+  let text = "";
+  let tokens = { input: 0, output: 0 };
+
   try {
-    resp = await fetch("/api/agent/gemini", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gemini-2.5-flash",
-        contents: [
-          { role: "user", parts: [{ text: trimmed }] },
-        ],
-        system_instruction: {
-          parts: [{ text: systemPrompt }],
-        },
-      }),
+    const { runInference } = await import("@/lib/sdk/client");
+    const result = await runInference({
+      capability: "gemini-text",
+      prompt: `${systemPrompt}\n\nUser request: ${trimmed}`,
+      params: {},
     });
-  } catch (e) {
-    return {
-      ok: false,
-      error: `Can't reach storyteller: ${e instanceof Error ? e.message : "network error"}`,
+    const r = result as Record<string, unknown>;
+    const data = (r.data ?? r) as Record<string, unknown>;
+    // gemini-text returns { text: "..." } or { data: { text: "..." } }
+    text = (data.text as string)
+      ?? (data.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }>)?.[0]?.content?.parts?.map((p) => p.text || "").join("")
+      ?? (r.text as string)
+      ?? "";
+    tokens = {
+      input: (data.prompt_tokens as number) ?? 0,
+      output: (data.completion_tokens as number) ?? 0,
     };
+  } catch (e) {
+    // Fallback: try the local Gemini proxy (needs GEMINI_API_KEY env var)
+    try {
+      const resp = await fetch("/api/agent/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gemini-2.5-flash",
+          contents: [{ role: "user", parts: [{ text: trimmed }] }],
+          system_instruction: { parts: [{ text: systemPrompt }] },
+        }),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => "");
+        return { ok: false, error: `Storyteller error ${resp.status}: ${errText.slice(0, 140)}` };
+      }
+      const payload = await resp.json();
+      tokens = extractGeminiTokens(payload);
+      text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
+        .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+    } catch (fallbackErr) {
+      return { ok: false, error: `Can't reach storyteller: ${(e as Error).message}` };
+    }
   }
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    return { ok: false, error: `Storyteller error ${resp.status}: ${text.slice(0, 140)}` };
-  }
-
-  const payload = await resp.json();
-  const tokens = extractGeminiTokens(payload);
-
-  const text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
-    .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
   if (!text) {
     return { ok: false, error: "Storyteller returned an empty response — try again." };
   }

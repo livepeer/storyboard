@@ -348,21 +348,15 @@ Generate ONLY the new scenes (not the existing ones). Match the style, character
 {"scenes": [{"index": ${story.scenes.length + 1}, "title": "...", "description": "..."}]}`;
 
   try {
-    const resp = await fetch("/api/agent/gemini", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gemini-2.5-flash",
-        contents: [{ role: "user", parts: [{ text: continuationPrompt }] }],
-        system_instruction: { parts: [{ text: "You are a story continuation assistant. Return ONLY valid JSON with a scenes array. No code fences. No preamble." }] },
-      }),
-    });
-
-    if (!resp.ok) return `Story continuation failed (${resp.status})`;
-
-    const payload = await resp.json();
-    const text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
-      .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+    // Route through SDK's gemini-text (BYOC has the key — no local env var needed)
+    const { runInference } = await import("@/lib/sdk/client");
+    const fullPrompt = `You are a story continuation assistant. Return ONLY valid JSON with a scenes array. No code fences. No preamble.\n\n${continuationPrompt}`;
+    const result = await runInference({ capability: "gemini-text", prompt: fullPrompt, params: {} });
+    const r = result as Record<string, unknown>;
+    const d = (r.data ?? r) as Record<string, unknown>;
+    const text = (d.text as string)
+      ?? (d.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }>)?.[0]?.content?.parts?.map((p) => p.text || "").join("")
+      ?? (r.text as string) ?? "";
 
     const { extractJsonObject } = await import("./generator");
     const parsed = extractJsonObject(text);
