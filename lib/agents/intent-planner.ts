@@ -10,7 +10,7 @@
  */
 
 export { planIntentSync, cleanPrompt, extractMentionedModels, type IntentPlan, type PlanType } from "@livepeer/creative-kit";
-import { planIntent as planIntentFull, type IntentPlan, type LLMClassifierConfig } from "@livepeer/creative-kit";
+import { planIntent as planIntentFull, validatePlan, type IntentPlan, type LLMClassifierConfig } from "@livepeer/creative-kit";
 
 // ── Skill loading ──
 
@@ -90,12 +90,26 @@ async function buildConfig(): Promise<LLMClassifierConfig> {
 // ── Public API ──
 
 /**
- * Classify user intent with full LLM + regex + human-in-loop chain.
- * Returns a plan that is always executable (never null, never empty).
+ * Full pipeline: classify → validate → return executable plan.
+ *
+ *   classify(text) → raw plan
+ *   validate(plan, text) → fix missing fields, LLM review
+ *   → return validated plan (always executable, never empty)
  */
 export async function classifyIntent(text: string): Promise<IntentPlan> {
   const config = await buildConfig();
-  return planIntentFull(text, config);
+
+  // Step 1: Classify
+  const rawPlan = await planIntentFull(text, config);
+
+  // Step 2: Validate (fix missing fields, LLM sanity check)
+  if (rawPlan.type !== "single" && rawPlan.type !== "passthrough") {
+    const validation = await validatePlan(rawPlan, text, config);
+    console.log(`[IntentPlanner] Validation: ${validation.notes}`);
+    return validation.plan;
+  }
+
+  return rawPlan;
 }
 
 /**

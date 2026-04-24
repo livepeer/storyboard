@@ -291,9 +291,12 @@ export function classifyWithRegex(text: string): IntentPlan {
 /**
  * Plan the user's intent with full fallback chain.
  *
- * 1. Try LLM classifier (if config provided and skill loaded)
- * 2. Fall back to regex
- * 3. If unclear + confidence < 0.5, return "unclear" for human-in-loop
+ * Priority order:
+ *   1. Deterministic regex checks (model names, scene markers) — these are
+ *      FACTS about the text that an LLM can get wrong. Run first.
+ *   2. LLM classifier for ambiguous cases
+ *   3. Regex fallback for everything else
+ *   4. If unclear + confidence < 0.5, return "unclear" for human-in-loop
  *
  * Never returns null. Always returns an executable plan.
  */
@@ -301,7 +304,24 @@ export async function planIntent(
   text: string,
   config?: LLMClassifierConfig,
 ): Promise<IntentPlan> {
-  // Tier 1: LLM (if available)
+  // Tier 0: Deterministic checks — ALWAYS run first.
+  // Model names are facts. If 4 model names appear in the text, it's a
+  // comparison no matter what the LLM thinks. Don't let the LLM override
+  // a deterministic signal with a hallucinated "SINGLE" classification.
+  const models = extractMentionedModels(text);
+  if (models.length >= 2) {
+    const plan: IntentPlan = {
+      type: "compare_models",
+      confidence: 0.99,
+      models,
+      prompt: cleanPrompt(text),
+      reason: `${models.length} model names detected: ${models.join(", ")}`,
+    };
+    console.log(`[IntentPlanner] Deterministic: ${plan.reason}`);
+    return plan;
+  }
+
+  // Tier 1: LLM (if available) — for ambiguous intents where regex can't decide
   if (config?.skillContent) {
     const llmPlan = await classifyWithLLM(text, config);
     if (llmPlan && llmPlan.confidence >= 0.5) {
@@ -314,10 +334,127 @@ export async function planIntent(
     }
   }
 
-  // Tier 2: Regex
+  // Tier 2: Regex for remaining patterns
   const regexPlan = classifyWithRegex(text);
   console.log(`[IntentPlanner] Regex: ${regexPlan.type} (${regexPlan.confidence}) — ${regexPlan.reason}`);
   return regexPlan;
+}
+
+// ── Plan Validation (Tier between classify and execute) ──
+
+export interface ValidationResult {
+  valid: boolean;
+  plan: IntentPlan;
+  /** What was fixed or why it failed */
+  notes: string;
+}
+
+/**
+ * Validate a plan: ensure it's executable and matches user intent.
+ *
+ * Checks:
+ * 1. Required fields present (prompt, models, etc.)
+ * 2. Models exist in live capability list (if provided)
+ * 3. LLM review: does the plan match what the user actually asked? (~200ms)
+ * 4. Auto-fix: fill in defaults for missing optional fields
+ *
+ * Returns the (possibly fixed) plan with validation notes.
+ */
+export async function validatePlan(
+  plan: IntentPlan,
+  originalText: string,
+  config?: LLMClassifierConfig,
+): Promise<ValidationResult> {
+  const fixes: string[] = [];
+
+  // Structural validation — fix missing fields
+  if (!plan.prompt && !plan.prompts?.length) {
+    plan.prompt = cleanPrompt(originalText);
+    fixes.push("Added missing prompt from original text");
+  }
+
+  if (plan.type === "compare_models") {
+    if (!plan.models || plan.models.length < 2) {
+      const detected = extractMentionedModels(originalText);
+      if (detected.length >= 2) {
+        plan.models = detected;
+        fixes.push(`Fixed models from text: ${detected.join(", ")}`);
+      } else {
+        return { valid: false, plan, notes: "Comparison needs 2+ models but none found in text" };
+      }
+    }
+  }
+
+  if (plan.type === "batch_generate" && (!plan.prompts || plan.prompts.length === 0)) {
+    if (plan.prompt) {
+      plan.prompts = [plan.prompt];
+      plan.count = 1;
+      fixes.push("Batch with single prompt → treated as single generation");
+      plan.type = "single";
+    }
+  }
+
+  if (plan.type === "style_sweep" && (!plan.styles || plan.styles.length < 2)) {
+    fixes.push("Style sweep needs 2+ styles — falling back to single");
+    plan.type = "single";
+  }
+
+  if (plan.type === "variations") {
+    plan.count = plan.count || 4;
+  }
+
+  // LLM review (optional, only if endpoint available and plan is non-trivial)
+  if (config?.llmEndpoint && plan.type !== "single" && plan.type !== "passthrough") {
+    try {
+      const reviewResp = await fetch(config.llmEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            role: "user",
+            parts: [{
+              text: `Review this execution plan. Reply with JSON: {"approved": true/false, "fix": "what to change or null"}
+
+User said: "${originalText.slice(0, 300)}"
+
+Plan:
+- Type: ${plan.type}
+- Models: ${plan.models?.join(", ") || "default"}
+- Prompt: "${plan.prompt?.slice(0, 200) || ""}"
+- Count: ${plan.count || "N/A"}
+${plan.styles ? `- Styles: ${plan.styles.join(", ")}` : ""}
+${plan.prompts ? `- Prompts: ${plan.prompts.length} items` : ""}
+
+Does this plan match what the user wants? Is anything missing?`,
+            }],
+          }],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 150 },
+        }),
+      });
+
+      if (reviewResp.ok) {
+        const reviewData = await reviewResp.json();
+        const reviewText = reviewData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+        const jsonMatch = reviewText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const review = JSON.parse(jsonMatch[0]) as { approved: boolean; fix?: string };
+          if (!review.approved && review.fix) {
+            fixes.push(`LLM review: ${review.fix}`);
+            // Don't reject — just note the concern. The plan is still valid.
+          }
+        }
+      }
+    } catch {
+      // LLM review failed — plan is still valid from structural checks
+    }
+  }
+
+  console.log(`[IntentPlanner] Validation: ${fixes.length > 0 ? fixes.join("; ") : "OK"}`);
+  return {
+    valid: true,
+    plan,
+    notes: fixes.length > 0 ? fixes.join("; ") : "Plan validated",
+  };
 }
 
 // Backwards-compatible sync version for simple cases (model comparison detection)

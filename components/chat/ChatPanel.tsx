@@ -249,23 +249,21 @@ export function ChatPanel() {
       const memory = useWorkingMemory.getState();
       memory.syncFromProjectStore();
 
-      // Step 3: Preprocess (extraction only for new_project; direct handling for continue/status)
+      // Step 3: Preprocess — intent planner + scene extraction + continuation
+      // ALWAYS runs the preprocessor so the intent planner can intercept
+      // comparison, batch, style-sweep, and variation intents.
       let agentText = text;
       let skipAgent = false;
       try {
         setThinkingVerb("Analyzing");
         setIsThinking(true);
-        if (intent.type === "new_project" || intent.type === "continue" || intent.type === "status") {
-          const pre = await preprocessPrompt(text);
-          if (pre.handled) {
-            // Preprocessor fully handled (continue/status) — skip agent
-            skipAgent = true;
-            memory.syncFromProjectStore();
-          } else if (pre.agentPrompt) {
-            // Preprocessor did extraction, agent should execute (new_project)
-            agentText = pre.agentPrompt;
-            memory.syncFromProjectStore();
-          }
+        const pre = await preprocessPrompt(text);
+        if (pre.handled) {
+          skipAgent = true;
+          memory.syncFromProjectStore();
+        } else if (pre.agentPrompt) {
+          agentText = pre.agentPrompt;
+          memory.syncFromProjectStore();
         }
       } catch {
         // Preprocessing failed — send original to agent
