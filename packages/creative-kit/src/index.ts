@@ -59,3 +59,4 @@ export { MessageBubble } from "./ui/MessageBubble";
 export { ToolPill } from "./ui/ToolPill";
 export { useStyledPrompt } from "./ui/StyledPrompt";
 export { planRemix, detectRemixIntent, type RemixRequest, type RemixPlan, type RemixMode } from "./agent/visual-remix";
+export { createVoiceInput, isSpeechRecognitionSupported, type VoiceInput, type VoiceInputOptions } from "./agent/voice-input";
