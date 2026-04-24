@@ -7,8 +7,8 @@
  * This route needs the key directly (not through SDK) because it
  * sends multi-turn conversations with tool calls to Gemini.
  */
-function getGeminiKey(): string {
-  return process.env.GEMINI_API_KEY || "AIzaSyBc_xBM52a1dbovYMht4VokbwU713o2YpM";
+function getGeminiKey(): string | null {
+  return process.env.GEMINI_API_KEY || null;
 }
 
 export async function POST(req: Request) {

@@ -1,6 +1,8 @@
 export async function POST(req: Request) {
-  // Env var first, then shared BYOC key (same key used by the inference adapter)
-  const apiKey = process.env.GEMINI_API_KEY || "AIzaSyBc_xBM52a1dbovYMht4VokbwU713o2YpM";
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return Response.json({ error: "GEMINI_API_KEY not configured" }, { status: 500 });
+  }
 
 
   const { contents, tools, model, system_instruction } = await req.json();
