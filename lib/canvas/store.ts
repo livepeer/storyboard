@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Card, ArrowEdge, CanvasViewport, CardType } from "./types";
+import { recordNegative, recordPositive } from "@livepeer/creative-kit";
 
 const CARD_W = 320;
 const CARD_H = 280;
@@ -144,6 +145,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set((s) => {
       const card = s.cards.find((c) => c.id === id);
       if (!card) return s;
+      // Record negative signal — user deleted this card
+      if (card.url) {
+        // Extract capability hint from the refId (e.g. "flux-dev_123" → "flux-dev")
+        const cap = card.refId?.split("_")[0];
+        if (cap && cap.includes("-")) recordNegative("model", cap, 1);
+        if (card.type === "image") recordNegative("style", "image", 0.5);
+      }
       return {
         cards: s.cards.filter((c) => c.id !== id),
         edges: s.edges.filter(

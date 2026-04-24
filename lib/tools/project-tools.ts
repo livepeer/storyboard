@@ -4,6 +4,7 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { useSessionContext } from "@/lib/agents/session-context";
 import { executeTool } from "./registry";
 import type { Scene, StyleGuide, VideoConsistency } from "@/lib/projects/types";
+import { executeDAG, type DAGNode } from "@livepeer/creative-kit";
 
 /**
  * project_create — Create a project from a brief with scene breakdown.
@@ -175,27 +176,32 @@ export const projectGenerateTool: ToolDefinition = {
     const project = store.getProject(projectId);
     if (!project) return { success: false, error: `Project ${projectId} not found` };
 
-    // Internal batch loop — processes every pending scene in a single
-    // tool invocation so the calling LLM only pays one round of
-    // context+tool-schema tokens. Caps at 10 batches (50 scenes
-    // default) to prevent runaway if something goes wrong.
-    const MAX_BATCHES = 10;
+    // DAG-based parallel generation — runs independent scenes concurrently
+    // (up to 4 at a time) and models dependencies (e.g. video_keyframe:
+    // animate node waits for its keyframe image node).
+    // Falls back to sequential batching if DAG build fails.
     let batchesRun = 0;
-    let lastResult: { success: boolean; batchSize: number } = { success: true, batchSize: 0 };
     let totalCardsCreated = 0;
     const aggregatedErrors: string[] = [];
 
-    while (batchesRun < MAX_BATCHES) {
-      const batchStarted = await runOneBatch(projectId);
-      if (!batchStarted) break;
-      batchesRun++;
-      lastResult = { success: batchStarted.success, batchSize: batchStarted.batchSize };
-      totalCardsCreated += batchStarted.cardsCreated;
-      if (batchStarted.errors.length > 0) aggregatedErrors.push(...batchStarted.errors);
-      // If this batch was the last one with anything to do, stop
-      const storeNow = useProjectStore.getState();
-      const next = storeNow.getNextBatch(projectId);
-      if (next.length === 0) break;
+    try {
+      const dagStats = await runWithDAG(projectId);
+      batchesRun = dagStats.nodesRun;
+      totalCardsCreated = dagStats.cardsCreated;
+      aggregatedErrors.push(...dagStats.errors);
+    } catch (dagErr) {
+      // Fallback: sequential batch loop (original behaviour)
+      const MAX_BATCHES = 10;
+      while (batchesRun < MAX_BATCHES) {
+        const batchStarted = await runOneBatch(projectId);
+        if (!batchStarted) break;
+        batchesRun++;
+        totalCardsCreated += batchStarted.cardsCreated;
+        if (batchStarted.errors.length > 0) aggregatedErrors.push(...batchStarted.errors);
+        const storeNow = useProjectStore.getState();
+        const next = storeNow.getNextBatch(projectId);
+        if (next.length === 0) break;
+      }
     }
 
     // Post-loop: final summary
@@ -237,6 +243,181 @@ export const projectGenerateTool: ToolDefinition = {
     };
   },
 };
+
+/**
+ * Run all pending scenes using a DAG for maximum parallelism.
+ *
+ * - Independent scenes run concurrently (up to 4 at a time).
+ * - video_keyframe scenes get two nodes: keyframe-image → animate.
+ *   The animate node starts as soon as its keyframe image completes,
+ *   without waiting for the rest of the keyframes.
+ */
+async function runWithDAG(projectId: string): Promise<{ nodesRun: number; cardsCreated: number; errors: string[] }> {
+  const store = useProjectStore.getState();
+  const project = store.getProject(projectId);
+  if (!project) throw new Error("Project not found");
+
+  const pending = project.scenes.filter((s) => s.status === "pending" || s.status === "regenerating");
+  if (pending.length === 0) return { nodesRun: 0, cardsCreated: 0, errors: [] };
+
+  const sessionPrefix = useSessionContext.getState().buildPrefix();
+  const stylePrefix = sessionPrefix || project.styleGuide?.promptPrefix || "";
+  const styleSuffix = project.styleGuide?.promptSuffix || "";
+  const consistency = project.videoConsistency;
+  const lockedPrefix = consistency?.lockedPrefix || "";
+  const characterLock = consistency?.characterLock || "";
+  const colorArc = consistency?.colorArc || [];
+
+  store.updateProjectStatus(projectId, "generating");
+
+  type NodeResult = { refId?: string; error?: string };
+  const nodes: DAGNode<NodeResult>[] = [];
+
+  for (const scene of pending) {
+    if (scene.action === "video_keyframe") {
+      // Node 1: generate keyframe image
+      const kfId = `kf-${scene.index}`;
+      nodes.push({
+        id: kfId,
+        dependsOn: [],
+        label: `${scene.title} (keyframe)`,
+        execute: async () => {
+          store.updateSceneStatus(projectId, scene.index, "generating");
+          const colorPhrase = colorArc[scene.index] || "";
+          const visLang = scene.visualLanguage || "";
+          const kfPrompt = [lockedPrefix, scene.prompt, colorPhrase, visLang]
+            .filter((s) => s.length > 0).join(" ").slice(0, 800);
+          const result = await executeTool("create_media", {
+            steps: [{ action: "generate", prompt: kfPrompt, title: `${scene.title} (keyframe)` }],
+          });
+          const cards = (result.data as Record<string, unknown>)?.cards_created as string[] | undefined;
+          const results = (result.data as Record<string, unknown>)?.results as Array<{ refId?: string; error?: string }> | undefined;
+          const refId = cards?.[0];
+          const error = results?.[0]?.error;
+          if (refId && !error) {
+            // Write keyframeRefId + sourceUrl into project state
+            const proj = useProjectStore.getState().getProject(projectId);
+            if (proj) {
+              const sceneObj = proj.scenes.find((s) => s.index === scene.index);
+              if (sceneObj) {
+                sceneObj.keyframeRefId = refId;
+                try {
+                  const card = useCanvasStore.getState().cards.find((c) => c.refId === refId);
+                  if (card?.url) sceneObj.sourceUrl = card.url;
+                } catch { /* canvas not available */ }
+                if (scene.index === 0 && proj.videoConsistency && !proj.videoConsistency.styleAnchorRefId) {
+                  proj.videoConsistency.styleAnchorRefId = refId;
+                }
+                useProjectStore.setState({ projects: [...useProjectStore.getState().projects] });
+              }
+            }
+            // Keep scene "pending" — animate node will mark it done
+            store.updateSceneStatus(projectId, scene.index, "pending");
+            return { refId };
+          }
+          store.updateSceneStatus(projectId, scene.index, "pending");
+          return { error: error || "No keyframe output" };
+        },
+      });
+
+      // Node 2: animate the keyframe (depends on kf node)
+      const vidId = `vid-${scene.index}`;
+      nodes.push({
+        id: vidId,
+        dependsOn: [kfId],
+        label: `${scene.title} (animate)`,
+        execute: async () => {
+          store.updateSceneStatus(projectId, scene.index, "generating");
+          const clipCount = scene.clipsPerScene || 1;
+          const beats = scene.beats || [scene.description];
+          const steps = [];
+          for (let c = 0; c < clipCount; c++) {
+            const beat = beats[c] || beats[0] || scene.description;
+            const motionPrompt = [characterLock, beat, scene.cameraNotes || ""]
+              .filter((s) => s.length > 0).join(" ").slice(0, 500);
+            // Refresh sourceUrl in case canvas updated after keyframe completed
+            const freshProj = useProjectStore.getState().getProject(projectId);
+            const freshScene = freshProj?.scenes.find((s) => s.index === scene.index);
+            const sourceUrl = freshScene?.sourceUrl;
+            steps.push({
+              action: "animate",
+              prompt: motionPrompt,
+              title: `${scene.title} (clip ${c + 1}/${clipCount})`,
+              source_url: sourceUrl,
+            });
+          }
+          const result = await executeTool("create_media", { steps });
+          const cards = (result.data as Record<string, unknown>)?.cards_created as string[] | undefined;
+          const results = (result.data as Record<string, unknown>)?.results as Array<{ refId?: string; error?: string }> | undefined;
+          const refId = cards?.[0];
+          const error = results?.[0]?.error;
+          if (refId && !error) {
+            store.updateSceneStatus(projectId, scene.index, "done", refId);
+            return { refId };
+          }
+          store.updateSceneStatus(projectId, scene.index, "pending");
+          return { error: error || "No video output" };
+        },
+      });
+    } else {
+      // Regular non-video scene — no deps, runs in parallel with others
+      nodes.push({
+        id: `scene-${scene.index}`,
+        dependsOn: (scene.dependsOn || []).map((i) => `scene-${i}`),
+        label: scene.title,
+        execute: async () => {
+          store.updateSceneStatus(projectId, scene.index, "generating");
+          const step = {
+            action: scene.action,
+            prompt: `${stylePrefix}${scene.prompt}${styleSuffix}`,
+            title: scene.title,
+            source_url: scene.sourceUrl as string | undefined,
+          };
+          const result = await executeTool("create_media", { steps: [step] });
+          const cards = (result.data as Record<string, unknown>)?.cards_created as string[] | undefined;
+          const results = (result.data as Record<string, unknown>)?.results as Array<{ refId?: string; error?: string }> | undefined;
+          const refId = cards?.[0];
+          const error = results?.[0]?.error;
+          if (refId && !error) {
+            store.updateSceneStatus(projectId, scene.index, "done", refId);
+            return { refId };
+          }
+          store.updateSceneStatus(projectId, scene.index, "pending");
+          return { error: error || "No output" };
+        },
+      });
+    }
+  }
+
+  const dagResult = await executeDAG<NodeResult>(nodes, { concurrency: 4 });
+
+  // Auto-layout after all done
+  const updatedProject = useProjectStore.getState().getProject(projectId)!;
+  const doneRefIds = updatedProject.scenes
+    .filter((s) => s.status === "done" && s.cardRefId)
+    .sort((a, b) => a.index - b.index)
+    .map((s) => s.cardRefId!);
+  if (doneRefIds.length > 0) {
+    try {
+      const { organizeCanvas } = await import("@/lib/layout/agent");
+      const positions = organizeCanvas();
+      useCanvasStore.getState().applyLayout(positions);
+    } catch { /* layout agent not available */ }
+    for (let i = 1; i < doneRefIds.length; i++) {
+      const prevScene = updatedProject.scenes.find((s) => s.cardRefId === doneRefIds[i - 1]);
+      const currScene = updatedProject.scenes.find((s) => s.cardRefId === doneRefIds[i]);
+      if (prevScene && currScene) {
+        useCanvasStore.getState().addEdge(doneRefIds[i - 1], doneRefIds[i], {
+          capability: "narrative", action: "sequence", prompt: currScene.title,
+        });
+      }
+    }
+  }
+
+  const cardsCreated = [...dagResult.results.values()].filter((r) => r.refId).length;
+  const errors = [...dagResult.errors.values()].map((e) => e.message);
+  return { nodesRun: dagResult.executionOrder.length, cardsCreated, errors };
+}
 
 /**
  * Run one project_generate batch. Extracted so the top-level tool can

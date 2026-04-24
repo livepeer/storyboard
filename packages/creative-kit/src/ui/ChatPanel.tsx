@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import type { ChatMessage } from "../interfaces/chat-bus";
 import { MessageBubble } from "./MessageBubble";
+import { createVoiceInput, isSpeechRecognitionSupported } from "../agent/voice-input";
 
 export interface ChatPanelProps {
   messages: ChatMessage[];
@@ -32,6 +33,9 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceSupported] = useState(() => typeof window !== "undefined" && isSpeechRecognitionSupported());
+  const voiceRef = useRef<ReturnType<typeof createVoiceInput> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -40,12 +44,29 @@ export function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, isProcessing]);
 
+  const toggleVoice = useCallback(() => {
+    if (isListening) {
+      voiceRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+    const voice = createVoiceInput({
+      onTranscript: (text) => setDraft(text),
+      onEnd: () => setIsListening(false),
+      onError: () => setIsListening(false),
+    });
+    voiceRef.current = voice;
+    voice.start();
+    setIsListening(true);
+  }, [isListening]);
+
   const send = useCallback(() => {
     const text = draft.trim();
     if (!text) return;
+    if (isListening) { voiceRef.current?.stop(); setIsListening(false); }
     setDraft("");
     onSend(text);
-  }, [draft, onSend]);
+  }, [draft, onSend, isListening]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -137,13 +158,13 @@ export function ChatPanel({
             ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
           }}
           onKeyDown={handleKeyDown}
-          placeholder={placeholder}
+          placeholder={isListening ? "Listening… speak your prompt" : placeholder}
           rows={1}
           style={{
             flex: 1,
             resize: "none",
             background: "rgba(255,255,255,0.06)",
-            border: "1px solid rgba(255,255,255,0.12)",
+            border: isListening ? "1px solid rgba(239,68,68,0.5)" : "1px solid rgba(255,255,255,0.12)",
             borderRadius: 6,
             padding: "7px 10px",
             color: "rgba(255,255,255,0.9)",
@@ -155,6 +176,29 @@ export function ChatPanel({
             fontFamily: "inherit",
           }}
         />
+        {/* Microphone button */}
+        {voiceSupported && (
+          <button
+            onClick={toggleVoice}
+            title={isListening ? "Stop listening" : "Voice input"}
+            style={{
+              padding: "7px 8px",
+              borderRadius: 6,
+              border: isListening ? "1px solid rgba(239,68,68,0.5)" : "1px solid rgba(255,255,255,0.12)",
+              background: isListening ? "rgba(239,68,68,0.12)" : "transparent",
+              color: isListening ? "rgba(239,68,68,0.9)" : "rgba(255,255,255,0.4)",
+              cursor: "pointer",
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill={isListening ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
+              <path d="M12 2a3 3 0 013 3v7a3 3 0 01-6 0V5a3 3 0 013-3z" />
+              <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v3M9 22h6" />
+            </svg>
+          </button>
+        )}
         {/* Expand button */}
         <button
           onClick={() => setExpanded(true)}

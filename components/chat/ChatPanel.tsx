@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/lib/chat/store";
 import { getActivePlugin } from "@/lib/agents/registry";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { createVoiceInput, isSpeechRecognitionSupported } from "@livepeer/creative-kit";
 import { MessageBubble } from "./MessageBubble";
 import { ToolPill } from "./ToolPill";
 import { QuickActions } from "./QuickActions";
@@ -143,6 +144,9 @@ export function ChatPanel() {
   const [thinkingVerb, setThinkingVerb] = useState("Thinking");
   const [expandedEditor, setExpandedEditor] = useState(false);
   const [minimized, setMinimized] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceSupported] = useState(() => typeof window !== "undefined" && isSpeechRecognitionSupported());
+  const voiceRef = useRef<ReturnType<typeof createVoiceInput> | null>(null);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -355,9 +359,33 @@ export function ChatPanel() {
     [processOne]
   );
 
+  const toggleVoice = useCallback(() => {
+    if (isListening) {
+      voiceRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+    const voice = createVoiceInput({
+      onTranscript: (text) => setInput(text),
+      onEnd: () => setIsListening(false),
+      onError: (err) => {
+        addMessage(err, "system");
+        setIsListening(false);
+      },
+    });
+    voiceRef.current = voice;
+    voice.start();
+    setIsListening(true);
+  }, [isListening, addMessage]);
+
   const handleSend = useCallback(() => {
+    // Stop voice if active before sending
+    if (isListening) {
+      voiceRef.current?.stop();
+      setIsListening(false);
+    }
     sendMessage(input);
-  }, [input, sendMessage]);
+  }, [input, sendMessage, isListening]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -511,10 +539,22 @@ export function ChatPanel() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={onKeyDown}
-                placeholder="Create a dragon as image, then animate it..."
+                placeholder={isListening ? "Listening… speak your prompt" : "Create a dragon as image, then animate it..."}
                 rows={1}
-                className="min-w-0 flex-1 resize-none rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
+                className={`min-w-0 flex-1 resize-none rounded-lg border bg-transparent px-3 py-2 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-dim)] ${isListening ? "border-red-500/60 focus:border-red-500" : "border-[var(--border)] focus:border-[var(--border-hover)]"}`}
               />
+              {voiceSupported && (
+                <button
+                  onClick={toggleVoice}
+                  title={isListening ? "Stop listening" : "Voice input"}
+                  className={`shrink-0 rounded-lg border px-2 transition-colors ${isListening ? "border-red-500/60 bg-red-500/10 text-red-400 hover:bg-red-500/20" : "border-[var(--border)] bg-transparent text-[var(--text-dim)] hover:bg-white/[0.06] hover:text-[var(--text-muted)]"}`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill={isListening ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
+                    <path d="M12 2a3 3 0 013 3v7a3 3 0 01-6 0V5a3 3 0 013-3z" />
+                    <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v3M9 22h6" />
+                  </svg>
+                </button>
+              )}
               <button
                 onClick={() => setExpandedEditor(true)}
                 title="Expand editor for long prompts"

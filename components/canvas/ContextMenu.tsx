@@ -6,7 +6,7 @@ import { useChatStore } from "@/lib/chat/store";
 import { runInference } from "@/lib/sdk/client";
 import { resolveCapability, getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { buildAttemptChain, extractFalError, isRecoverableFailure } from "@/lib/tools/compound-tools";
-import { resizeImageForModel } from "@livepeer/creative-kit";
+import { resizeImageForModel, planRemix, recordPositive } from "@livepeer/creative-kit";
 import {
   startStream,
   waitForReady,
@@ -55,6 +55,8 @@ const ACTIONS: MenuAction[] = [
   { id: "mix-audio", label: "Mix with Audio\u2026", icon: "\uD83C\uDFB5", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   // --- LV2V from card ---
   { id: "lv2v-from-card", label: "Start LV2V Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
+  // --- Visual Remix ---
+  { id: "visual-remix", label: "Visual Remix\u2026", icon: "\uD83C\uDFA8", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   // --- Agent-assisted (routes to chat) ---
   { id: "agent-restyle", label: "Restyle with AI\u2026", icon: "\uD83E\uDD16", forTypes: ["image"], requiresMedia: true, mode: "chat" },
   { id: "agent-animate", label: "Animate with AI\u2026", icon: "\uD83E\uDD16", forTypes: ["image"], requiresMedia: true, mode: "chat" },
@@ -200,6 +202,12 @@ export function ContextMenu() {
       if (action.id === "save") {
         const { downloadCard } = await import("@/lib/utils/download");
         const ok = await downloadCard(targetCard);
+        if (ok) {
+          // Strong positive signal — user explicitly saved this output
+          const cap = targetCard.refId?.split("_")[0];
+          if (cap && cap.includes("-")) recordPositive("model", cap, 2);
+          if (targetCard.type === "image") recordPositive("style", "image", 1);
+        }
         addMessage(ok ? `Saved ${targetCard.refId}` : `Failed to save ${targetCard.refId}`, "system");
         return;
       }
@@ -729,9 +737,69 @@ export function ContextMenu() {
         return;
       }
 
+      // --- Visual Remix: reference-driven generation with 4 modes ---
+      if (action.id === "visual-remix") {
+        if (!targetCard.url) {
+          addMessage("Card has no image to remix.", "system");
+          return;
+        }
+        const userPrompt = await styledPrompt("Visual Remix", "e.g. make it darker, but keep the composition");
+        if (!userPrompt) return;
+
+        // Detect remix mode from user text
+        let mode: "style_transfer" | "variation" | "mashup" | "evolve" = "variation";
+        if (/style|look like|feel like|aesthetic/.test(userPrompt.toLowerCase())) mode = "style_transfer";
+        else if (/mix|combine|mash|together/.test(userPrompt.toLowerCase())) mode = "mashup";
+        else if (/evolve|iterate|refine|push|further/.test(userPrompt.toLowerCase())) mode = "evolve";
+
+        // Detect similarity preference (closer / further)
+        let similarity = 0.5;
+        if (/very close|barely|subtle|slight/.test(userPrompt.toLowerCase())) similarity = 0.85;
+        else if (/very different|extreme|radical|completely/.test(userPrompt.toLowerCase())) similarity = 0.15;
+
+        const plan = planRemix({ referenceUrl: targetCard.url, prompt: userPrompt, similarity, mode });
+        addMessage(`Remixing "${targetCard.title}" (${mode}, ${Math.round(similarity * 100)}% similarity)…`, "system");
+
+        const newRefId = `remix_${Date.now()}`;
+        const card = addCard({ type: "image", title: `Remix: ${userPrompt.slice(0, 30)}`, refId: newRefId });
+        addEdge(targetCard.refId, newRefId, { capability: plan.capability, prompt: plan.effectivePrompt, action: "remix" });
+
+        try {
+          const resolved = resolveCapability(plan.capability, "restyle") || plan.capability;
+          const liveCaps = new Set((getCachedCapabilities() || []).map((c: { name: string }) => c.name));
+          const attempts = buildAttemptChain(resolved, liveCaps);
+
+          let resultUrl: string | null = null;
+          for (const cap of attempts) {
+            const result = await runInference({ capability: cap, prompt: plan.effectivePrompt, params: plan.params });
+            const r = result as Record<string, unknown>;
+            const data = (r.data ?? r) as Record<string, unknown>;
+            const images = data.images as Array<{ url: string }> | undefined;
+            const url = (r.image_url as string) ?? images?.[0]?.url ?? (data.image as { url: string })?.url;
+            if (url) { resultUrl = url; break; }
+          }
+
+          if (resultUrl) {
+            updateCard(card.id, { url: resultUrl });
+            addMessage(`Remix complete — ${plan.reasoning}`, "system");
+          } else {
+            addMessage("Visual remix returned no image.", "system");
+          }
+        } catch (e) {
+          addMessage(`Remix failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
+        }
+        return;
+      }
+
       // --- Direct execution ---
       const config = DIRECT_CONFIG[action.id];
       if (!config) return;
+
+      // Positive signal — user chose to use this card as input (implies they liked it)
+      if (targetCard.url && targetCard.refId) {
+        const cap = targetCard.refId.split("_")[0];
+        if (cap && cap.includes("-")) recordPositive("model", cap, 1);
+      }
 
       let prompt = config.defaultPrompt || null;
       const isVideoAction = action.id === "seedance" || action.id === "animate";

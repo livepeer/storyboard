@@ -42,21 +42,26 @@ export function isSpeechRecognitionSupported(): boolean {
   );
 }
 
+// Browser SpeechRecognition types (not in lib.dom.d.ts by default)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnySpeechRecognition = any;
+
 /** Create a voice input handler. */
 export function createVoiceInput(opts: VoiceInputOptions): VoiceInput {
   const supported = isSpeechRecognitionSupported();
-  let recognition: SpeechRecognition | null = null;
+  let recognition: AnySpeechRecognition = null;
   let listening = false;
 
   if (supported && typeof window !== "undefined") {
-    const SpeechRecognitionClass = (window as unknown as Record<string, typeof SpeechRecognition>).SpeechRecognition
-      || (window as unknown as Record<string, typeof SpeechRecognition>).webkitSpeechRecognition;
+    const w = window as unknown as Record<string, unknown>;
+    const SpeechRecognitionClass =
+      (w.SpeechRecognition || w.webkitSpeechRecognition) as (new () => AnySpeechRecognition);
     recognition = new SpeechRecognitionClass();
     recognition.lang = opts.language || "en-US";
     recognition.continuous = opts.continuous ?? true;
     recognition.interimResults = true;
 
-    recognition.onresult = (event) => {
+    recognition.onresult = (event: AnySpeechRecognition) => {
       let transcript = "";
       let isFinal = false;
       for (let i = 0; i < event.results.length; i++) {
@@ -71,7 +76,7 @@ export function createVoiceInput(opts: VoiceInputOptions): VoiceInput {
       opts.onEnd?.();
     };
 
-    recognition.onerror = (event) => {
+    recognition.onerror = (event: AnySpeechRecognition) => {
       listening = false;
       const msg = event.error === "not-allowed"
         ? "Microphone access denied — check browser permissions"
