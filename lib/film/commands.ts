@@ -221,7 +221,20 @@ async function filmApply(idOrEmpty: string): Promise<string> {
       if (!projectId) return "Apply failed: no project ID returned.";
 
       tracker.trackTool("project_generate", true);
+      const { useChatStore } = await import("@/lib/chat/store");
+      const progressMsg = useChatStore.getState().addMessage(`Generating ${scenes.length} keyframes... 0/${scenes.length}`, "system");
+
+      // Poll for completion progress while project_generate runs
+      const pollInterval = setInterval(() => {
+        const proj = useProjectStore.getState().getProject(projectId);
+        if (!proj) return;
+        const done = proj.scenes.filter((s) => s.status === "done").length;
+        useChatStore.getState().updateMessage(progressMsg.id, `Generating keyframes... ${done}/${scenes.length}`);
+      }, 2000);
+
       await genTool.execute({ project_id: projectId });
+      clearInterval(pollInterval);
+      useChatStore.getState().updateMessage(progressMsg.id, `${scenes.length} keyframes done. Starting animation...`);
 
       // Collect generated card URLs for animation step
       const { useProjectStore } = await import("@/lib/projects/store");
@@ -266,6 +279,8 @@ async function filmApply(idOrEmpty: string): Promise<string> {
         .filter(Boolean);
 
       if (animationSteps.length > 0) {
+        const { useChatStore } = await import("@/lib/chat/store");
+        useChatStore.getState().addMessage(`Animating ${animationSteps.length} clips in parallel (each ~30-90s)...`, "system");
         const result = await createMediaTool.execute({ steps: animationSteps });
         const data = result?.data as { results?: { url?: string }[] } | undefined;
         animatedCount = data?.results?.filter((r) => r.url).length ?? 0;
