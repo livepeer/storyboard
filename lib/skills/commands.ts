@@ -59,6 +59,11 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
   switch (cmd.command) {
     case "help":
       return showHelp();
+    case "clear": {
+      const { useChatStore } = await import("@/lib/chat/store");
+      useChatStore.getState().clearMessages();
+      return "";
+    }
     case "skills":
       return listSkills();
     case "skills/load":

@@ -341,6 +341,12 @@ export default function Stage() {
     const sdk = getSdkConfig();
     const say = (msg: string) => chat.getState().addMessage(msg, "system");
 
+    // /clear command
+    if (text.trim() === "/clear") {
+      chat.getState().clearMessages();
+      return;
+    }
+
     // /help command — render as agent message for proper formatting
     if (text.trim() === "/help" || text.trim() === "/?") {
       chat.getState().addMessage([
