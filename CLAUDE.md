@@ -698,9 +698,59 @@ User-saved graphs persisted in localStorage (max 20). Referenced by name in `/st
 Skill reference: `skills/scope-graph-builder.md` — full pipeline/node/param reference.
 Files: `lib/stream-cmd/graph-store.ts`, `lib/stream-cmd/commands.ts`, `lib/stream/scope-graphs.ts`
 
+### Canvas Time Machine — undo/redo + snapshots
+```
+Cmd+Z                        Undo last canvas action
+Cmd+Shift+Z                  Redo
+/snapshot save <name>         Named checkpoint (persists in localStorage)
+/snapshot restore <name>      Restore saved state (pushes current to undo first)
+/snapshot list                Show all named snapshots
+/snapshot delete <name>       Remove a snapshot
+```
+History manager: `packages/creative-kit/src/stores/history-manager.ts`. In-memory undo/redo (max 50), localStorage snapshots (max 20). Canvas store wraps every mutating action with `pushUndo()`.
+
+### Variation Grid — generate 4, pick 1
+```
+/vary <card-refId>            Generate 4 alternatives (mixed strategy)
+Right-click card → "Variations (x4)"
+```
+Strategies: seed (same model, different seeds), model (alternate models), prompt (prompt tweaks), mixed (default: 1 seed + 1 model + 2 prompt variations). All 4 run in parallel via create_media. Creative memory learns from which you keep.
+Files: `packages/creative-kit/src/agent/variation-engine.ts`
+
+### Final Cut Composer — render canvas to video
+```
+/render                       Render all canvas cards into a single video
+/render <project>             Render a specific project's scenes
+/render <project> --music aud-1  Add background music from an audio card
+```
+Browser-side via MediaRecorder + canvas.captureStream(30fps). Supports crossfade/cut/fade-black transitions. Music mixed via Web Audio API. Output: WebM video (auto-download + canvas card).
+Files: `packages/creative-kit/src/agent/render-engine.ts`
+
+### Face Lock — character consistency across scenes
+```
+/facelock <card-refId>        Lock character reference for this project
+/facelock                     Show current lock status
+/facelock clear               Remove the lock
+```
+How it works: When face lock is active, all `generate`/`restyle` actions route through `kontext-edit` with the locked image as `image_url`. For `animate`, the locked image becomes the first frame. This preserves face identity because kontext-edit is an image-edit model that retains the source face.
+Limitations: This is reference-image consistency, not face-ID embedding (no IP-Adapter on BYOC). Works well for same-character-different-scene, less well for radically different poses.
+Injection point: `lib/tools/compound-tools.ts` — 15-line conditional block before inference closure capture.
+
+### Social Export — platform-ready crops
+```
+/export social instagram      1080x1080 center-crop
+/export social tiktok          1080x1920 portrait
+/export social youtube         1920x1080 landscape
+/export social twitter         1200x675
+/export social all             All platforms at once
+```
+Smart crop with face-bias heuristic (biases toward top 1/3 when cropping vertically). Currently images only; video cropping planned.
+Files: `packages/creative-kit/src/agent/social-export.ts`
+
 ### Creative Tools — context menu + slash commands
 | Tool | Context Menu | Slash Command | Capability |
 |---|---|---|---|
+| Variations | 🔀 right-click card | `/vary <card>` | mixed strategy |
 | LEGO Style | 🧱 right-click card | `/lego <desc>` | kontext-edit |
 | Make Logo | 🎨 right-click card | `/logo <desc>` | kontext-edit / flux-dev |
 | Replace Object | 🔄 right-click card | — | kontext-edit |
