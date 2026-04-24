@@ -38,6 +38,8 @@ export { createRequestQueue, type RequestQueue, type ProcessFn } from "./agent/r
 export { humanizeError, classifyError, isRecoverable, type AgentError } from "./agent/errors";
 export { resolveStyle, buildPrefix, buildMotionPrefix, mergeWithEpisode, type StyleResolution, type CreativeContextLike, type SkillOverride } from "./agent/context-merger";
 export { buildAttemptChain, executeWithFallback, type FallbackChains, type InferenceCall, type InferenceResult, type FallbackOptions } from "./routing/fallback-handler";
+export { checkSceneGate, checkRegenerateGate, checkModelGate, configureGates, type GateCheck, type GateConfig } from "./agent/confirmation-gates";
+export { ConfirmationCard, type ConfirmationRequest } from "./ui/ConfirmationCard";
 
 // Utils
 export { resizeImageForModel } from "./utils/resize-image";
