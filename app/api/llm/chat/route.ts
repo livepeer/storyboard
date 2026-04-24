@@ -68,8 +68,18 @@ async function proxyToGemini(body: Record<string, unknown>, model: string) {
   }
 
   const modelId = model || "gemini-2.5-flash";
-  const messages = body.messages as Array<{ role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }>;
+  const messages = body.messages as Array<{ role: string; content: string | null; name?: string; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>; tool_call_id?: string }>;
   const tools = body.tools as Array<{ type: string; function: { name: string; description: string; parameters: unknown } }> | undefined;
+
+  // Build tool_call_id → function name map
+  const callIdToName = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role === "assistant" && m.tool_calls) {
+      for (const tc of m.tool_calls) {
+        callIdToName.set(tc.id, tc.function.name);
+      }
+    }
+  }
 
   // Translate OpenAI → Gemini
   const contents: unknown[] = [];
@@ -99,7 +109,8 @@ async function proxyToGemini(body: Record<string, unknown>, model: string) {
       } catch {
         responseObj = { content: m.content };
       }
-      contents.push({ role: "user", parts: [{ functionResponse: { name: "", response: responseObj } }] });
+      const funcName = m.name || (m.tool_call_id ? callIdToName.get(m.tool_call_id) : undefined) || "unknown_tool";
+      contents.push({ role: "user", parts: [{ functionResponse: { name: funcName, response: responseObj } }] });
       continue;
     }
     // user
