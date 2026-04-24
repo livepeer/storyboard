@@ -469,8 +469,7 @@ export function Card({ card }: { card: CardData }) {
                 className="h-full w-full object-contain"
               />
             ) : (
-              // Images AND streams use <img> — LV2V streams are JPEG frames, not video URLs
-              // Double-click → fullscreen lightbox view
+              // Images AND streams — double-click opens lightbox overlay
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={card.url}
@@ -479,9 +478,31 @@ export function Card({ card }: { card: CardData }) {
                 className="h-full w-full object-contain cursor-zoom-in"
                 onDoubleClick={(e) => {
                   e.stopPropagation();
-                  const img = e.currentTarget;
-                  if (img.requestFullscreen) img.requestFullscreen();
-                  else if ((img as any).webkitRequestFullscreen) (img as any).webkitRequestFullscreen();
+                  // Create a fullscreen overlay — requestFullscreen doesn't work on <img>
+                  const overlay = document.createElement("div");
+                  overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out";
+                  const img = document.createElement("img");
+                  img.src = card.url!;
+                  img.alt = card.title;
+                  img.style.cssText = "max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px";
+                  overlay.appendChild(img);
+                  // Caption
+                  if (card.prompt) {
+                    const cap = document.createElement("div");
+                    cap.style.cssText = "position:absolute;bottom:20px;left:50%;transform:translateX(-50%);max-width:600px;padding:8px 16px;background:rgba(0,0,0,0.7);border-radius:8px;color:#ccc;font-size:12px;text-align:center";
+                    cap.textContent = card.prompt.slice(0, 200);
+                    overlay.appendChild(cap);
+                  }
+                  // Model badge
+                  if (card.capability) {
+                    const badge = document.createElement("div");
+                    badge.style.cssText = "position:absolute;top:20px;left:20px;padding:4px 10px;background:rgba(139,92,246,0.3);border-radius:6px;color:#c4b5fd;font-size:11px;font-weight:600";
+                    badge.textContent = card.capability + (card.routeReason && card.routeReason !== "auto" ? ` (${card.routeReason})` : "");
+                    overlay.appendChild(badge);
+                  }
+                  overlay.onclick = () => overlay.remove();
+                  document.addEventListener("keydown", function esc(ev) { if (ev.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", esc); } });
+                  document.body.appendChild(overlay);
                 }}
               />
             )
