@@ -225,7 +225,7 @@ export function ChatPanel() {
   // --- Track active tasks for concurrency indicator ---
   const activeCount = useRef(0);
 
-  // --- Process one message (fire-and-forget, concurrent) ---
+  // --- Process one message (serial — queued, not concurrent) ---
   const processOne = useCallback(
     async (text: string) => {
       activeCount.current++;
@@ -348,7 +348,8 @@ export function ChatPanel() {
         return;
       }
       setInput("");
-      // Fire concurrently — no queue, no blocking
+      // Serial execution — each message fully completes before the next starts.
+      // Prevents concurrent state races on working memory, session context, etc.
       processOne(text.trim());
     },
     [processOne]
