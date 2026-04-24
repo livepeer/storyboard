@@ -18,6 +18,12 @@ export function createChatStore() {
       return msg;
     },
 
+    updateMessage(id: string, text: string): void {
+      set((s) => ({
+        messages: s.messages.map((m) => (m.id === id ? { ...m, text } : m)),
+      }));
+    },
+
     setProcessing(v: boolean): void {
       set({ isProcessing: v });
     },

@@ -16,6 +16,7 @@ export interface ChatBus {
   isProcessing: boolean;
 
   addMessage(text: string, role: MessageRole): ChatMessage;
+  updateMessage(id: string, text: string): void;
   setProcessing(v: boolean): void;
   clearMessages(): void;
 }

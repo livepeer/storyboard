@@ -724,8 +724,10 @@ export default function Stage() {
     input.click();
   }, []);
 
-  // ─── Source + VACE Proximity Drop ───
+  // ─── Source + Analysis Drop ───
   const sourceAppliedRef = useRef(new Set<string>());
+  /** Reusable status message ID — updates in-place instead of flooding chat */
+  const sourceStatusMsgRef = useRef<string | null>(null);
   const handleCardDrop = useCallback((droppedId: string) => {
     const store = artifacts.getState();
     const dropped = store.artifacts.find((a) => a.id === droppedId);
@@ -768,7 +770,10 @@ export default function Stage() {
       }).catch(() => {});
 
       store.connect(dropped.refId, "live-output", { action: srcType === "video" ? "video-source" : "image-source" });
-      chat.getState().addMessage(`Source set: "${dropped.title}" → Live Output. Analyzing image...`, "system");
+
+      // Single status message — updates in-place (no chat flooding)
+      const statusMsg = chat.getState().addMessage(`Source: "${dropped.title}" → analyzing...`, "system");
+      sourceStatusMsgRef.current = statusMsg.id;
 
       // Step 2: Analyze image in background → inject as prompt
       if (srcType === "image") {
@@ -778,7 +783,6 @@ export default function Stage() {
             const result = await analyzeImage(dropped.url!);
             if (result.ok) {
               const { analysis } = result;
-              // Build a rich prompt from the analysis
               const streamPrompt = [
                 analysis.style,
                 analysis.palette ? `color palette: ${analysis.palette}` : "",
@@ -787,7 +791,6 @@ export default function Stage() {
                 analysis.description?.slice(0, 80) || "",
               ].filter(Boolean).join(", ");
 
-              // Update stream prompt to match the dropped image's visual DNA
               if (streamIdRef.current) {
                 await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
                   method: "POST", headers: hdrs,
@@ -798,21 +801,19 @@ export default function Stage() {
                 });
               }
 
-              chat.getState().addMessage(
-                `Image analyzed → stream prompt updated:\n` +
-                `Style: ${analysis.style}\n` +
-                `Palette: ${analysis.palette}\n` +
-                `Mood: ${analysis.mood}\n` +
-                `The stream now visually matches the dropped image.`,
-                "system",
+              // Update the SAME message — no new row
+              chat.getState().updateMessage(statusMsg.id,
+                `Source: "${dropped.title}" — ${analysis.style}, ${analysis.palette}, ${analysis.mood}`
               );
             } else {
-              chat.getState().addMessage(`Image analysis skipped: ${result.error}. Stream will still transform the source frames.`, "system");
+              chat.getState().updateMessage(statusMsg.id, `Source: "${dropped.title}" — analysis skipped, using as raw frames`);
             }
           } catch {
-            chat.getState().addMessage("Image analysis unavailable. Stream will transform the source frames directly.", "system");
+            chat.getState().updateMessage(statusMsg.id, `Source: "${dropped.title}" — using as raw frames`);
           }
         })();
+      } else {
+        chat.getState().updateMessage(statusMsg.id, `Source: "${dropped.title}" — video feed active`);
       }
     }
   }, []);
@@ -975,8 +976,38 @@ export default function Stage() {
                       onClick={() => {
                         if (setSourceFnRef.current) {
                           setSourceFnRef.current({ type: "blank" });
-                          streamSourceRef.current = { type: "blank" }; setStreamSourceDisplay({ type: "blank" });
-                          chat.getState().addMessage("Source cleared — back to blank frames.", "system");
+                          streamSourceRef.current = { type: "blank" };
+                          setStreamSourceDisplay({ type: "blank" });
+
+                          // Restore scene prompt + noise_scale to undo the analysis override
+                          const ps = perfRef.current.getState();
+                          const currentScene = ps.scenes[ps.currentScene];
+                          if (currentScene && streamIdRef.current) {
+                            const sdk2 = getSdkConfig();
+                            const presetNoise: Record<string, number> = {
+                              dreamy: 0.7, cinematic: 0.5, anime: 0.6, abstract: 0.95,
+                              faithful: 0.2, painterly: 0.65, psychedelic: 0.9,
+                            };
+                            fetch(`${sdk2.url}/stream/${streamIdRef.current}/control`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json", ...(sdk2.key ? { Authorization: `Bearer ${sdk2.key}` } : {}) },
+                              body: JSON.stringify({ type: "parameters", params: {
+                                prompts: currentScene.prompt,
+                                noise_scale: presetNoise[currentScene.preset] ?? 0.5,
+                                input_mode: "video",
+                              }}),
+                            }).catch(() => {});
+                          }
+
+                          // Update the existing status message instead of adding a new one
+                          if (sourceStatusMsgRef.current) {
+                            chat.getState().updateMessage(sourceStatusMsgRef.current,
+                              `Source cleared — restored scene prompt${currentScene ? `: "${currentScene.prompt.slice(0, 50)}"` : ""}`
+                            );
+                            sourceStatusMsgRef.current = null;
+                          } else {
+                            chat.getState().addMessage("Source cleared — restored scene prompt.", "system");
+                          }
                         }
                       }}
                       style={{
