@@ -222,23 +222,60 @@ export function createStageTools(ctx: StageToolContext) {
 
     {
       name: "stage_reference",
-      description: "Add a visual reference image to influence the stream colors and structure",
+      description: "Set a visual reference image for VACE conditioning (colors, composition, structure). IMPORTANT: this restarts the stream because VACE can only be enabled at stream start — it cannot be added mid-stream.",
       parameters: {
         type: "object",
         properties: {
           image_url: { type: "string", description: "Public URL of reference image" },
           scale: { type: "number", description: "Influence strength 0.0-2.0 (default 0.8)" },
+          prompt: { type: "string", description: "Scene prompt for the restarted stream (reuses current if omitted)" },
         },
         required: ["image_url"],
       },
       async execute(args: Record<string, unknown>) {
-        if (!ctx.streamId) return JSON.stringify({ error: "No active stream" });
-        await ctx.controlStream({
-          vace_enabled: true,
-          vace_ref_images: [args.image_url as string],
-          vace_context_scale: (args.scale as number) ?? 0.8,
-        });
-        return JSON.stringify({ status: "reference_applied" });
+        const imageUrl = args.image_url as string;
+        const scale = (args.scale as number) ?? 0.8;
+        const prompt = (args.prompt as string) || "visual stream";
+
+        // VACE requires stream restart — cannot be toggled mid-stream.
+        // Step 1: Stop current stream if running
+        if (ctx.streamId) {
+          try {
+            await fetch(`${ctx.sdkUrl}/stream/${ctx.streamId}/stop`, {
+              method: "POST", headers: headers(),
+            });
+          } catch { /* fire and forget */ }
+          ctx.setStreamId(null);
+        }
+
+        // Step 2: Start new stream WITH vace_enabled at init
+        if (!ctx.apiKey) return JSON.stringify({ error: "No API key" });
+        const recipe = resolveStageRecipe(undefined);
+        try {
+          const resp = await fetch(`${ctx.sdkUrl}/stream/start`, {
+            method: "POST", headers: headers(),
+            body: JSON.stringify({
+              model_id: "scope",
+              params: buildStreamStartParams(recipe, prompt, 0.5, imageUrl),
+            }),
+          });
+          if (!resp.ok) {
+            const text = await resp.text().catch(() => "");
+            return JSON.stringify({ error: `Stream restart failed: ${text.slice(0, 100)}` });
+          }
+          const data = await resp.json();
+          if (data.stream_id) {
+            ctx.setStreamId(data.stream_id);
+            return JSON.stringify({
+              status: "reference_applied",
+              message: `Stream restarted with VACE reference (scale=${scale}). Stream ID: ${data.stream_id}`,
+              stream_id: data.stream_id,
+            });
+          }
+          return JSON.stringify({ error: "No stream_id in response" });
+        } catch (e) {
+          return JSON.stringify({ error: `Stream restart error: ${(e as Error).message}` });
+        }
       },
     },
 

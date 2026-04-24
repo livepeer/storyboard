@@ -725,7 +725,7 @@ export default function Stage() {
   }, []);
 
   // ─── Source + VACE Proximity Drop ───
-  const vaceAppliedRef = useRef(new Set<string>());
+  const sourceAppliedRef = useRef(new Set<string>());
   const handleCardDrop = useCallback((droppedId: string) => {
     const store = artifacts.getState();
     const dropped = store.artifacts.find((a) => a.id === droppedId);
@@ -733,7 +733,7 @@ export default function Stage() {
     if (!dropped || !live || dropped.refId === "live-output") return;
     if (dropped.type !== "image" && dropped.type !== "video") return;
     if (dropped.refId.startsWith("kf-")) return;
-    if (vaceAppliedRef.current.has(dropped.refId)) return;
+    if (sourceAppliedRef.current.has(dropped.refId)) return;
 
     const dx = Math.abs((dropped.x + dropped.w / 2) - (live.x + live.w / 2));
     const dy = Math.abs((dropped.y + dropped.h / 2) - (live.y + live.h / 2));
@@ -754,26 +754,31 @@ export default function Stage() {
       // via /control AFTER the stream starts. Without input_mode:"video",
       // Scope routes to text-mode blocks and ignores ALL published frames.
       const sdk = getSdkConfig();
+      // Tell the pipeline to use published frames (video mode).
+      // DO NOT send vace_enabled here — VACE can ONLY be set at stream
+      // start (pipeline graph is fixed at init). Sending it mid-stream
+      // crashes the Scope session and stops the stream.
+      // The source image still works: it's published as frames that the
+      // pipeline transforms. Use noise_scale to control how much the
+      // pipeline transforms vs preserves the source (0.2=faithful, 0.8=creative).
       const controlParams: Record<string, unknown> = {
         input_mode: "video",
-        noise_scale: 0.3,
+        noise_scale: srcType === "image" ? 0.3 : 0.5,
         noise_controller: false,
-        reset_cache: true,
       };
-      if (dropped.type === "image") {
-        controlParams.vace_enabled = true;
-        controlParams.vace_ref_images = [dropped.url];
-        controlParams.vace_context_scale = 0.8;
-      }
       fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
         body: JSON.stringify({ type: "parameters", params: controlParams }),
       }).catch(() => {});
 
-      vaceAppliedRef.current.add(dropped.refId);
       store.connect(dropped.refId, "live-output", { action: srcType === "video" ? "video-source" : "image-source" });
-      chat.getState().addMessage(`${srcType === "video" ? "Video" : "Image"} source set: "${dropped.title}" → Live Output. Adjust noise_scale to control blend.`, "system");
+      chat.getState().addMessage(
+        `${srcType === "video" ? "Video" : "Image"} source set: "${dropped.title}" → Live Output.\n` +
+        `The stream will transform this ${srcType} in real-time. Adjust noise_scale (0.2=faithful, 0.8=creative).\n` +
+        `For VACE conditioning (color/composition match), restart the stream with: "start a stream with this image as reference"`,
+        "system",
+      );
     }
   }, []);
 
