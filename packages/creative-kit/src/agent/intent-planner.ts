@@ -95,10 +95,21 @@ export function cleanPrompt(text: string): string {
     .replace(/^[\s,;:.\-]+/, "")
     .replace(/[\s,;:.\-]+$/, "")
     .replace(/\s{2,}/g, " ")
-    .replace(/so\s+i\s+can\s+compare\.?/i, "")
-    .replace(/the\s+image\s+of\s+the\s+following\s*[,.]?\s*/i, "")
     .trim();
-  return clean.length >= 10 ? clean : text;
+  // Remove meta phrases (comparison/instruction language, not creative content)
+  clean = clean
+    .replace(/so\s+i\s+can\s+compare\s*(them)?\.?/gi, "")
+    .replace(/the\s+image\s+of\s+the\s+following\s*[,.]?\s*/gi, "")
+    .replace(/\bside\s+by\s+side\b/gi, "")
+    .replace(/\bcompare\s*(them|those|these|it)?\b/gi, "")
+    .replace(/\bfor\s+comparison\b/gi, "")
+    .replace(/\bwhich\s+(one\s+)?(is|looks)\s+better\b/gi, "")
+    .replace(/\b(and|or|to|for|with|the)\s*$/i, "") // trailing connectors
+    .replace(/^[\s,;:.\-]+/, "")
+    .replace(/[\s,;:.\-]+$/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return clean.length >= 5 ? clean : text;
 }
 
 // ── Tier 1: LLM classifier ──
@@ -427,6 +438,20 @@ export async function validatePlan(
   if (!plan.prompt && !plan.prompts?.length) {
     plan.prompt = cleanPrompt(originalText);
     fixes.push("Added missing prompt from original text");
+  }
+
+  // Check for thin prompts — when the creative description is just meta-words
+  // after stripping model names and instructions. These can't be executed
+  // meaningfully ("compare gpt and flux" → prompt would be empty/useless).
+  if (plan.prompt) {
+    const META_ONLY = /^[\s,]*(?:compare|try|use|using|make|create|generate|test|with|and|or|for|to|the|a|an|it|them|models?|different|multiple|several|various|image|picture|photo)*[\s,]*$/i;
+    if (META_ONLY.test(plan.prompt)) {
+      // Prompt is only meta-words, no creative content
+      plan.type = "unclear";
+      plan.fallbackIntent = "compare_models";
+      plan.confidence = 0.3;
+      fixes.push("Prompt has no creative description — asking user what to generate");
+    }
   }
 
   if (plan.type === "compare_models") {
