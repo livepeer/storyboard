@@ -24,7 +24,42 @@ export async function runCli(): Promise<void> {
   const runner = new AgentRunner(provider, tools, working, session);
   const slash = new SlashRegistry();
 
+  // Creative Pipeline — classify intent before the agent
+  // Uses SDK for inference, console for output (CLI mode)
+  let pipeline: import("@livepeer/creative-kit").CreativePipeline | undefined;
+  try {
+    const { createCreativePipeline } = await import("@livepeer/creative-kit");
+    const { HostedSdkClient } = await import("../capabilities/client.js");
+
+    const sdkUrl = process.env.LIVEPEER_SDK_URL || "https://sdk.daydream.monster";
+    const apiKey = process.env.LIVEPEER_API_KEY || "";
+    const sdkClient = new HostedSdkClient({ baseUrl: sdkUrl, apiKey });
+
+    pipeline = createCreativePipeline({
+      executor: {
+        async infer(prompt, model) {
+          try {
+            const result = await sdkClient.inference("cli", model, { prompt });
+            const r = result as Record<string, unknown>;
+            const d = (r.data ?? r) as Record<string, unknown>;
+            const images = d.images as Array<{ url: string }> | undefined;
+            const url = (r.image_url as string) ?? images?.[0]?.url ?? (d.url as string);
+            return url ? { url } : null;
+          } catch { return null; }
+        },
+        addResult({ title, url, model }) {
+          console.log(`  ✦ ${model}: ${url}`);
+        },
+        say(msg) {
+          console.log(`  ⚙ ${msg}`);
+        },
+      },
+    });
+  } catch {
+    // creative-kit not available — pipeline disabled
+  }
+
   unmount();
-  const replInstance = render(<Repl runner={runner} slash={slash} />);
+  const replInstance = render(<Repl runner={runner} slash={slash} pipeline={pipeline} />);
   await replInstance.waitUntilExit();
 }
