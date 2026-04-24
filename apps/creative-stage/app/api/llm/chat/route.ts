@@ -94,6 +94,13 @@ export async function POST(req: Request) {
     geminiBody.tools = [{ functionDeclarations: tools.map((t) => ({
       name: t.function.name, description: t.function.description, parameters: t.function.parameters,
     })) }];
+    // Force Gemini to call a tool on the first turn. Without this,
+    // Gemini often returns empty STOP for long prompts with many tools.
+    // On subsequent turns (after tool results), allow text responses.
+    const hasToolResults = merged.some((c) => c.parts?.some((p: Record<string, unknown>) => p.functionResponse));
+    if (!hasToolResults) {
+      geminiBody.tool_config = { function_calling_config: { mode: "ANY" } };
+    }
   }
 
   const resp = await fetch(
