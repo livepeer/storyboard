@@ -44,6 +44,7 @@ export { PipelineTraceView } from "./ui/PipelineTrace";
 export { createTrace, tracePhase, traceCompleted, traceError, finalizeTrace, formatTraceSummary, type PipelineTrace, type TraceEvent } from "./agent/trace";
 export { canTransition, transition, fromLegacyStatus, toLegacyStatus, isActionable, isTerminal, stateLabel, type SceneState } from "./agent/scene-state-machine";
 export { resolveSkills, wouldConflict, type SkillEntry, type SkillConflict, type ResolvedSkills } from "./routing/skill-resolver";
+export { recordPositive, recordNegative, getTopPreferences, getPreferredModel, getPreferredStyle, buildPreferencePrefix, clearMemory, applyDecay, type CreativePreference } from "./agent/creative-memory";
 
 // Utils
 export { resizeImageForModel } from "./utils/resize-image";
