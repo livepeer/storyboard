@@ -1001,9 +1001,40 @@ export default function Stage() {
               onResize={(id, w, h) => artifacts.getState().update(id, { w, h })}
             >
               <div
-                style={S.cardContent}
+                style={{ ...S.cardContent, position: "relative" as const }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, artifactId: a.id }); }}
+                onDoubleClick={(e) => {
+                  // Lightbox on double-click for images
+                  if (a.type !== "image" || !a.url) return;
+                  e.stopPropagation();
+                  const overlay = document.createElement("div");
+                  overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out";
+                  const img = document.createElement("img");
+                  img.src = a.url; img.style.cssText = "max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px";
+                  overlay.appendChild(img);
+                  overlay.onclick = () => overlay.remove();
+                  document.addEventListener("keydown", function esc(ev) { if (ev.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", esc); } });
+                  document.body.appendChild(overlay);
+                }}
               >
+                {/* Close button */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); artifacts.getState().remove(a.id); }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  style={{
+                    position: "absolute", top: 4, right: 4, zIndex: 10,
+                    width: 20, height: 20, borderRadius: "50%",
+                    background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.15)",
+                    color: "rgba(255,255,255,0.7)", fontSize: 11, lineHeight: "18px",
+                    cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                    opacity: 0.4, transition: "opacity 150ms",
+                  }}
+                  onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "1"; }}
+                  onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "0.4"; }}
+                  title="Remove card"
+                >
+                  ✕
+                </button>
                 {a.url && a.type === "image" && <img src={a.url} alt={a.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 {a.url && a.type === "video" && (
                   <video
