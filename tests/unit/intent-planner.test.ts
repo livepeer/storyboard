@@ -83,4 +83,45 @@ Two children in calm conversation, soft connection forming.`
     expect(plan.prompt).toContain("children");
     expect(plan.prompt).toContain("watercolor");
   });
+
+  it("detects 'N different models' with auto-fill", () => {
+    const plan = classifyWithRegex(
+      "using 4 different models, include gpt-image to Generate an image of a manuscript"
+    );
+    expect(plan.type).toBe("compare_models");
+    expect(plan.models).toHaveLength(4);
+    expect(plan.models).toContain("gpt-image");
+    // Should auto-fill 3 more from defaults
+    expect(plan.models!.length).toBe(4);
+    expect(plan.reason).toContain("auto-filled");
+  });
+
+  it("detects 'multiple models' without count", () => {
+    const plan = classifyWithRegex(
+      "use multiple models to create a sunset painting"
+    );
+    expect(plan.type).toBe("compare_models");
+    expect(plan.models!.length).toBe(4); // defaults to 4
+  });
+
+  it("detects 'N models' with no named models", () => {
+    const plan = classifyWithRegex(
+      "using 3 models to compare a portrait photo"
+    );
+    expect(plan.type).toBe("compare_models");
+    expect(plan.models!.length).toBe(3);
+    // All auto-filled from defaults
+    expect(plan.models).toContain("flux-dev");
+  });
+
+  it("auto-fill puts named model first, then defaults", () => {
+    const plan = classifyWithRegex(
+      "using 4 different models, include recraft to make a logo"
+    );
+    expect(plan.models![0]).toBe("recraft-v4"); // named model first
+    expect(plan.models).toContain("recraft-v4");
+    expect(plan.models!.length).toBe(4);
+    // remaining 3 should be from defaults, no duplicates
+    expect(new Set(plan.models).size).toBe(4);
+  });
 });

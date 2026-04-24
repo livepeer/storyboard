@@ -213,13 +213,48 @@ export async function classifyWithLLM(
   }
 }
 
+// ── Auto-fill: pick diverse models when user asks for N but names fewer ──
+
+/** Default image models in preference order for comparison. */
+const DEFAULT_IMAGE_MODELS = [
+  "flux-dev", "gpt-image", "recraft-v4", "nano-banana",
+  "gemini-image", "seedream-5-lite", "kontext-edit",
+];
+
+/**
+ * If user requests N models but only names some, auto-fill the rest
+ * from defaults (excluding already-named ones).
+ */
+function autoFillModels(named: string[], requested: number): string[] {
+  const result = [...named];
+  for (const m of DEFAULT_IMAGE_MODELS) {
+    if (result.length >= requested) break;
+    if (!result.includes(m)) result.push(m);
+  }
+  return result.slice(0, requested);
+}
+
+/**
+ * Detect "N models" / "N different models" pattern.
+ * Returns the requested count, or 0 if not detected.
+ */
+function detectModelCountRequest(text: string): number {
+  const lower = text.toLowerCase();
+  // "4 different models", "using 3 models", "compare 5 models"
+  const m = lower.match(/(\d+)\s+(?:different\s+)?(?:models?|ai\s+models?)/);
+  if (m) return parseInt(m[1], 10);
+  // "multiple models", "several models", "various models"
+  if (/(?:multiple|several|various|many|all)\s+(?:different\s+)?(?:models?|ai\s+models?)/.test(lower)) return 4;
+  return 0;
+}
+
 // ── Tier 2: Regex classifier (fast fallback) ──
 
 export function classifyWithRegex(text: string): IntentPlan {
   const lower = text.toLowerCase();
   const models = extractMentionedModels(text);
 
-  // Compare models: 2+ model names
+  // Compare models: 2+ model names explicitly
   if (models.length >= 2) {
     return {
       type: "compare_models",
@@ -227,6 +262,19 @@ export function classifyWithRegex(text: string): IntentPlan {
       models,
       prompt: cleanPrompt(text),
       reason: `Detected ${models.length} model names`,
+    };
+  }
+
+  // Compare models: "N models" / "N different models" (partially named)
+  const requestedCount = detectModelCountRequest(text);
+  if (requestedCount >= 2) {
+    const filled = autoFillModels(models, requestedCount);
+    return {
+      type: "compare_models",
+      confidence: 0.85,
+      models: filled,
+      prompt: cleanPrompt(text),
+      reason: `User requested ${requestedCount} models (${models.length} named, ${filled.length - models.length} auto-filled): ${filled.join(", ")}`,
     };
   }
 
@@ -305,9 +353,7 @@ export async function planIntent(
   config?: LLMClassifierConfig,
 ): Promise<IntentPlan> {
   // Tier 0: Deterministic checks — ALWAYS run first.
-  // Model names are facts. If 4 model names appear in the text, it's a
-  // comparison no matter what the LLM thinks. Don't let the LLM override
-  // a deterministic signal with a hallucinated "SINGLE" classification.
+  // Model names are facts. If 2+ model names appear, it's a comparison.
   const models = extractMentionedModels(text);
   if (models.length >= 2) {
     const plan: IntentPlan = {
@@ -318,6 +364,23 @@ export async function planIntent(
       reason: `${models.length} model names detected: ${models.join(", ")}`,
     };
     console.log(`[IntentPlanner] Deterministic: ${plan.reason}`);
+    return plan;
+  }
+
+  // "N different models" / "4 models" — user wants comparison but named
+  // fewer than N. Auto-fill from defaults (e.g. "4 models, include gpt-image"
+  // → gpt-image + flux-dev + recraft-v4 + nano-banana)
+  const requestedCount = detectModelCountRequest(text);
+  if (requestedCount >= 2) {
+    const filled = autoFillModels(models, requestedCount);
+    const plan: IntentPlan = {
+      type: "compare_models",
+      confidence: 0.90,
+      models: filled,
+      prompt: cleanPrompt(text),
+      reason: `User requested ${requestedCount} models (${models.length} named, auto-filled to ${filled.length}): ${filled.join(", ")}`,
+    };
+    console.log(`[IntentPlanner] Deterministic (auto-fill): ${plan.reason}`);
     return plan;
   }
 
