@@ -1,4 +1,4 @@
-export type SkillCategory = "core" | "creation" | "workflow" | "live" | "style" | "integration" | "user";
+export type SkillCategory = "core" | "creation" | "workflow" | "live" | "style" | "integration" | "user" | "intent";
 
 export interface SkillMeta {
   id: string;

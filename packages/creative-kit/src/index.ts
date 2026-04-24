@@ -65,5 +65,5 @@ export { exportToJson, buildVideoManifest, buildStoryboardHtml, listSocialPlatfo
 export { exportForSocial, cropImage, calculateCrop, type SocialExportOptions, type SocialExportResult, type CropRect } from "./agent/social-export";
 export { executeDAG, buildProjectDAG, type DAGNode, type DAGResult, type DAGOptions } from "./agent/dag-executor";
 export { buildVariationSteps, type VariationOptions, type VariationStep } from "./agent/variation-engine";
-export { planIntent, cleanPrompt, extractMentionedModels, type IntentPlan, type PlanType } from "./agent/intent-planner";
+export { planIntent, planIntentSync, classifyWithLLM, classifyWithRegex, cleanPrompt, extractMentionedModels, type IntentPlan, type PlanType, type LLMClassifierConfig } from "./agent/intent-planner";
 export { renderProject, buildRenderManifest, type RenderOptions, type RenderResult, type RenderCard, type RenderManifestEntry } from "./agent/render-engine";

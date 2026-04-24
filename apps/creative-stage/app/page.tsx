@@ -274,8 +274,8 @@ export default function Stage() {
 
     // ── Intent planner: detect model comparison before agent ──
     try {
-      const { planIntent, cleanPrompt } = await import("@livepeer/creative-kit");
-      const plan = planIntent(text);
+      const { planIntentSync } = await import("@livepeer/creative-kit");
+      const plan = planIntentSync(text);
       if (plan?.type === "compare_models" && plan.models && plan.prompt) {
         say(`Comparing ${plan.models.length} models: ${plan.models.join(", ")}`);
         const hdrs = { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) };

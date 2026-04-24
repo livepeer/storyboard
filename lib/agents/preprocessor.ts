@@ -450,22 +450,48 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
     return { handled: false };
   }
 
-  // --- Intent planner: LLM-free understanding of complex prompts ---
-  // Catches cases regex misses: model comparison, batch generation, etc.
+  // --- Intent planner: LLM + regex understanding of complex prompts ---
+  // Runs BEFORE multi-scene detection. Catches: model comparison, batch
+  // generation, style sweeps, variations, and ambiguous intents.
   try {
-    const { planIntent, executeComparisonPlan } = await import("./intent-planner");
-    const plan = planIntent(text);
-    if (plan) {
-      console.log(`[Preprocessor] Intent plan: ${plan.type} — ${plan.reason}`);
-      if (plan.type === "compare_models") {
-        say(`Comparing ${plan.models!.length} models: ${plan.models!.join(", ")}`, "agent");
-        const summary = await executeComparisonPlan(plan);
+    const { classifyIntent: classifyFullIntent, executePlan } = await import("./intent-planner");
+    const plan = await classifyFullIntent(text);
+
+    if (plan.type !== "single" && plan.type !== "passthrough" && plan.type !== "story") {
+      console.log(`[Preprocessor] Intent: ${plan.type} (${plan.confidence}) — ${plan.reason}`);
+
+      if (plan.type === "unclear") {
+        // Human-in-loop: ask the user what they meant
+        const guess = plan.fallbackIntent || "single";
+        const guessLabels: Record<string, string> = {
+          compare_models: "compare AI models side by side",
+          batch_generate: "generate multiple different images",
+          style_sweep: "try different visual styles",
+          variations: "generate variations to pick from",
+          single: "generate one image",
+        };
+        say(`I'm not sure what you'd like. Did you mean to ${guessLabels[guess] || guess}? Just say "yes" or tell me more.`, "agent");
+        return { handled: false, agentPrompt: `[The user's intent is ambiguous. Best guess: ${guess}. Ask them to clarify: did they want to ${guessLabels[guess]}? Be brief.]` };
+      }
+
+      // Execute the plan directly
+      const label: Record<string, string> = {
+        compare_models: `Comparing ${plan.models?.length || 0} models: ${plan.models?.join(", ") || ""}`,
+        batch_generate: `Creating ${plan.count || plan.prompts?.length || 0} different images`,
+        style_sweep: `Style sweep: ${plan.styles?.join(", ") || "multiple styles"}`,
+        variations: `Generating ${plan.count || 4} variations`,
+      };
+      say(label[plan.type] || `Running: ${plan.type}`, "agent");
+
+      const summary = await executePlan(plan);
+      if (summary) {
         say(summary, "agent");
         return { handled: true };
       }
     }
   } catch (e) {
     console.warn("[Preprocessor] Intent planner error:", e);
+    // Fall through to existing flow
   }
 
   // --- Multi-scene detection ---
