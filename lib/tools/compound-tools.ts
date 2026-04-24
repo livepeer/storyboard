@@ -618,36 +618,31 @@ export const createMediaTool: ToolDefinition = {
       // string "10", veo/ltx don't accept it at all.
       const rawDuration = step.duration && step.action === "animate" ? step.duration : 0;
 
-      // Build the fallback chain for this step. The first attempt is
-      // the resolved capability; if it fails with a recoverable error
-      // (empty output, upstream policy reject, 5xx, timeout), we try
-      // the next sibling model in FALLBACK_CHAINS before reporting.
-      // Only capabilities in the LIVE registry survive filtering.
+      // Face Lock: inject reference image for character consistency.
+      // Must happen BEFORE attemptChain is built so the chain uses kontext-edit.
+      try {
+        const faceLockProject = useProjectStore?.getState?.()?.getActiveProject?.();
+        const faceLock = (faceLockProject as any)?.faceLock as { refId: string; url: string } | undefined;
+        if (faceLock?.url && !params.image_url) {
+          if (step.action === "generate" || step.action === "restyle") {
+            params.image_url = faceLock.url;
+            // Override capability to kontext-edit — it's the only model that
+            // preserves the reference face. Text-to-image models ignore image_url.
+            capability = "kontext-edit";
+            console.log(`[create_media] Face lock active (${faceLock.refId}) → kontext-edit`);
+          } else if (step.action === "animate" && !step.source_url) {
+            params.image_url = faceLock.url;
+            console.log(`[create_media] Face lock active (${faceLock.refId}) → first frame`);
+          }
+        }
+      } catch { /* non-critical */ }
+
+      // Build the fallback chain AFTER face lock override so it uses
+      // the correct capability (kontext-edit when locked, original otherwise).
       const liveCapNames = new Set(
         (getCachedCapabilities() || []).map((c: { name: string }) => c.name)
       );
       const attemptChain = buildAttemptChain(capability, liveCapNames);
-
-      // Face Lock: inject reference image for character consistency.
-      // When a project has a face lock, route generate/restyle through
-      // kontext-edit with the locked image as source. For animate,
-      // the locked face becomes the source_url (first frame carry-through).
-      try {
-        const { useProjectStore } = await import("@/lib/projects/store");
-        const activeProject = useProjectStore.getState().getActiveProject();
-        const faceLock = (activeProject as any)?.faceLock as { url: string } | undefined;
-        if (faceLock?.url && !params.image_url) {
-          if (step.action === "generate" || step.action === "restyle") {
-            params.image_url = faceLock.url;
-            if (capability === "flux-dev" || capability === "gemini-image" || capability === "seedream-5-lite") {
-              // These models don't support image_url as reference — override to kontext-edit
-              capability = "kontext-edit";
-            }
-          } else if (step.action === "animate" && !step.source_url) {
-            params.image_url = faceLock.url;
-          }
-        }
-      } catch { /* non-critical — face lock is optional */ }
 
       // Capture all loop-local variables for the inference closure.
       // The setup loop keeps running (model locking, card creation)
