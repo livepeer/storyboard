@@ -42,6 +42,7 @@ export { checkSceneGate, checkRegenerateGate, checkModelGate, configureGates, ty
 export { ConfirmationCard, type ConfirmationRequest } from "./ui/ConfirmationCard";
 export { PipelineTraceView } from "./ui/PipelineTrace";
 export { createTrace, tracePhase, traceCompleted, traceError, finalizeTrace, formatTraceSummary, type PipelineTrace, type TraceEvent } from "./agent/trace";
+export { canTransition, transition, fromLegacyStatus, toLegacyStatus, isActionable, isTerminal, stateLabel, type SceneState } from "./agent/scene-state-machine";
 
 // Utils
 export { resizeImageForModel } from "./utils/resize-image";
