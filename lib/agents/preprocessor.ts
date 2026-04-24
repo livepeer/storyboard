@@ -450,6 +450,24 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
     return { handled: false };
   }
 
+  // --- Intent planner: LLM-free understanding of complex prompts ---
+  // Catches cases regex misses: model comparison, batch generation, etc.
+  try {
+    const { planIntent, executeComparisonPlan } = await import("./intent-planner");
+    const plan = planIntent(text);
+    if (plan) {
+      console.log(`[Preprocessor] Intent plan: ${plan.type} — ${plan.reason}`);
+      if (plan.type === "compare_models") {
+        say(`Comparing ${plan.models!.length} models: ${plan.models!.join(", ")}`, "agent");
+        const summary = await executeComparisonPlan(plan);
+        say(summary, "agent");
+        return { handled: true };
+      }
+    }
+  } catch (e) {
+    console.warn("[Preprocessor] Intent planner error:", e);
+  }
+
   // --- Multi-scene detection ---
   if (!isMultiScene(text)) {
     return { handled: false };
