@@ -272,6 +272,52 @@ export default function Stage() {
     const sdk = getSdkConfig();
     const say = (msg: string) => chat.getState().addMessage(msg, "system");
 
+    // ── Intent planner: detect model comparison before agent ──
+    try {
+      const { planIntent, cleanPrompt } = await import("@livepeer/creative-kit");
+      const plan = planIntent(text);
+      if (plan?.type === "compare_models" && plan.models && plan.prompt) {
+        say(`Comparing ${plan.models.length} models: ${plan.models.join(", ")}`);
+        const hdrs = { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) };
+        const results = await Promise.allSettled(
+          plan.models.map(async (model) => {
+            say(`Generating with ${model}…`);
+            const resp = await fetch(`${sdk.url}/inference`, {
+              method: "POST", headers: hdrs,
+              body: JSON.stringify({ capability: model, prompt: plan.prompt, params: {} }),
+            });
+            if (!resp.ok) throw new Error(`${model}: ${resp.status}`);
+            const data = await resp.json();
+            // Extract URL from response
+            const r = data as Record<string, unknown>;
+            const d = (r.data ?? r) as Record<string, unknown>;
+            const images = d.images as Array<{ url: string }> | undefined;
+            const url = (r.image_url as string) ?? images?.[0]?.url ?? (d.url as string);
+            if (!url) throw new Error(`${model}: no output`);
+            return { model, url };
+          })
+        );
+        for (const r of results) {
+          if (r.status === "fulfilled") {
+            const { model, url } = r.value;
+            artifacts.getState().add({
+              id: `cmp-${model}-${Date.now()}`, refId: `cmp-${model}-${Date.now()}`,
+              type: "image", title: `${model}: ${plan.prompt!.slice(0, 25)}`,
+              url, x: 50 + Math.random() * 300, y: 50 + Math.random() * 200,
+              w: 320, h: 280,
+            });
+            say(`${model}: done`);
+          } else {
+            say(`Failed: ${r.reason}`);
+          }
+        }
+        say(`Comparison complete — ${results.filter((r) => r.status === "fulfilled").length}/${plan.models.length} succeeded`);
+        return;
+      }
+    } catch (e) {
+      console.warn("[IntentPlanner]", e);
+    }
+
     const controlStreamFn = async (params: Record<string, unknown>) => {
       if (!streamIdRef.current) return;
       const cfg = getSdkConfig();
