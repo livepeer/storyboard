@@ -10,20 +10,23 @@ import { routeModel, recordModelLatency } from "@livepeer/creative-kit";
 import type { CardType } from "@/lib/canvas/types";
 
 /**
- * Module-level cache of the current user message. Set by the active
- * plugin (gemini/claude/openai) BEFORE invoking runStream, read by
- * selectCapability when it needs to detect edit-intent vs motion-intent.
+ * Request-scoped user text. Preferred over the legacy global.
+ * Set by the plugin before running the agent, read by selectCapability.
  *
- * Why: Gemini rewrites the user's request as a pure scene description
- * in step.prompt when calling create_media, so the edit verbs ("with a
- * tear", "add shadows", "deeper") get stripped. To detect the user's
- * actual intent, we need the original text. Threading it through the
- * SDK runner → tool context was too invasive for a hot-fix; a module-
- * level pointer is simpler and single-consumer.
+ * Legacy global kept for backward compatibility during transition.
+ * New code should use RequestContext instead.
  */
 let currentUserText = "";
-export function setCurrentUserText(text: string): void {
+let _activeRequestId = "";
+
+export function setCurrentUserText(text: string, requestId?: string): void {
   currentUserText = text;
+  if (requestId) _activeRequestId = requestId;
+}
+
+/** Get the current user text (from active request context or legacy global). */
+function getUserText(): string {
+  return currentUserText;
 }
 
 /**
@@ -216,9 +219,9 @@ function selectCapability(
 
   // Detect explicit model name in user text: "using pixverse", "with tripo",
   // "grok tts", etc. This lets users bypass the automatic routing.
-  const userModelMention = (currentUserText || "").match(
+  const userModelMention = getUserText().match(
     /\b(?:using|with|via|use)\s+(pixverse|tripo|grok|inworld|gemini.tts|void|seedance|seedream)/i
-  ) || (currentUserText || "").match(
+  ) || getUserText().match(
     /\b(pixverse|tripo|grok.tts|inworld.tts|void.inpaint|seedance|seedream|kling)\b/i
   );
   if (userModelMention) {
@@ -267,7 +270,7 @@ function selectCapability(
   // verbs. The user-text fallback catches cases where the user
   // clearly wanted an edit but Gemini's expansion lost the intent.
   const lowerPrompt = (promptText ?? "").toLowerCase();
-  const lowerUser = (currentUserText || "").toLowerCase();
+  const lowerUser = getUserText().toLowerCase();
   const combinedText = `${lowerPrompt} ${lowerUser}`.trim();
   const lowerHint = (styleHint ?? "").toLowerCase();
   // Video-intent check uses USER text (strict) not Gemini's rewritten
@@ -339,7 +342,7 @@ function selectCapability(
       // 3) animate WITH source AND motion: the real animation case.
       //    Route to veo-i2v (with ltx-i2v fallback).
       // Detect 4K / high-quality intent from user text
-      const userText = (currentUserText || "").toLowerCase();
+      const userText = getUserText().toLowerCase();
       const wants4K = /\b(4k|ultra|highest.quality|cinema|premium)\b/.test(userText);
       const hasKlingO3 = !!valid && valid.some((c) => c.name === "kling-o3-i2v");
       const hasKlingO3T2V = !!valid && valid.some((c) => c.name === "kling-o3-t2v");

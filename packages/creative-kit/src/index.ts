@@ -32,6 +32,9 @@ export { BUILTIN_RECIPES, KNOWN_PIPELINES } from "./streaming/recipes";
 export { buildSimpleGraph, buildTextOnlyGraph, buildPreprocessorGraph, buildPostprocessorGraph } from "./streaming/graph-builder";
 export type { PipelineInfo, PipelineRegistry, StreamRecipe, RecipeGraph, RecipeGraphNode, RecipeGraphEdge } from "./streaming/types";
 
+// Agent
+export { createRequestContext, type RequestContext } from "./agent/request-context";
+
 // Utils
 export { resizeImageForModel } from "./utils/resize-image";
 export { mixVideoAudio, mixMedia, type MixOptions } from "./utils/media-mixer";
