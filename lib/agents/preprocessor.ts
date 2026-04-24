@@ -457,6 +457,15 @@ Use create_media with ${Math.min(count, 5)} steps. Each prompt MUST start with t
     const { classifyIntent: classifyFullIntent, executePlan } = await import("./intent-planner");
     const plan = await classifyFullIntent(text);
 
+    // Single with model override → pass model hint to agent
+    if (plan.type === "single" && plan.models?.length === 1) {
+      console.log(`[Preprocessor] Model override: ${plan.models[0]}`);
+      return {
+        handled: false,
+        agentPrompt: `[Use model_override: "${plan.models[0]}" for this request.]\n${plan.prompt || text}`,
+      };
+    }
+
     if (plan.type !== "single" && plan.type !== "passthrough" && plan.type !== "story") {
       console.log(`[Preprocessor] Intent: ${plan.type} (${plan.confidence}) — ${plan.reason}`);
 

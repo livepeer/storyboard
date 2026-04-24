@@ -24,25 +24,34 @@ function useFirstCardHint(hasUrl: boolean): boolean {
   return show;
 }
 
-/** Spinner with elapsed timer + progress bar based on model-typical latencies. */
+/** Spinner with elapsed timer + progress bar using measured + estimated latency. */
 function GeneratingSpinner({ type, capability }: { type: string; capability?: string }) {
   const [elapsed, setElapsed] = useState(0);
+  const [measuredEta, setMeasuredEta] = useState<number | null>(null);
   useEffect(() => {
     const t0 = Date.now();
     const iv = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+    // Try to load measured latency from model router stats
+    if (capability) {
+      import("@livepeer/creative-kit").then((kit) => {
+        const stats = kit.getModelStats();
+        const s = stats.get(capability);
+        if (s && s.count >= 1) setMeasuredEta(Math.ceil(s.avgMs / 1000));
+      }).catch(() => {});
+    }
     return () => clearInterval(iv);
-  }, []);
+  }, [capability]);
 
-  // Model-specific ETA estimates (seconds)
-  const etaMap: Record<string, number> = {
+  // Model-specific ETA: measured first, then hardcoded defaults
+  const defaultEtaMap: Record<string, number> = {
     "flux-dev": 8, "flux-schnell": 4, "gpt-image": 12, "recraft-v4": 6,
     "nano-banana": 5, "gemini-image": 8, "seedream-5-lite": 6, "kontext-edit": 8,
     "seedance-i2v": 60, "seedance-i2v-fast": 30, "kling-i2v": 45, "veo-i2v": 40,
     "ltx-i2v": 25, "ltx-t2v": 30, "chatterbox-tts": 10, "music": 15,
   };
   const defaultEta = type === "video" ? 60 : type === "audio" ? 12 : 8;
-  const eta = capability ? (etaMap[capability] || defaultEta) : defaultEta;
-  const pct = Math.min(elapsed / eta, 0.95); // never show 100% until actually done
+  const eta = measuredEta || (capability ? (defaultEtaMap[capability] || defaultEta) : defaultEta);
+  const pct = Math.min(elapsed / eta, 0.95);
 
   return (
     <div className="flex flex-col items-center gap-2 w-full px-6">

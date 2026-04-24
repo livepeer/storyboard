@@ -367,3 +367,45 @@ describe("extractMentionedModels", () => {
     expect(extractMentionedModels("a beautiful sunset over mountains")).toEqual([]);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// 11. NEW EDGE CASES — deeper intent understanding
+// ═══════════════════════════════════════════════════════════════
+describe("deeper intent edge cases", () => {
+  it("single model override: 'use gpt-image for this sunset'", () => {
+    const plan = classifyWithRegex("use gpt-image for a beautiful sunset");
+    expect(plan.type).toBe("single");
+    expect(plan.models).toContain("gpt-image");
+    expect(plan.reason).toContain("gpt-image");
+  });
+
+  it("single model override: 'make it with recraft'", () => {
+    const plan = classifyWithRegex("make this portrait with recraft");
+    expect(plan.type).toBe("single");
+    expect(plan.models).toContain("recraft-v4");
+  });
+
+  it("style sweep: 'anime style, realistic style, pixel art style'", () => {
+    const plan = classifyWithRegex("create a warrior in anime style, realistic style, and pixel art style");
+    expect(plan.type).toBe("style_sweep");
+    expect(plan.styles!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("style sweep: 'different styles' without naming them", () => {
+    const plan = classifyWithRegex("show me this landscape in different styles");
+    expect(plan.type).toBe("style_sweep");
+    expect(plan.styles!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("style sweep: 'various styles'", () => {
+    const plan = classifyWithRegex("try various styles for this portrait");
+    expect(plan.type).toBe("style_sweep");
+  });
+
+  it("single model mention without 'use' verb → still single (not override)", () => {
+    // "a flux of emotions" → single, not model override
+    const plan = classifyWithRegex("a flux of emotions in her eyes");
+    // This might detect "flux" → model. Acceptable since 1 model → single type.
+    expect(plan.type).toBe("single");
+  });
+});

@@ -125,6 +125,20 @@ export interface LLMClassifierConfig {
   canvasSummary?: string;
 }
 
+/** Inline fallback prompt when no skill file is loaded. */
+const INLINE_CLASSIFIER_PROMPT = `Classify the user's creative intent. Reply with JSON only.
+
+Intents:
+- COMPARE_MODELS: user wants same image from multiple AI models side by side. Params: models[], prompt
+- BATCH_GENERATE: user wants multiple DIFFERENT images. Params: prompts[], count
+- STYLE_SWEEP: user wants same subject in multiple styles. Params: styles[], prompt
+- VARIATIONS: user wants alternatives of same concept. Params: prompt, count
+- MODEL_OVERRIDE: user wants a SPECIFIC model for one image. Params: model, prompt
+- SINGLE: one image, default. Params: prompt
+- UNCLEAR: ambiguous, need clarification. Params: fallback_intent, prompt
+
+Reply format: {"intent":"...", "confidence":0.9, "params":{...}, "reason":"..."}`;
+
 /**
  * Classify intent using LLM with skill knowledge.
  * Returns null on LLM failure (caller should fall back to regex).
@@ -133,10 +147,10 @@ export async function classifyWithLLM(
   text: string,
   config: LLMClassifierConfig,
 ): Promise<IntentPlan | null> {
-  if (!config.skillContent) return null;
+  if (!config.llmEndpoint) return null;
 
   const systemPrompt = [
-    config.skillContent,
+    config.skillContent || INLINE_CLASSIFIER_PROMPT,
     config.preferencesSummary ? `\nUser preferences: ${config.preferencesSummary}` : "",
     config.canvasSummary ? `\nCanvas state: ${config.canvasSummary}` : "",
   ].join("");
@@ -178,12 +192,13 @@ export async function classifyWithLLM(
       "BATCH_GENERATE": "batch_generate",
       "STYLE_SWEEP": "style_sweep",
       "VARIATIONS": "variations",
+      "MODEL_OVERRIDE": "single", // single image but with specific model
       "STORY": "story",
       "SINGLE": "single",
       "UNCLEAR": "unclear",
     };
 
-    const type = intentMap[parsed.intent] || "single";
+    let type = intentMap[parsed.intent] || "single";
     const plan: IntentPlan = {
       type,
       confidence: parsed.confidence ?? 0.5,
@@ -206,6 +221,15 @@ export async function classifyWithLLM(
     }
     if (type === "variations") {
       plan.count = (parsed.params.count as number) || 4;
+    }
+    // MODEL_OVERRIDE: LLM detected user wants a specific model
+    if (parsed.intent === "MODEL_OVERRIDE") {
+      const modelName = parsed.params.model as string;
+      if (modelName) {
+        const resolved = MODEL_ALIASES[modelName.toLowerCase()] || modelName;
+        plan.models = [resolved];
+        plan.reason = `User requested ${resolved} specifically`;
+      }
     }
     if (type === "unclear") {
       const fb = parsed.fallback_intent;
@@ -286,6 +310,17 @@ export function classifyWithRegex(text: string): IntentPlan {
     };
   }
 
+  // Single model override: "use gpt-image for this", "make it with recraft"
+  if (models.length === 1 && /\b(use|using|with|via|try)\b/i.test(lower)) {
+    return {
+      type: "single",
+      confidence: 0.85,
+      models: models,
+      prompt: cleanPrompt(text),
+      reason: `User specified ${models[0]}`,
+    };
+  }
+
   // Variations: explicit keywords
   if (/\b(variations?|alternatives?|options|versions|different ways)\b/i.test(lower) && !/story|scene|shot/i.test(lower)) {
     return {
@@ -297,7 +332,7 @@ export function classifyWithRegex(text: string): IntentPlan {
     };
   }
 
-  // Style sweep: "in X, Y, and Z style"
+  // Style sweep: "in X, Y, and Z style" OR "X style, Y style, Z style"
   const styleMatch = lower.match(/\b(?:in|as|using)\s+(\w+(?:\s+\w+)?)\s*,\s*(\w+(?:\s+\w+)?)\s*(?:,\s*(\w+(?:\s+\w+)?))?\s*(?:and\s+(\w+(?:\s+\w+)?))?\s*(?:style|look|aesthetic)/i);
   if (styleMatch) {
     const styles = [styleMatch[1], styleMatch[2], styleMatch[3], styleMatch[4]].filter(Boolean) as string[];
@@ -310,6 +345,28 @@ export function classifyWithRegex(text: string): IntentPlan {
         reason: `Detected ${styles.length} style names`,
       };
     }
+  }
+  // Alternative style pattern: "X style, Y style, and Z style"
+  const stylePatterns = lower.match(/(\w+(?:\s+\w+)?)\s+style/gi);
+  if (stylePatterns && stylePatterns.length >= 2) {
+    const styles = stylePatterns.map((s) => s.replace(/\s+style$/i, "").trim());
+    return {
+      type: "style_sweep",
+      confidence: 0.75,
+      styles,
+      prompt: cleanPrompt(text),
+      reason: `Detected ${styles.length} style mentions: ${styles.join(", ")}`,
+    };
+  }
+  // "different styles" or "various styles" without naming them → ask LLM or default 4
+  if (/(?:different|various|multiple|several)\s+styles?\b/i.test(lower)) {
+    return {
+      type: "style_sweep",
+      confidence: 0.65,
+      styles: ["watercolor", "oil painting", "pencil sketch", "digital art"],
+      prompt: cleanPrompt(text),
+      reason: "User asked for different styles — auto-filled 4 defaults",
+    };
   }
 
   // Batch: "make a X, a Y, and a Z" (distinct articles/items)
@@ -388,8 +445,14 @@ export async function planIntent(
     return plan;
   }
 
-  // Tier 1: LLM (if available) — for ambiguous intents where regex can't decide
-  if (config?.skillContent) {
+  // Tier 1: LLM — for ambiguous intents where regex can't decide.
+  // Fires when: (a) skill file loaded, OR (b) prompt is complex enough
+  // to warrant LLM reasoning (>80 chars with multiple clauses).
+  const isComplex = text.length > 80 && (
+    /\b(and|but|then|also|each|every|different|compare|try|show me)\b/i.test(text)
+    || text.split(/[,;]/).length >= 3
+  );
+  if (config?.llmEndpoint && (config.skillContent || isComplex)) {
     const llmPlan = await classifyWithLLM(text, config);
     if (llmPlan && llmPlan.confidence >= 0.5) {
       console.log(`[IntentPlanner] LLM: ${llmPlan.type} (${llmPlan.confidence}) — ${llmPlan.reason}`);
@@ -397,7 +460,7 @@ export async function planIntent(
     }
     if (llmPlan?.type === "unclear" && llmPlan.fallbackIntent) {
       console.log(`[IntentPlanner] LLM uncertain, suggesting ${llmPlan.fallbackIntent}`);
-      return llmPlan; // caller should ask user
+      return llmPlan;
     }
   }
 
