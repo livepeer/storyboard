@@ -146,6 +146,9 @@ export default function Stage() {
   const playerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pendingPlayRef = useRef(false);
 
+  // Activity tracking
+  const [activityText, setActivityText] = useState<string | null>(null);
+
   // Resizable chat sidebar
   const [chatWidth, setChatWidth] = useState(360);
   const chatResizing = useRef(false);
@@ -395,12 +398,25 @@ export default function Stage() {
     working.setCriticalConstraints([STAGE_SYSTEM_PROMPT]);
     const runner = new AgentRunner(provider, tools, working, new SessionMemoryStore());
 
-    // Don't call setProcessing — it disables the send button and never recovers if Gemini hangs
+    const toolVerbs: Record<string, string> = {
+      stage_scene: "Creating scenes", stage_start: "Starting stream",
+      stage_music: "Composing music", stage_cinematic: "Rendering video",
+      stage_prompt: "Updating prompt", stage_source: "Setting source",
+      stage_generate: "Generating", stage_perform: "Playing",
+      stage_sync: "Syncing beats", stage_record: "Recording",
+    };
+    setActivityText("Thinking…");
     try {
       for await (const event of runner.runStream({ user: text, maxIterations: 8 })) {
         switch (event.kind) {
-          case "text": if (event.text) chat.getState().addMessage(event.text, "agent"); break;
-          case "tool_call": say(`Calling ${event.name}…`); break;
+          case "text":
+            setActivityText(null);
+            if (event.text) chat.getState().addMessage(event.text, "agent");
+            break;
+          case "tool_call":
+            setActivityText(toolVerbs[event.name || ""] || `Running ${event.name}…`);
+            say(`Calling ${event.name}…`);
+            break;
           case "tool_result":
             if (!event.ok) {
               say(`${event.name} failed: ${event.content?.slice(0, 200) || ''}`);
@@ -414,14 +430,14 @@ export default function Stage() {
               } catch { /* not JSON */ }
             }
             break;
-          case "usage": { const t = event.usage.input + event.usage.output; if (t > 0) say(`${t.toLocaleString()} tokens`); break; }
-          case "error": say(`Error: ${event.error}`); break;
+          case "usage": { const t = event.usage.input + event.usage.output; if (t > 0) setActivityText(`${t.toLocaleString()} tokens`); break; }
+          case "error": say(`Error: ${event.error}`); setActivityText(null); break;
         }
       }
     } catch (e) {
       say(`Agent error: ${(e as Error).message}`);
     } finally {
-      // chat always stays active
+      setActivityText(null);
     }
   }, []);
 
@@ -991,7 +1007,7 @@ export default function Stage() {
           )}
         </div>
         <div style={{ flex: 1, overflow: "hidden" }}>
-          <ChatPanel messages={messages} onSend={handleSend} placeholder="Describe a scene to stream live…" />
+          <ChatPanel messages={messages} onSend={handleSend} placeholder="Describe a scene to stream live…" activityText={activityText} />
         </div>
       </div>
 

@@ -13,6 +13,8 @@ import { MessageBubble } from "./MessageBubble";
 export interface ChatPanelProps {
   messages: ChatMessage[];
   isProcessing?: boolean;
+  /** Activity text shown with spinner (e.g. "Generating scenes…", "Starting stream…") */
+  activityText?: string | null;
   onSend: (text: string) => void;
   placeholder?: string;
   cardRenderers?: Record<string, (text: string) => ReactNode>;
@@ -22,6 +24,7 @@ export interface ChatPanelProps {
 export function ChatPanel({
   messages,
   isProcessing = false,
+  activityText,
   onSend,
   placeholder = "Type a message…",
   cardRenderers,
@@ -87,17 +90,25 @@ export function ChatPanel({
         }}
       >
         {messages.map(renderMessage)}
-        {isProcessing && (
+        {(isProcessing || activityText) && (
           <div
             style={{
               alignSelf: "flex-start",
-              fontSize: 12,
-              color: "rgba(255,255,255,0.4)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
               padding: "4px 10px",
-              fontStyle: "italic",
+              fontSize: 11,
+              color: "rgba(255,255,255,0.5)",
             }}
           >
-            Thinking…
+            <span style={{
+              display: "inline-block", width: 10, height: 10, borderRadius: "50%",
+              border: "2px solid rgba(129,140,248,0.3)", borderTopColor: "rgba(129,140,248,0.8)",
+              animation: "spin 1s linear infinite",
+            }} />
+            <span>{activityText || "Thinking…"}</span>
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           </div>
         )}
         <div ref={bottomRef} />

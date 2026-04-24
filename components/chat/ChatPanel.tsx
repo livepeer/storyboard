@@ -321,8 +321,9 @@ export function ChatPanel() {
       if (isStoryContinuationIntent(text.trim())) {
         addMessage(text.trim(), "user");
         setInput("");
-        addMessage("Adding scenes to your story…", "system");
-        continueStory(text.trim()).then((result) => addMessage(result, "system"));
+        setIsThinking(true);
+        setThinkingVerb("Adding scenes");
+        continueStory(text.trim()).then((result) => { addMessage(result, "system"); setIsThinking(false); });
         return;
       }
 
@@ -331,7 +332,19 @@ export function ChatPanel() {
       if (cmd) {
         addMessage(text.trim(), "user");
         setInput("");
-        executeCommand(cmd).then((result) => addMessage(result, "system"));
+        // Show activity for async commands
+        const cmdVerbs: Record<string, string> = {
+          story: "Writing story", film: "Directing film", stream: "Planning stream",
+          organize: "Organizing canvas", analyze: "Analyzing", lego: "Creating LEGO",
+          logo: "Designing logo", iso: "Drawing isometric", "3d": "Building 3D",
+          music: "Composing music", podcast: "Recording podcast", talk: "Generating speech",
+          tryon: "Virtual try-on", sfx: "Creating SFX", mix: "Mixing media",
+          context: "Processing context", project: "Managing project", save: "Saving",
+        };
+        const verb = cmdVerbs[cmd.command.split("/")[0]] || "Processing";
+        setIsThinking(true);
+        setThinkingVerb(verb);
+        executeCommand(cmd).then((result) => { addMessage(result, "system"); setIsThinking(false); });
         return;
       }
       setInput("");
