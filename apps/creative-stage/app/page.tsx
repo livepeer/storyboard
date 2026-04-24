@@ -738,47 +738,82 @@ export default function Stage() {
     const dx = Math.abs((dropped.x + dropped.w / 2) - (live.x + live.w / 2));
     const dy = Math.abs((dropped.y + dropped.h / 2) - (live.y + live.h / 2));
     if (dx < live.w && dy < live.h && dropped.url && streamIdRef.current) {
-      // Set as publish source — real content instead of blank frames
+      // ── Smart Source Drop: analyze → prompt → control ──
+      // Instead of VACE (can't be added mid-stream), we:
+      // 1. Set the image as publish source (the stream transforms these frames)
+      // 2. Analyze the image via Gemini Vision to extract its visual DNA
+      // 3. Inject the analysis as the stream's prompt (style, palette, mood)
+      // This makes the stream visually match the dropped image WITHOUT
+      // touching the pipeline graph — just prompt + noise_scale changes.
+
       const srcType = dropped.type === "video" ? "video" as const : "image" as const;
       if (setSourceFnRef.current) {
         const src = { type: srcType, url: dropped.url, label: dropped.title } as StreamSource;
         setSourceFnRef.current(src);
         streamSourceRef.current = src;
-        // Deferred display update — avoids re-render cascade that detaches canvas
         setTimeout(() => setStreamSourceDisplay(src), 50);
       }
 
-      // Switch pipeline to video mode so it uses the published frames.
-      // CRITICAL: The SDK's _init_stream_session ignores browser's params
-      // and hardcodes its own start_stream. So input_mode must be sent
-      // via /control AFTER the stream starts. Without input_mode:"video",
-      // Scope routes to text-mode blocks and ignores ALL published frames.
       const sdk = getSdkConfig();
-      // Tell the pipeline to use published frames (video mode).
-      // DO NOT send vace_enabled here — VACE can ONLY be set at stream
-      // start (pipeline graph is fixed at init). Sending it mid-stream
-      // crashes the Scope session and stops the stream.
-      // The source image still works: it's published as frames that the
-      // pipeline transforms. Use noise_scale to control how much the
-      // pipeline transforms vs preserves the source (0.2=faithful, 0.8=creative).
-      const controlParams: Record<string, unknown> = {
-        input_mode: "video",
-        noise_scale: srcType === "image" ? 0.3 : 0.5,
-        noise_controller: false,
-      };
+      const hdrs = { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) };
+
+      // Step 1: Set video mode + low noise (preserve source closely)
       fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) },
-        body: JSON.stringify({ type: "parameters", params: controlParams }),
+        method: "POST", headers: hdrs,
+        body: JSON.stringify({ type: "parameters", params: {
+          input_mode: "video",
+          noise_scale: 0.3,
+          noise_controller: false,
+        }}),
       }).catch(() => {});
 
       store.connect(dropped.refId, "live-output", { action: srcType === "video" ? "video-source" : "image-source" });
-      chat.getState().addMessage(
-        `${srcType === "video" ? "Video" : "Image"} source set: "${dropped.title}" → Live Output.\n` +
-        `The stream will transform this ${srcType} in real-time. Adjust noise_scale (0.2=faithful, 0.8=creative).\n` +
-        `For VACE conditioning (color/composition match), restart the stream with: "start a stream with this image as reference"`,
-        "system",
-      );
+      chat.getState().addMessage(`Source set: "${dropped.title}" → Live Output. Analyzing image...`, "system");
+
+      // Step 2: Analyze image in background → inject as prompt
+      if (srcType === "image") {
+        (async () => {
+          try {
+            const { analyzeImage } = await import("@/lib/tools/image-analysis");
+            const result = await analyzeImage(dropped.url!);
+            if (result.ok) {
+              const { analysis } = result;
+              // Build a rich prompt from the analysis
+              const streamPrompt = [
+                analysis.style,
+                analysis.palette ? `color palette: ${analysis.palette}` : "",
+                analysis.mood ? `mood: ${analysis.mood}` : "",
+                analysis.setting ? `setting: ${analysis.setting}` : "",
+                analysis.description?.slice(0, 80) || "",
+              ].filter(Boolean).join(", ");
+
+              // Update stream prompt to match the dropped image's visual DNA
+              if (streamIdRef.current) {
+                await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
+                  method: "POST", headers: hdrs,
+                  body: JSON.stringify({ type: "parameters", params: {
+                    prompts: streamPrompt,
+                    noise_scale: 0.35,
+                  }}),
+                });
+              }
+
+              chat.getState().addMessage(
+                `Image analyzed → stream prompt updated:\n` +
+                `Style: ${analysis.style}\n` +
+                `Palette: ${analysis.palette}\n` +
+                `Mood: ${analysis.mood}\n` +
+                `The stream now visually matches the dropped image.`,
+                "system",
+              );
+            } else {
+              chat.getState().addMessage(`Image analysis skipped: ${result.error}. Stream will still transform the source frames.`, "system");
+            }
+          } catch {
+            chat.getState().addMessage("Image analysis unavailable. Stream will transform the source frames directly.", "system");
+          }
+        })();
+      }
     }
   }, []);
 
