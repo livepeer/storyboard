@@ -199,6 +199,8 @@ function EpisodeDropToast() {
     episodeId: string;
     episodeName: string;
   } | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+  const lastOfferRef = useRef("");
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -207,6 +209,11 @@ function EpisodeDropToast() {
         episodeId: string;
         episodeName: string;
       };
+      // Debounce: don't re-trigger for same card+episode
+      const key = `${detail.cardId}:${detail.episodeId}`;
+      if (key === lastOfferRef.current) return;
+      lastOfferRef.current = key;
+      setConfirmed(false);
       setOffer(detail);
     };
     window.addEventListener("episode-drop-offer", handler);
@@ -216,30 +223,46 @@ function EpisodeDropToast() {
   const handleAdd = useCallback(() => {
     if (!offer) return;
     useEpisodeStore.getState().addCards(offer.episodeId, [offer.cardId]);
-    setOffer(null);
+    setConfirmed(true);
+    lastOfferRef.current = "";
+    setTimeout(() => { setOffer(null); setConfirmed(false); }, 1500);
   }, [offer]);
 
-  const handleDismiss = useCallback(() => setOffer(null), []);
+  const handleDismiss = useCallback(() => {
+    lastOfferRef.current = "";
+    setOffer(null);
+  }, []);
 
   if (!offer) return null;
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-xl border border-white/20 bg-[rgba(22,22,22,0.95)] px-4 py-2.5 shadow-2xl backdrop-blur-xl">
-      <span className="text-xs text-[var(--text)]">
-        Add to <span className="font-semibold text-blue-400">{offer.episodeName}</span>?
-      </span>
-      <button
-        onClick={handleAdd}
-        className="rounded-lg bg-blue-500/20 px-3 py-1 text-xs font-semibold text-blue-300 hover:bg-blue-500/30"
-      >
-        Add
-      </button>
-      <button
-        onClick={handleDismiss}
-        className="rounded-lg px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-white/[0.06]"
-      >
-        No
-      </button>
+    <div
+      className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[2000] flex items-center gap-3 rounded-xl border border-white/20 bg-[rgba(22,22,22,0.95)] px-4 py-2.5 shadow-2xl backdrop-blur-xl"
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {confirmed ? (
+        <span className="text-xs text-green-400">Added to {offer.episodeName}</span>
+      ) : (
+        <>
+          <span className="text-xs text-[var(--text)]">
+            Add to <span className="font-semibold text-blue-400">{offer.episodeName}</span>?
+          </span>
+          <button
+            onClick={handleAdd}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="rounded-lg bg-blue-500/20 px-3 py-1 text-xs font-semibold text-blue-300 hover:bg-blue-500/30"
+          >
+            Add
+          </button>
+          <button
+            onClick={handleDismiss}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="rounded-lg px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-white/[0.06]"
+          >
+            No
+          </button>
+        </>
+      )}
     </div>
   );
 }

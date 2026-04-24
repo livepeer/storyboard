@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { Episode } from "./types";
 import type { CreativeContext } from "@/lib/agents/session-context";
 
@@ -25,7 +26,9 @@ interface EpisodeState {
   getEffectiveContext: (episodeId: string, storyboardCtx: CreativeContext) => CreativeContext | null;
 }
 
-export const useEpisodeStore = create<EpisodeState>((set, get) => ({
+export const useEpisodeStore = create<EpisodeState>()(
+  persist(
+    (set, get) => ({
   episodes: [],
   activeEpisodeId: null,
 
@@ -97,4 +100,10 @@ export const useEpisodeStore = create<EpisodeState>((set, get) => ({
       mood: ep.context.mood || storyboardCtx.mood,
     };
   },
-}));
+}),
+    {
+      name: "storyboard_episodes",
+      version: 1,
+    },
+  ),
+);
