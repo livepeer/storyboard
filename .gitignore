@@ -46,3 +46,4 @@ next-env.d.ts
 .claude/
 .superpowers/
 apps/creative-stage/test-results/
+.env*.local
