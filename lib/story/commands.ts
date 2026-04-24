@@ -349,14 +349,34 @@ Generate ONLY the new scenes (not the existing ones). Match the style, character
 
   try {
     // Route through SDK's gemini-text (BYOC has the key — no local env var needed)
+    // Try SDK gemini-text first, fall back to /api/agent/gemini
     const { runInference } = await import("@/lib/sdk/client");
     const fullPrompt = `You are a story continuation assistant. Return ONLY valid JSON with a scenes array. No code fences. No preamble.\n\n${continuationPrompt}`;
-    const result = await runInference({ capability: "gemini-text", prompt: fullPrompt, params: {} });
-    const r = result as Record<string, unknown>;
-    const d = (r.data ?? r) as Record<string, unknown>;
-    const text = (d.text as string)
-      ?? (d.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }>)?.[0]?.content?.parts?.map((p) => p.text || "").join("")
-      ?? (r.text as string) ?? "";
+    let text = "";
+    try {
+      const result = await runInference({ capability: "gemini-text", prompt: fullPrompt, params: {} });
+      const r = result as Record<string, unknown>;
+      if (r.detail || r.error) throw new Error("SDK error");
+      const d = (r.data ?? r) as Record<string, unknown>;
+      if (d.detail || d.error) throw new Error("SDK error");
+      text = (d.text as string)
+        ?? (d.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }>)?.[0]?.content?.parts?.map((p) => p.text || "").join("")
+        ?? (r.text as string) ?? "";
+      if (!text) throw new Error("Empty");
+    } catch {
+      const resp = await fetch("/api/agent/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gemini-2.5-flash",
+          contents: [{ role: "user", parts: [{ text: fullPrompt }] }],
+        }),
+      });
+      if (!resp.ok) return `Story continuation failed (${resp.status})`;
+      const payload = await resp.json();
+      text = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
+        .candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+    }
 
     const { extractJsonObject } = await import("./generator");
     const parsed = extractJsonObject(text);

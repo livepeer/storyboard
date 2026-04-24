@@ -174,18 +174,22 @@ export async function generateStory(
       params: {},
     });
     const r = result as Record<string, unknown>;
+    // Check for API errors (signer 401, orch unavailable, etc.)
+    if (r.detail || r.error) throw new Error((r.detail as Record<string, string>)?.error || (r.error as string) || "SDK error");
     const data = (r.data ?? r) as Record<string, unknown>;
-    // gemini-text returns { text: "..." } or { data: { text: "..." } }
+    if (data.detail || data.error) throw new Error((data.detail as string) || (data.error as string) || "SDK error");
     text = (data.text as string)
       ?? (data.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }>)?.[0]?.content?.parts?.map((p) => p.text || "").join("")
       ?? (r.text as string)
       ?? "";
+    if (!text) throw new Error("Empty response from gemini-text");
     tokens = {
       input: (data.prompt_tokens as number) ?? 0,
       output: (data.completion_tokens as number) ?? 0,
     };
   } catch (e) {
-    // Fallback: try the local Gemini proxy (needs GEMINI_API_KEY env var)
+    // Fallback: try the Gemini proxy (has hardcoded key)
+    console.log(`[story] SDK gemini-text failed (${(e as Error).message}), falling back to /api/agent/gemini`);
     try {
       const resp = await fetch("/api/agent/gemini", {
         method: "POST",

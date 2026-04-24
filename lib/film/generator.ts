@@ -30,10 +30,13 @@ export async function generateFilm(
     const { runInference } = await import("@/lib/sdk/client");
     const result = await runInference({ capability: "gemini-text", prompt: fullPrompt, params: {} });
     const r = result as Record<string, unknown>;
+    if (r.detail || r.error) throw new Error("SDK error");
     const data = (r.data ?? r) as Record<string, unknown>;
+    if (data.detail || data.error) throw new Error("SDK error");
     text = (data.text as string)
       ?? (data.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }>)?.[0]?.content?.parts?.map((p) => p.text || "").join("")
       ?? (r.text as string) ?? "";
+    if (!text) throw new Error("Empty");
   } catch {
     try {
       const resp = await fetch("/api/agent/gemini", {
