@@ -225,7 +225,7 @@ const DEFAULT_IMAGE_MODELS = [
  * If user requests N models but only names some, auto-fill the rest
  * from defaults (excluding already-named ones).
  */
-function autoFillModels(named: string[], requested: number): string[] {
+export function autoFillModels(named: string[], requested: number): string[] {
   const result = [...named];
   for (const m of DEFAULT_IMAGE_MODELS) {
     if (result.length >= requested) break;
