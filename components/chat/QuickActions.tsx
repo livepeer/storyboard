@@ -116,6 +116,12 @@ export function QuickActions({ setInput, focusInput }: Props) {
   );
 }
 
+/** Get prompt history from localStorage. */
+export function getPromptHistory(): string[] {
+  if (typeof window === "undefined") return [];
+  try { return JSON.parse(localStorage.getItem("sb_prompt_history") || "[]"); } catch { return []; }
+}
+
 /** Save a prompt to history (call after successful generation). */
 export function savePromptToHistory(prompt: string) {
   if (typeof window === "undefined" || !prompt.trim() || prompt.startsWith("/")) return;

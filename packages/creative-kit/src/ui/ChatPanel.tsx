@@ -68,14 +68,37 @@ export function ChatPanel({
     onSend(text);
   }, [draft, onSend, isListening]);
 
+  // Input history (up/down like CLI)
+  const historyIdxRef = useRef(-1);
+  const savedDraftRef = useRef("");
+  const getHistory = useCallback((): string[] => {
+    try { return JSON.parse(localStorage.getItem("cs_prompt_history") || "[]"); } catch { return []; }
+  }, []);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
+        historyIdxRef.current = -1;
         send();
+        return;
+      }
+      const history = getHistory();
+      if (e.key === "ArrowUp" && !e.shiftKey && history.length > 0) {
+        e.preventDefault();
+        if (historyIdxRef.current === -1) savedDraftRef.current = draft;
+        const next = Math.min(historyIdxRef.current + 1, history.length - 1);
+        historyIdxRef.current = next;
+        setDraft(history[next]);
+      }
+      if (e.key === "ArrowDown" && !e.shiftKey && historyIdxRef.current >= 0) {
+        e.preventDefault();
+        const next = historyIdxRef.current - 1;
+        historyIdxRef.current = next;
+        setDraft(next < 0 ? savedDraftRef.current : history[next]);
       }
     },
-    [send]
+    [send, draft, getHistory]
   );
 
   const renderMessage = (msg: ChatMessage): ReactNode => {

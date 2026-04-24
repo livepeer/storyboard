@@ -7,7 +7,7 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { createVoiceInput, isSpeechRecognitionSupported, ConfirmationCard, type ConfirmationRequest } from "@livepeer/creative-kit";
 import { MessageBubble } from "./MessageBubble";
 import { ToolPill } from "./ToolPill";
-import { QuickActions, savePromptToHistory } from "./QuickActions";
+import { QuickActions, savePromptToHistory, getPromptHistory } from "./QuickActions";
 import { parseCommand, executeCommand } from "@/lib/skills/commands";
 import { isApplyPendingIntent, applyPendingStory, isStoryContinuationIntent, continueStory } from "@/lib/story/commands";
 import { isFilmApplyIntent, applyPendingFilm } from "@/lib/film/commands";
@@ -391,14 +391,36 @@ export function ChatPanel() {
     sendMessage(input);
   }, [input, sendMessage, isListening]);
 
+  // Input history navigation (up/down arrows like CLI)
+  const historyIdx = useRef(-1);
+  const savedDraft = useRef("");
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
+        if (input.trim()) historyIdx.current = -1;
         handleSend();
+        return;
+      }
+      const history = getPromptHistory();
+      if (e.key === "ArrowUp" && !e.shiftKey) {
+        if (history.length === 0) return;
+        e.preventDefault();
+        if (historyIdx.current === -1) savedDraft.current = input;
+        const next = Math.min(historyIdx.current + 1, history.length - 1);
+        historyIdx.current = next;
+        setInput(history[next]);
+      }
+      if (e.key === "ArrowDown" && !e.shiftKey) {
+        if (historyIdx.current < 0) return;
+        e.preventDefault();
+        const next = historyIdx.current - 1;
+        historyIdx.current = next;
+        setInput(next < 0 ? savedDraft.current : history[next]);
       }
     },
-    [handleSend]
+    [handleSend, input]
   );
 
   // --- Drag ---
