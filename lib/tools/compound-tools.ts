@@ -459,6 +459,11 @@ export const createMediaTool: ToolDefinition = {
       // Layout agent not available — cards use default nextPosition()
     }
 
+    // Lock model per action across all steps for style consistency.
+    // Once the router picks "flux-dev" for step 0 (generate), ALL subsequent
+    // generate steps use the same model. Prevents mixed styles in multi-scene projects.
+    const lockedCapability: Record<string, { capability: string; type: CardType }> = {};
+
     for (let i = 0; i < rawSteps.length; i++) {
       const step = rawSteps[i];
 
@@ -519,19 +524,30 @@ export const createMediaTool: ToolDefinition = {
         console.log(`[create_media] Session context injected (${sessionPrefix.split(/\s+/).length} words): "${sessionPrefix.slice(0, 80)}..."`);
       }
 
-      // Resolve capability through live registry (fuzzy-matches invalid names).
-      // Pass hasSourceUrl + promptText so the resolver can:
-      // - route animate-without-source to veo-t2v instead of failing on veo-i2v
-      // - route generate-with-video-intent to veo-t2v instead of flux-dev
+      // Resolve capability — locked per action for style consistency.
+      // First step of each action type selects the model; all subsequent
+      // steps of the same action reuse it (prevents mixed styles).
       const stepSourceUrl = step.source_url
         || (step.depends_on !== undefined && results[step.depends_on]?.url);
-      const { capability, type } = selectCapability(
-        step.action,
-        step.style_hint,
-        step.model_override || ("modelHint" in styled ? styled.modelHint : undefined) as string | undefined,
-        !!stepSourceUrl,
-        effectivePrompt,
-      );
+
+      let capability: string;
+      let type: CardType;
+      const explicitOverride = step.model_override || ("modelHint" in styled ? styled.modelHint : undefined) as string | undefined;
+
+      if (explicitOverride) {
+        // Explicit model override always wins (no locking)
+        ({ capability, type } = selectCapability(step.action, step.style_hint, explicitOverride, !!stepSourceUrl, effectivePrompt));
+      } else if (lockedCapability[step.action]) {
+        // Reuse the model selected for the first step of this action
+        ({ capability, type } = lockedCapability[step.action]);
+      } else {
+        // First step of this action — select and lock
+        ({ capability, type } = selectCapability(step.action, step.style_hint, undefined, !!stepSourceUrl, effectivePrompt));
+        lockedCapability[step.action] = { capability, type };
+        if (rawSteps.filter((s) => s.action === step.action).length > 1) {
+          console.log(`[create_media] Locked model for "${step.action}": ${capability} (${rawSteps.filter((s) => s.action === step.action).length} steps)`);
+        }
+      }
 
       // Friendly names: project-prefixed, easy to reference in chat
       // With project: "ev-bikes.img-1", "sunset.vid-2"
