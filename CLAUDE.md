@@ -468,6 +468,81 @@ Each `create_media` call tags all its cards with a shared `batchId` (`batch_<tim
 
 ---
 
+## SKILL: Creative Pipeline (Primary Agent SDK API)
+
+### Architecture
+The Creative Pipeline is the first-class API for all creative intent processing. Every user message flows through it before reaching the LLM agent.
+
+```
+User message → classify(text) → validate(plan) → execute(plan) → evaluate(results)
+                    │                  │                │               │
+              3-tier fallback    fix missing fields   parallel       user picks
+              (deterministic     LLM sanity check     inference      favorites
+               → LLM → regex)                        per task       (memory learns)
+```
+
+### Pipeline API (`createCreativePipeline`)
+
+```typescript
+import { createCreativePipeline } from "@livepeer/creative-kit";
+
+const pipeline = createCreativePipeline({
+  llmEndpoint: "/api/agent/gemini",     // optional: enables LLM classification
+  skillContent: "...",                   // optional: intent skill markdown
+  preferencesSummary: "prefers flux",    // optional: from creative memory
+  executor: {
+    infer(prompt, model) { ... },        // app-specific inference call
+    addResult({ url, model, ... }) {},   // place result on canvas
+    say(msg) { ... },                    // show message to user
+  },
+});
+
+const result = await pipeline.run("compare gpt and flux for a sunset");
+// result.handled === true → pipeline executed it
+// result.handled === false → pass to LLM agent
+```
+
+### Intent Types
+| Intent | Detection | Example |
+|--------|-----------|---------|
+| `compare_models` | 2+ model names in text (deterministic) | "using gpt, flux, recraft to make a cat" |
+| `batch_generate` | Multiple distinct subjects listed | "make a cat, a dog, and a bird" |
+| `style_sweep` | "in X, Y, Z style" pattern | "a sunset in watercolor, oil, and pencil" |
+| `variations` | "variations", "alternatives", "options" | "show me 4 options for a logo" |
+| `story` | Scene markers or long narrative (>500 chars) | "Scene 1 — intro..." |
+| `single` | Default — one generation | "a cat on a roof" |
+| `unclear` | Low confidence — ask user | "make something cool" |
+
+### Classification Priority (prevents LLM from overriding facts)
+1. **Deterministic** — model names ARE in the text? → `compare_models` (0.99 confidence)
+2. **LLM** — reads skill file + preferences → structured JSON classification
+3. **Regex** — pattern-matching fallback (always works, no network)
+
+### Skill-Based Knowledge
+The classifier's intent vocabulary comes from skill files:
+- Base: `public/skills/intent-classifier.md`
+- User-created: any skill with `category: "intent"`
+- Loaded via `/skills/load intent-<name>`
+
+Skill content is injected into the LLM classifier's prompt. Users can teach new intents by creating skill files — no code changes needed.
+
+### Validation Step
+After classification, `validatePlan()` ensures the plan is executable:
+- Required fields present (prompt, models, styles)
+- Auto-fixes missing fields from original text
+- Optional LLM review: "does this plan match what the user asked?"
+- Never returns an empty or unexecutable plan
+
+### Files
+- `packages/creative-kit/src/agent/creative-pipeline.ts` — pipeline API
+- `packages/creative-kit/src/agent/intent-planner.ts` — classify, validate, regex fallback
+- `lib/agents/intent-planner.ts` — storyboard wrapper (loads skills, preferences)
+- `lib/agents/preprocessor.ts` — wires pipeline into message flow
+- `public/skills/intent-classifier.md` — base intent skill
+- `apps/creative-stage/app/page.tsx` — creative-stage pipeline integration
+
+---
+
 ## SKILL: Long Prompt Handling & Preprocessor
 
 ### The Core Problem

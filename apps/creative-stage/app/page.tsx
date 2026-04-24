@@ -272,50 +272,40 @@ export default function Stage() {
     const sdk = getSdkConfig();
     const say = (msg: string) => chat.getState().addMessage(msg, "system");
 
-    // ── Intent planner: detect model comparison before agent ──
+    // ── Creative Pipeline: classify → validate → execute ──
     try {
-      const { planIntentSync } = await import("@livepeer/creative-kit");
-      const plan = planIntentSync(text);
-      if (plan?.type === "compare_models" && plan.models && plan.prompt) {
-        say(`Comparing ${plan.models.length} models: ${plan.models.join(", ")}`);
-        const hdrs = { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) };
-        const results = await Promise.allSettled(
-          plan.models.map(async (model) => {
-            say(`Generating with ${model}…`);
+      const { createCreativePipeline } = await import("@livepeer/creative-kit");
+      const hdrs = { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) };
+
+      const pipeline = createCreativePipeline({
+        executor: {
+          async infer(prompt, model) {
             const resp = await fetch(`${sdk.url}/inference`, {
               method: "POST", headers: hdrs,
-              body: JSON.stringify({ capability: model, prompt: plan.prompt, params: {} }),
+              body: JSON.stringify({ capability: model, prompt, params: {} }),
             });
-            if (!resp.ok) throw new Error(`${model}: ${resp.status}`);
+            if (!resp.ok) return null;
             const data = await resp.json();
-            // Extract URL from response
             const r = data as Record<string, unknown>;
             const d = (r.data ?? r) as Record<string, unknown>;
             const images = d.images as Array<{ url: string }> | undefined;
             const url = (r.image_url as string) ?? images?.[0]?.url ?? (d.url as string);
-            if (!url) throw new Error(`${model}: no output`);
-            return { model, url };
-          })
-        );
-        for (const r of results) {
-          if (r.status === "fulfilled") {
-            const { model, url } = r.value;
+            return url ? { url } : null;
+          },
+          addResult({ type, title, url, model, index }) {
             artifacts.getState().add({
-              id: `cmp-${model}-${Date.now()}`, refId: `cmp-${model}-${Date.now()}`,
-              type: "image", title: `${model}: ${plan.prompt!.slice(0, 25)}`,
-              url, x: 50 + Math.random() * 300, y: 50 + Math.random() * 200,
-              w: 320, h: 280,
+              id: `pipe-${model}-${Date.now()}-${index}`, refId: `pipe-${model}-${Date.now()}-${index}`,
+              type, title, url, x: 50 + index * 340, y: 50, w: 320, h: 280,
             });
-            say(`${model}: done`);
-          } else {
-            say(`Failed: ${r.reason}`);
-          }
-        }
-        say(`Comparison complete — ${results.filter((r) => r.status === "fulfilled").length}/${plan.models.length} succeeded`);
-        return;
-      }
+          },
+          say,
+        },
+      });
+
+      const result = await pipeline.run(text);
+      if (result.handled) return;
     } catch (e) {
-      console.warn("[IntentPlanner]", e);
+      console.warn("[CreativePipeline]", e);
     }
 
     const controlStreamFn = async (params: Record<string, unknown>) => {
