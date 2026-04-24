@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import type { Card as CardData } from "@/lib/canvas/types";
 import { getSession, getActiveSession } from "@/lib/stream/session";
@@ -8,6 +8,40 @@ import { downloadCard } from "@/lib/utils/download";
 import { EpisodeBadge } from "./EpisodeBadge";
 import { useEpisodeStore } from "@/lib/episodes/store";
 import { StreamCockpit } from "./StreamCockpit";
+
+/** Show right-click hint once per session on the first generated card. */
+function useFirstCardHint(hasUrl: boolean): boolean {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    if (!hasUrl) return;
+    if (typeof sessionStorage === "undefined") return;
+    if (sessionStorage.getItem("sb_ctx_hint")) return;
+    sessionStorage.setItem("sb_ctx_hint", "1");
+    setShow(true);
+    const t = setTimeout(() => setShow(false), 6000);
+    return () => clearTimeout(t);
+  }, [hasUrl]);
+  return show;
+}
+
+/** Spinner with elapsed timer — shows how long generation has been running. */
+function GeneratingSpinner({ type }: { type: string }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const t0 = Date.now();
+    const iv = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(iv);
+  }, []);
+  const estimate = type === "video" ? " (typically 30-90s)" : type === "audio" ? " (typically 10-30s)" : "";
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--text-muted)]" />
+      <span className="font-mono text-[11px] text-[var(--text-dim)]">
+        Generating… {elapsed}s{estimate}
+      </span>
+    </div>
+  );
+}
 
 /** Editable card title — click to copy, double-click to rename. */
 function EditableTitle({ title, onRename, onCopy }: { title: string; onRename: (t: string) => void; onCopy: () => void }) {
@@ -112,6 +146,7 @@ const TYPE_COLORS: Record<string, { text: string; bg: string }> = {
 export function Card({ card }: { card: CardData }) {
   const { viewport, selectedCardIds, updateCard, removeCard, selectCard, toggleCardSelection, togglePin, edges, cards } =
     useCanvasStore();
+  const showCtxHint = useFirstCardHint(!!card.url);
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -404,6 +439,24 @@ export function Card({ card }: { card: CardData }) {
             <div className="flex flex-col items-center gap-2 p-4 text-center">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500/10 text-red-400 text-lg">!</div>
               <div className="font-mono text-[11px] text-red-400 leading-relaxed">{card.error}</div>
+              {card.prompt && card.capability && (
+                <button
+                  className="mt-1 rounded bg-white/10 px-3 py-1 text-[11px] text-white hover:bg-white/20 transition-colors"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    const canvas = useCanvasStore.getState();
+                    canvas.updateCard(card.id, { error: undefined, url: undefined });
+                    try {
+                      const { executeTool } = await import("@/lib/tools/registry");
+                      await executeTool("create_media", {
+                        steps: [{ action: "generate", prompt: card.prompt, model_override: card.capability }],
+                      });
+                    } catch { /* card will show new error */ }
+                  }}
+                >
+                  ↻ Retry
+                </button>
+              )}
               <div className="text-[9px] text-[var(--text-dim)]">Right-click for options</div>
             </div>
           ) : card.url ? (
@@ -417,16 +470,23 @@ export function Card({ card }: { card: CardData }) {
               />
             ) : (
               // Images AND streams use <img> — LV2V streams are JPEG frames, not video URLs
+              // Double-click → fullscreen lightbox view
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={card.url} alt={card.title} className="h-full w-full object-contain" />
+              <img
+                src={card.url}
+                alt={card.title}
+                title={card.prompt ? `${card.prompt.slice(0, 200)}${card.prompt.length > 200 ? "…" : ""}` : card.title}
+                className="h-full w-full object-contain cursor-zoom-in"
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  const img = e.currentTarget;
+                  if (img.requestFullscreen) img.requestFullscreen();
+                  else if ((img as any).webkitRequestFullscreen) (img as any).webkitRequestFullscreen();
+                }}
+              />
             )
           ) : (
-            <div className="flex flex-col items-center gap-3">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--text-muted)]" />
-              <span className="font-mono text-[11px] text-[var(--text-dim)]">
-                Generating…
-              </span>
-            </div>
+            <GeneratingSpinner type={card.type} />
           )}
         </div>
       )}
@@ -459,6 +519,13 @@ export function Card({ card }: { card: CardData }) {
           Dates are highlighted in cyan, action words in amber. */}
       {card.caption && !card.coverText && !card.minimized && card.url && (
         <CaptionBanner caption={card.caption} />
+      )}
+
+      {/* First-card hint — right-click tooltip */}
+      {showCtxHint && !card.minimized && (
+        <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-purple-600 px-3 py-1 text-[10px] text-white shadow-lg animate-pulse z-50">
+          Right-click for more options (restyle, animate, variations...)
+        </div>
       )}
 
       {/* Model info bar — shows when card is selected; uses card metadata or incoming edge */}

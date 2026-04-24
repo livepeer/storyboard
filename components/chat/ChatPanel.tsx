@@ -148,6 +148,10 @@ export function ChatPanel() {
   const [voiceSupported] = useState(() => typeof window !== "undefined" && isSpeechRecognitionSupported());
   const voiceRef = useRef<ReturnType<typeof createVoiceInput> | null>(null);
   const [pendingGate, setPendingGate] = useState<ConfirmationRequest | null>(null);
+  const [hasApiKey] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return !!localStorage.getItem("sdk_api_key");
+  });
   const messagesEnd = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -523,6 +527,34 @@ export function ChatPanel() {
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} />
             ))}
+
+            {/* First-visit: starter prompt chips when no cards on canvas */}
+            {messages.length <= 1 && (
+              <div className="flex flex-col gap-2 px-1 py-2">
+                {!hasApiKey && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] text-amber-300">
+                    <strong>Setup needed:</strong> Click the gear icon (top-right) to add your API key before generating.
+                  </div>
+                )}
+                <div className="text-[10px] text-[var(--text-dim)] mb-1">Try one of these:</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: "a sunset painting", prompt: "a beautiful sunset over mountains, watercolor style" },
+                    { label: "compare 4 models", prompt: "using gpt, flux, recraft, nano to create a portrait of a wise owl" },
+                    { label: "/film a cat adventure", prompt: "/film a curious cat exploring an ancient temple" },
+                    { label: "/story space journey", prompt: "/story an astronaut's first day on Mars" },
+                  ].map((chip) => (
+                    <button
+                      key={chip.label}
+                      onClick={() => { sendMessage(chip.prompt); }}
+                      className="rounded-full border border-[var(--border)] bg-white/[0.03] px-3 py-1 text-[10px] text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-[var(--text)] transition-colors"
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Confirmation gate — shown when project_generate needs user approval */}
             {pendingGate && (

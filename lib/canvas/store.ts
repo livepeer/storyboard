@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { Card, ArrowEdge, CanvasViewport, CardType } from "./types";
 import { recordNegative, recordPositive, createHistoryManager, type CanvasSnapshot } from "@livepeer/creative-kit";
 
@@ -74,7 +75,11 @@ function makeRefId(type: CardType, id: number): string {
   return `${type}_${id}`;
 }
 
-export const useCanvasStore = create<CanvasState>((set, get) => ({
+const MAX_PERSISTED_CARDS = 100;
+
+export const useCanvasStore = create<CanvasState>()(
+  persist(
+    (set, get) => ({
   viewport: { panX: 0, panY: 0, scale: 1 },
   cards: [],
   edges: [],
@@ -300,4 +305,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       return { cards };
     });
   },
-}));
+}),
+    {
+      name: "storyboard_canvas",
+      version: 1,
+      partialize: (state) => ({
+        // Only persist cards (capped) and edges — not viewport, selection, or edge selection
+        cards: state.cards.slice(-MAX_PERSISTED_CARDS),
+        edges: state.edges,
+      }),
+      // Set is not serializable — selectedCardIds is excluded via partialize
+      // On rehydrate, ensure nextCardId doesn't collide with restored cards
+      onRehydrateStorage: () => (state) => {
+        if (state?.cards?.length) {
+          const maxId = Math.max(...state.cards.map((c) => parseInt(c.id) || 0));
+          if (maxId >= nextCardId) nextCardId = maxId + 1;
+        }
+      },
+    },
+  ),
+);

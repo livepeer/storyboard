@@ -55,9 +55,10 @@ const ACTIONS: MenuAction[] = [
   { id: "mix-audio", label: "Mix with Audio\u2026", icon: "\uD83C\uDFB5", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   // --- LV2V from card ---
   { id: "lv2v-from-card", label: "Start LV2V Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
-  // --- Visual Remix & Variations ---
+  // --- Visual Remix, Variations, Face Lock ---
   { id: "visual-remix", label: "Visual Remix\u2026", icon: "\uD83C\uDFA8", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   { id: "variations", label: "Variations (x4)", icon: "\uD83D\uDD00", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "facelock", label: "Lock as Character Reference", icon: "\uD83D\uDD12", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   // --- Agent-assisted (routes to chat) ---
   { id: "agent-restyle", label: "Restyle with AI\u2026", icon: "\uD83E\uDD16", forTypes: ["image"], requiresMedia: true, mode: "chat" },
   { id: "agent-animate", label: "Animate with AI\u2026", icon: "\uD83E\uDD16", forTypes: ["image"], requiresMedia: true, mode: "chat" },
@@ -789,6 +790,24 @@ export function ContextMenu() {
         } catch (e) {
           addMessage(`Remix failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
         }
+        return;
+      }
+
+      // --- Face Lock: set character reference ---
+      if (action.id === "facelock") {
+        if (!targetCard.url) { addMessage("Card has no image.", "system"); return; }
+        try {
+          const { useProjectStore } = await import("@/lib/projects/store");
+          const active = useProjectStore.getState().getActiveProject();
+          if (!active) {
+            addMessage("No active project. Create one first with /project add <brief>.", "system");
+            return;
+          }
+          useProjectStore.getState().patchProject(active.id, {
+            faceLock: { refId: targetCard.refId, url: targetCard.url, lockedAt: Date.now() },
+          } as any);
+          addMessage(`Character locked to ${targetCard.refId}. All future scenes will use this face.`, "system");
+        } catch { addMessage("Face lock failed.", "system"); }
         return;
       }
 
