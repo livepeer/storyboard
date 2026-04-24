@@ -745,6 +745,32 @@ export const createMediaTool: ToolDefinition = {
               recordModelLatency(currentCap, elapsed);
               const fallbackNote = attemptIdx > 0 ? ` (fallback from ${_attemptChain[0]})` : "";
               const genMeta = { capability: currentCap, prompt: _effectivePrompt, elapsed, routeReason: _routeReason + fallbackNote };
+              console.log(`[create_media] ${_refId} → ${currentCap} → ${url.slice(0, 120)} (${(elapsed / 1000).toFixed(1)}s)`);
+              // Debug: log response keys to help diagnose black images
+              console.log(`[create_media] ${_refId} response keys:`, Object.keys(data).join(","), "| nsfw:", (data as any).has_nsfw_concepts, (data as any).nsfw_content_detected);
+
+              // Detect filtered/black images from content safety
+              const nsfwFlags = [
+                (data as any).has_nsfw_concepts,
+                (data as any).nsfw_content_detected,
+                (r as any).has_nsfw_concepts,
+                (r as any).nsfw_content_detected,
+              ];
+              const isFiltered = nsfwFlags.some((f) =>
+                f === true || (Array.isArray(f) && f[0] === true)
+              );
+              if (isFiltered) {
+                console.warn(`[create_media] ${_refId}: NSFW/safety filter triggered — image may be black`);
+                canvas.updateCard(_card.id, {
+                  url, // still set URL so user can inspect
+                  error: "Content filter triggered — the image may be black. Try rephrasing the prompt.",
+                  ...genMeta,
+                });
+                results[_i] = { refId: _refId, cardId: _card.id, url, error: "Content filter", capability: currentCap, elapsed };
+                stepDone = true;
+                break;
+              }
+
               canvas.updateCard(_card.id, { url, error: undefined, ...genMeta });
               results[_i] = { refId: _refId, cardId: _card.id, url, capability: currentCap, elapsed };
               if (_step.depends_on !== undefined && results[_step.depends_on]) {
