@@ -35,6 +35,7 @@ export type { PipelineInfo, PipelineRegistry, StreamRecipe, RecipeGraph, RecipeG
 // Agent
 export { createRequestContext, type RequestContext } from "./agent/request-context";
 export { createRequestQueue, type RequestQueue, type ProcessFn } from "./agent/request-queue";
+export { humanizeError, classifyError, isRecoverable, type AgentError } from "./agent/errors";
 
 // Utils
 export { resizeImageForModel } from "./utils/resize-image";
