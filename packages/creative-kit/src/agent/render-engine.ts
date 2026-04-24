@@ -109,8 +109,8 @@ function drawMediaToCanvas(
   h: number,
 ) {
   const src = media.el;
-  const sw = media.type === "image" ? src.naturalWidth : (src as HTMLVideoElement).videoWidth;
-  const sh = media.type === "image" ? src.naturalHeight : (src as HTMLVideoElement).videoHeight;
+  const sw = media.type === "image" ? (src as HTMLImageElement).naturalWidth : (src as HTMLVideoElement).videoWidth;
+  const sh = media.type === "image" ? (src as HTMLImageElement).naturalHeight : (src as HTMLVideoElement).videoHeight;
 
   // Cover-fit: scale to fill canvas, center-crop
   const scale = Math.max(w / sw, h / sh);

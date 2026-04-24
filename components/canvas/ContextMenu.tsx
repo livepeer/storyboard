@@ -55,8 +55,9 @@ const ACTIONS: MenuAction[] = [
   { id: "mix-audio", label: "Mix with Audio\u2026", icon: "\uD83C\uDFB5", forTypes: ["video"], requiresMedia: true, mode: "direct" },
   // --- LV2V from card ---
   { id: "lv2v-from-card", label: "Start LV2V Stream\u2026", icon: "\uD83D\uDCE1", forTypes: ["image", "video"], requiresMedia: true, mode: "direct" },
-  // --- Visual Remix ---
+  // --- Visual Remix & Variations ---
   { id: "visual-remix", label: "Visual Remix\u2026", icon: "\uD83C\uDFA8", forTypes: ["image"], requiresMedia: true, mode: "direct" },
+  { id: "variations", label: "Variations (x4)", icon: "\uD83D\uDD00", forTypes: ["image"], requiresMedia: true, mode: "direct" },
   // --- Agent-assisted (routes to chat) ---
   { id: "agent-restyle", label: "Restyle with AI\u2026", icon: "\uD83E\uDD16", forTypes: ["image"], requiresMedia: true, mode: "chat" },
   { id: "agent-animate", label: "Animate with AI\u2026", icon: "\uD83E\uDD16", forTypes: ["image"], requiresMedia: true, mode: "chat" },
@@ -787,6 +788,29 @@ export function ContextMenu() {
           }
         } catch (e) {
           addMessage(`Remix failed: ${e instanceof Error ? e.message : "unknown"}`, "system");
+        }
+        return;
+      }
+
+      // --- Variations: generate 4 alternatives ---
+      if (action.id === "variations") {
+        if (!targetCard.url || !targetCard.prompt) {
+          addMessage("Card needs both media and a prompt for variations.", "system");
+          return;
+        }
+        const { buildVariationSteps } = await import("@livepeer/creative-kit");
+        const steps = buildVariationSteps({
+          sourceRefId: targetCard.refId,
+          sourceUrl: targetCard.url,
+          prompt: targetCard.prompt,
+          capability: targetCard.capability || "flux-dev",
+          strategy: "mixed",
+        });
+        const { listTools } = await import("@/lib/tools/registry");
+        const tool = listTools().find((t) => t.name === "create_media");
+        if (tool) {
+          addMessage(`Generating ${steps.length} variations of "${targetCard.title}"...`, "system");
+          await tool.execute({ steps });
         }
         return;
       }

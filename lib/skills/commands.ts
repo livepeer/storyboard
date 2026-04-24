@@ -78,7 +78,7 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
     case "layout":
       return handleLayoutCommand(cmd.args);
     case "export":
-      return exportCanvas();
+      return handleExport(cmd.args);
     case "save":
       return saveCards(cmd.args);
     case "context":
@@ -124,6 +124,14 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleAnalyze(cmd.args);
     case "talk":
       return handleTalk(cmd.args);
+    case "vary":
+      return handleVary(cmd.args);
+    case "render":
+      return handleRender(cmd.args);
+    case "snapshot":
+      return handleSnapshot(cmd.args);
+    case "facelock":
+      return handleFaceLock(cmd.args);
     default:
       return `Unknown command: /${cmd.command}. Type /help for all commands.`;
   }
@@ -173,9 +181,16 @@ function showHelp(): string {
     "── CANVAS & LAYOUT ──",
     "  /organize [style]           Auto-layout canvas (grid, narrative, episode, movie-board)",
     "  /layout list                Show available layout presets",
-    "  /layout set <id>            Set default layout preset",
     "  /save [refId]               Save card(s) to file",
-    "  /export                     Export entire canvas as JSON",
+    "  /export                     Export canvas as JSON (copied to clipboard)",
+    "  /export social <platform>   Export cards cropped for Instagram/TikTok/YouTube/Twitter/all",
+    "  /render [project] [--music card]  Render canvas into a single video with transitions",
+    "  /vary <card-refId>          Generate 4 variations of a card (pick your favorite)",
+    "  /snapshot save <name>       Save canvas state (Cmd+Z for undo, this for named checkpoints)",
+    "  /snapshot restore <name>    Restore a saved snapshot",
+    "  /snapshot list              List saved snapshots",
+    "  /facelock <card-refId>      Lock character reference for consistent faces across scenes",
+    "  /facelock clear             Remove character lock",
     "",
     "── STYLE & CONTEXT ──",
     "  /context                    Show current creative context (style, characters, mood)",
@@ -216,6 +231,10 @@ function showHelp(): string {
     "  /skills                     List available agent skills",
     "  /skills load <name>         Load a skill into the agent",
     "  /capabilities               Show available AI models on the network",
+    "",
+    "── KEYBOARD SHORTCUTS ──",
+    "  Cmd+Z                       Undo last canvas action",
+    "  Cmd+Shift+Z                 Redo",
     "",
     "── OTHER ──",
     "  /help                       This help message",
@@ -1363,4 +1382,239 @@ async function handleMix(args: string): Promise<string> {
   } catch (e) {
     return `/mix failed: ${e instanceof Error ? e.message : "unknown"}`;
   }
+}
+
+// ── NEW COMMANDS: vary, render, snapshot, facelock, export social ──
+
+async function handleVary(args: string): Promise<string> {
+  const refId = args.trim().split(/\s+/)[0];
+  if (!refId) return "Usage: /vary <card-refId>\nExample: /vary img-3";
+  const card = useCanvasStore.getState().cards.find(
+    (c) => c.refId === refId || c.refId.endsWith(refId)
+  );
+  if (!card?.url) return `Card "${refId}" not found or has no media.`;
+  if (!card.prompt) return `Card "${refId}" has no prompt — can't generate variations.`;
+
+  const { buildVariationSteps } = await import("@livepeer/creative-kit");
+  const steps = buildVariationSteps({
+    sourceRefId: card.refId,
+    sourceUrl: card.url,
+    prompt: card.prompt,
+    capability: card.capability || "flux-dev",
+    strategy: "mixed",
+  });
+
+  const { listTools } = await import("@/lib/tools/registry");
+  const createMediaTool = listTools().find((t) => t.name === "create_media");
+  if (!createMediaTool) return "create_media tool not available.";
+
+  await createMediaTool.execute({ steps });
+  return `Generated ${steps.length} variations of ${refId}. Pick your favorite!`;
+}
+
+async function handleRender(args: string): Promise<string> {
+  const parts = args.trim().split(/\s+/);
+  const musicIdx = parts.indexOf("--music");
+  const musicRef = musicIdx >= 0 ? parts[musicIdx + 1] : undefined;
+  const projectName = musicIdx >= 0
+    ? parts.slice(0, musicIdx).join(" ")
+    : parts.join(" ");
+
+  const canvas = useCanvasStore.getState();
+  let cards: Array<{ refId: string; url: string; type: "image" | "video" | "audio"; duration?: number }>;
+
+  if (projectName) {
+    // Try to find project by name
+    try {
+      const { useProjectStore } = await import("@/lib/projects/store");
+      const project = useProjectStore.getState().projects.find(
+        (p) => p.brief.toLowerCase().includes(projectName.toLowerCase()) || p.id === projectName
+      );
+      if (project) {
+        cards = project.scenes
+          .map((s) => canvas.cards.find((c) => c.refId === (s.artifactRefId || s.cardRefId)))
+          .filter((c): c is typeof canvas.cards[0] => !!c?.url)
+          .map((c) => ({ refId: c.refId, url: c.url!, type: c.type as "image" | "video", duration: c.type === "video" ? undefined : 4 }));
+      } else {
+        cards = [];
+      }
+    } catch {
+      cards = [];
+    }
+  }
+
+  // Fallback: all canvas cards with media
+  if (!cards! || cards!.length === 0) {
+    cards = canvas.cards
+      .filter((c) => c.url && (c.type === "image" || c.type === "video"))
+      .map((c) => ({ refId: c.refId, url: c.url!, type: c.type as "image" | "video" }));
+  }
+
+  if (cards.length === 0) return "No cards to render. Generate some media first.";
+
+  let musicUrl: string | undefined;
+  if (musicRef) {
+    const musicCard = canvas.cards.find((c) => c.refId === musicRef);
+    if (musicCard?.url) musicUrl = musicCard.url;
+  }
+
+  const { useChatStore } = await import("@/lib/chat/store");
+  useChatStore.getState().addMessage(`Rendering ${cards.length} cards into video...`, "system");
+
+  try {
+    const { renderProject } = await import("@livepeer/creative-kit");
+    const result = await renderProject({
+      cards,
+      musicSource: musicUrl,
+      transition: "crossfade",
+      transitionDuration: 0.5,
+      onProgress: (pct) => {
+        const pctInt = Math.round(pct * 100);
+        if (pctInt % 25 === 0 && pctInt > 0) {
+          useChatStore.getState().addMessage(`Rendering: ${pctInt}%`, "system");
+        }
+      },
+    });
+
+    // Add rendered video to canvas
+    const cardNum = canvas.cards.length + 1;
+    const refId = `render-${cardNum}`;
+    const renderCard = useCanvasStore.getState().addCard({
+      type: "video",
+      title: `Rendered: ${cards.length} scenes`,
+      refId,
+      url: result.url,
+    });
+
+    // Auto-download
+    const a = document.createElement("a");
+    a.href = result.url;
+    a.download = result.fileName;
+    a.click();
+
+    return `Rendered ${cards.length} scenes → ${result.duration.toFixed(1)}s video (${(result.size / 1024 / 1024).toFixed(1)}MB). Card: ${refId}. Download started.`;
+  } catch (e) {
+    return `Render failed: ${e instanceof Error ? e.message : "unknown"}`;
+  }
+}
+
+async function handleSnapshot(args: string): Promise<string> {
+  const parts = args.trim().split(/\s+/);
+  const sub = parts[0];
+  const { history } = await import("@/lib/canvas/store");
+
+  if (sub === "save" && parts[1]) {
+    const name = parts.slice(1).join(" ");
+    const { cards, edges } = useCanvasStore.getState();
+    history.saveSnapshot(name, { cards, edges });
+    return `Snapshot "${name}" saved (${cards.length} cards, ${edges.length} edges).`;
+  }
+
+  if (sub === "restore" && parts[1]) {
+    const name = parts.slice(1).join(" ");
+    const snap = history.restoreSnapshot(name);
+    if (!snap) return `No snapshot named "${name}". Use /snapshot list to see available.`;
+    // Push current state for undo before restoring
+    const { cards, edges } = useCanvasStore.getState();
+    history.pushUndo({ cards, edges });
+    useCanvasStore.setState({ cards: snap.cards as any, edges: snap.edges as any });
+    return `Restored snapshot "${name}" (${snap.cards.length} cards). Cmd+Z to undo.`;
+  }
+
+  if (sub === "list" || !sub) {
+    const snaps = history.listSnapshots();
+    if (snaps.length === 0) return "No snapshots saved. Use /snapshot save <name> to create one.";
+    return ["**Snapshots:**", ...snaps.map((s) =>
+      `- **${s.name}** — ${s.cards.length} cards (${new Date(s.timestamp).toLocaleString()})`
+    )].join("\n");
+  }
+
+  if (sub === "delete" && parts[1]) {
+    history.removeSnapshot(parts.slice(1).join(" "));
+    return "Snapshot deleted.";
+  }
+
+  return "Usage: /snapshot save <name> | /snapshot restore <name> | /snapshot list | /snapshot delete <name>";
+}
+
+async function handleFaceLock(args: string): Promise<string> {
+  const { useProjectStore } = await import("@/lib/projects/store");
+  const sub = args.trim().split(/\s+/)[0];
+
+  if (sub === "clear") {
+    const active = useProjectStore.getState().getActiveProject();
+    if (!active) return "No active project.";
+    (active as any).faceLock = undefined;
+    return "Character reference lock cleared.";
+  }
+
+  if (!sub) {
+    const active = useProjectStore.getState().getActiveProject();
+    if (!active) return "No active project. Use /facelock <card-refId> after creating a project.";
+    const fl = (active as any).faceLock;
+    if (fl) return `Character locked to **${fl.refId}** — all scene generation uses this as a reference image.\nUse /facelock clear to remove.`;
+    return "No character lock active.\nUsage: /facelock <card-refId> — lock a character face for consistent scenes";
+  }
+
+  const card = useCanvasStore.getState().cards.find(
+    (c) => c.refId === sub || c.refId.endsWith(sub)
+  );
+  if (!card?.url) return `Card "${sub}" not found or has no image.`;
+
+  const active = useProjectStore.getState().getActiveProject();
+  if (!active) return "No active project. Create one first with /project add <brief>, then /facelock <card>.";
+
+  (active as any).faceLock = {
+    refId: card.refId,
+    url: card.url,
+    lockedAt: Date.now(),
+  };
+
+  return `Character locked to **${card.refId}**.\n` +
+    `All future image generation in project "${active.brief.slice(0, 40)}" will use this as a reference via kontext-edit.\n` +
+    `For videos, the locked image becomes the first frame (seedance-i2v).\n` +
+    `Use /facelock clear to remove.`;
+}
+
+async function handleExport(args: string): Promise<string> {
+  const parts = args.trim().split(/\s+/);
+  const sub = parts[0];
+
+  if (sub === "social") {
+    const platform = parts[1] || "all";
+    const validPlatforms = ["instagram", "tiktok", "youtube", "twitter", "all"];
+    if (!validPlatforms.includes(platform)) {
+      return `Unknown platform "${platform}". Options: ${validPlatforms.join(", ")}`;
+    }
+
+    const cards = useCanvasStore.getState().cards
+      .filter((c) => c.url && (c.type === "image" || c.type === "video"))
+      .map((c) => ({ refId: c.refId, url: c.url!, type: c.type as "image" | "video" }));
+
+    if (cards.length === 0) return "No cards with media to export.";
+
+    const { exportForSocial } = await import("@livepeer/creative-kit");
+    const results = await exportForSocial({ platform: platform as any, cards });
+
+    // Download — for a single platform, download files directly; for "all", zip
+    const totalFiles = results.reduce((sum, r) => sum + r.files.length, 0);
+    if (totalFiles === 0) return "No image cards to export (video cropping coming soon).";
+
+    // Simple download: create blobs
+    for (const r of results) {
+      for (const f of r.files) {
+        const url = URL.createObjectURL(f.blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = f.name;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    return `Exported ${totalFiles} files for ${platform} (${results.map((r) => `${r.platform}: ${r.files.length}`).join(", ")}). Downloads started.`;
+  }
+
+  // Default: original JSON export
+  return exportCanvas();
 }

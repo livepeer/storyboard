@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type { Card, ArrowEdge, CanvasViewport, CardType } from "./types";
-import { recordNegative, recordPositive } from "@livepeer/creative-kit";
+import { recordNegative, recordPositive, createHistoryManager, type CanvasSnapshot } from "@livepeer/creative-kit";
+
+export const history = createHistoryManager();
 
 const CARD_W = 320;
 const CARD_H = 280;
@@ -15,6 +17,12 @@ interface CanvasState {
   edges: ArrowEdge[];
   selectedCardIds: Set<string>;
   selectedEdgeIdx: number;
+
+  // History
+  undo: () => void;
+  redo: () => void;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
 
   // Viewport actions
   setViewport: (v: Partial<CanvasViewport>) => void;
@@ -73,6 +81,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   selectedCardIds: new Set<string>(),
   selectedEdgeIdx: -1,
 
+  undo: () => {
+    const { cards, edges } = get();
+    const prev = history.undo();
+    if (!prev) return;
+    // Save current state for redo (undo() already pushed to redo stack)
+    set({ cards: prev.cards as Card[], edges: prev.edges as ArrowEdge[] });
+  },
+
+  redo: () => {
+    const next = history.redo();
+    if (!next) return;
+    set({ cards: next.cards as Card[], edges: next.edges as ArrowEdge[] });
+  },
+
+  canUndo: () => history.canUndo,
+  canRedo: () => history.canRedo,
+
   setViewport: (v) =>
     set((s) => ({ viewport: { ...s.viewport, ...v } })),
 
@@ -116,6 +141,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }),
 
   addCard: (opts) => {
+    history.pushUndo({ cards: get().cards, edges: get().edges });
     const id = String(nextCardId++);
     const refId = opts.refId || makeRefId(opts.type, Number(id));
     const pos = nextPosition(get().cards);
@@ -141,8 +167,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       cards: s.cards.map((c) => (c.id === id ? { ...c, ...patch } : c)),
     })),
 
-  removeCard: (id) =>
-    set((s) => {
+  removeCard: (id) => {
+    history.pushUndo({ cards: get().cards, edges: get().edges });
+    return set((s) => {
       const card = s.cards.find((c) => c.id === id);
       if (!card) return s;
       // Record negative signal — user deleted this card
@@ -163,7 +190,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           return next;
         })(),
       };
-    }),
+    });
+  },
 
   selectCard: (id) =>
     set({ selectedCardIds: new Set(id ? [id] : []), selectedEdgeIdx: -1 }),
@@ -226,8 +254,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     }),
 
-  addEdge: (fromRefId, toRefId, meta) =>
-    set((s) => {
+  addEdge: (fromRefId, toRefId, meta) => {
+    history.pushUndo({ cards: get().cards, edges: get().edges });
+    return set((s) => {
       const exists = s.edges.find(
         (e) => e.fromRefId === fromRefId && e.toRefId === toRefId
       );
@@ -241,7 +270,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         };
       }
       return { edges: [...s.edges, { id: `${fromRefId}-->${toRefId}`, fromRefId, toRefId, meta }] };
-    }),
+    });
+  },
 
   removeEdgesFor: (refId) =>
     set((s) => ({
@@ -252,8 +282,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   selectEdge: (idx) => set({ selectedEdgeIdx: idx, selectedCardIds: new Set() }),
 
-  applyLayout: (positions) =>
-    set((s) => {
+  applyLayout: (positions) => {
+    history.pushUndo({ cards: get().cards, edges: get().edges });
+    return set((s) => {
       const posMap = new Map(positions.map((p) => [p.cardId, p]));
       const cards = s.cards.map((c) => {
         const pos = posMap.get(c.id);
@@ -267,5 +298,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         };
       });
       return { cards };
-    }),
+    });
+  },
 }));

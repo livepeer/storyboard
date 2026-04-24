@@ -47,6 +47,19 @@ export default function Home() {
     });
 
     setMounted(true);
+
+    // Undo/redo keyboard shortcuts
+    const undoHandler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+        e.preventDefault();
+        import("@/lib/canvas/store").then((m) => {
+          if (e.shiftKey) m.useCanvasStore.getState().redo();
+          else m.useCanvasStore.getState().undo();
+        });
+      }
+    };
+    window.addEventListener("keydown", undoHandler);
+    return () => window.removeEventListener("keydown", undoHandler);
   }, []);
 
   // Render nothing on server — avoids all hydration mismatches from

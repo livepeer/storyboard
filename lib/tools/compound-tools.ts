@@ -628,6 +628,27 @@ export const createMediaTool: ToolDefinition = {
       );
       const attemptChain = buildAttemptChain(capability, liveCapNames);
 
+      // Face Lock: inject reference image for character consistency.
+      // When a project has a face lock, route generate/restyle through
+      // kontext-edit with the locked image as source. For animate,
+      // the locked face becomes the source_url (first frame carry-through).
+      try {
+        const { useProjectStore } = await import("@/lib/projects/store");
+        const activeProject = useProjectStore.getState().getActiveProject();
+        const faceLock = (activeProject as any)?.faceLock as { url: string } | undefined;
+        if (faceLock?.url && !params.image_url) {
+          if (step.action === "generate" || step.action === "restyle") {
+            params.image_url = faceLock.url;
+            if (capability === "flux-dev" || capability === "gemini-image" || capability === "seedream-5-lite") {
+              // These models don't support image_url as reference — override to kontext-edit
+              capability = "kontext-edit";
+            }
+          } else if (step.action === "animate" && !step.source_url) {
+            params.image_url = faceLock.url;
+          }
+        }
+      } catch { /* non-critical — face lock is optional */ }
+
       // Capture all loop-local variables for the inference closure.
       // The setup loop keeps running (model locking, card creation)
       // while inferences are deferred until Phase 2.
