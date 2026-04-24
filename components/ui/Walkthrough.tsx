@@ -1,24 +1,42 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 const STORAGE_KEY = "sb_walkthrough_done";
 
-const STEPS = [
+interface Step {
+  title: string;
+  desc: string;
+  icon: string;
+  /** If set, step auto-advances when this condition becomes true */
+  detectComplete?: () => boolean;
+}
+
+const STEPS: Step[] = [
   {
     title: "1. Set your API key",
-    desc: "Click the gear icon (top-right) and enter your Daydream API key to connect to AI models.",
+    desc: "Click the gear icon (top-right) and enter your Daydream API key. This connects you to 40+ AI models.",
     icon: "\u2699\uFE0F",
+    detectComplete: () => !!localStorage.getItem("sdk_api_key"),
   },
   {
-    title: "2. Describe what you want",
-    desc: "Type a prompt in the chat panel. Try: \"a sunset over mountains\" or \"/film a cat adventure\" for a full mini-film.",
+    title: "2. Create something",
+    desc: "Type a prompt in the chat — try \"a sunset over mountains\" or click one of the starter chips below.",
     icon: "\u270D\uFE0F",
+    detectComplete: () => {
+      try {
+        const raw = localStorage.getItem("storyboard_canvas");
+        if (!raw) return false;
+        const data = JSON.parse(raw);
+        return (data?.state?.cards?.length || 0) > 0;
+      } catch { return false; }
+    },
   },
   {
     title: "3. Explore and iterate",
-    desc: "Right-click any card for options: restyle, animate, variations, face lock. Double-click images to view fullscreen. Cmd+Z to undo.",
+    desc: "Right-click any card for powerful options: restyle, animate, variations, face lock. Double-click images to zoom in. Press ? for all shortcuts.",
     icon: "\u{1F5B1}\uFE0F",
+    detectComplete: () => !!sessionStorage.getItem("sb_ctx_hint"),
   },
 ];
 
@@ -29,23 +47,49 @@ export function Walkthrough() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (localStorage.getItem(STORAGE_KEY)) return;
-    // Check if API key is already set — if so, skip step 1
-    const hasKey = !!localStorage.getItem("sdk_api_key");
-    setStep(hasKey ? 1 : 0);
+    // Find the first incomplete step
+    let startStep = 0;
+    for (let i = 0; i < STEPS.length; i++) {
+      if (STEPS[i].detectComplete?.()) startStep = i + 1;
+      else break;
+    }
+    if (startStep >= STEPS.length) {
+      // All steps already completed
+      localStorage.setItem(STORAGE_KEY, "1");
+      return;
+    }
+    setStep(startStep);
     setShow(true);
   }, []);
 
-  if (!show) return null;
+  // Poll for step completion (check every 2s)
+  useEffect(() => {
+    if (!show) return;
+    const iv = setInterval(() => {
+      const s = STEPS[step];
+      if (s?.detectComplete?.()) {
+        if (step < STEPS.length - 1) {
+          setStep(step + 1);
+        } else {
+          localStorage.setItem(STORAGE_KEY, "1");
+          setShow(false);
+        }
+      }
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [show, step]);
 
-  const dismiss = () => {
+  const dismiss = useCallback(() => {
     localStorage.setItem(STORAGE_KEY, "1");
     setShow(false);
-  };
+  }, []);
 
-  const next = () => {
+  const next = useCallback(() => {
     if (step < STEPS.length - 1) setStep(step + 1);
     else dismiss();
-  };
+  }, [step, dismiss]);
+
+  if (!show) return null;
 
   const s = STEPS[step];
 
@@ -58,7 +102,7 @@ export function Walkthrough() {
             <div
               key={i}
               className={`h-1 flex-1 rounded-full transition-colors ${
-                i <= step ? "bg-purple-500" : "bg-white/10"
+                i < step ? "bg-green-500" : i === step ? "bg-purple-500" : "bg-white/10"
               }`}
             />
           ))}
@@ -68,12 +112,19 @@ export function Walkthrough() {
         <h3 className="text-sm font-semibold text-white">{s.title}</h3>
         <p className="mt-2 text-xs leading-relaxed text-gray-400">{s.desc}</p>
 
+        {/* Auto-detect hint */}
+        {s.detectComplete && (
+          <p className="mt-2 text-[10px] text-purple-400/60 italic">
+            This step will auto-advance when completed
+          </p>
+        )}
+
         <div className="mt-5 flex items-center justify-between">
           <button
             onClick={dismiss}
             className="text-[11px] text-gray-500 hover:text-gray-300 transition-colors"
           >
-            Skip walkthrough
+            Skip
           </button>
           <button
             onClick={next}

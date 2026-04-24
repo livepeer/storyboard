@@ -577,9 +577,17 @@ export const createMediaTool: ToolDefinition = {
       // Title: use step.title if agent provided one, else extract 3-5 key words from prompt
       const title = step.title || extractShortTitle(step.prompt);
 
-      // Create card (spinner shows while generating)
-      console.log(`[create_media] Step ${i}/${rawSteps.length}: refId=${refId}, cardNum=${cardNum}, canvasCards=${useCanvasStore.getState().cards.length}, capability=${capability}`);
+      // Create card (spinner shows while generating) — set capability early
+      // so GeneratingSpinner can show model-specific ETA
+      console.log(`[create_media] Step ${i}/${rawSteps.length}: refId=${refId}, capability=${capability} (${routeReason})`);
       const card = canvas.addCard({ type, title, refId, batchId });
+      canvas.updateCard(card.id, { capability });
+
+      // Chat explanation — why this model was chosen (only for first step or unique routing)
+      if (i === 0 || routeReason !== "auto") {
+        const reason = routeReason === "auto" ? `auto-selected for ${step.action}` : routeReason;
+        useChatStore.getState().addMessage(`${refId}: ${capability} (${reason})`, "system");
+      }
       if (prePlannedPositions[i]) {
         const pos = prePlannedPositions[i];
         useCanvasStore.getState().updateCard(card.id, {
@@ -746,6 +754,11 @@ export const createMediaTool: ToolDefinition = {
               const fallbackNote = attemptIdx > 0 ? ` (fallback from ${_attemptChain[0]})` : "";
               const genMeta = { capability: currentCap, prompt: _effectivePrompt, elapsed, routeReason: _routeReason + fallbackNote };
               console.log(`[create_media] ${_refId} → ${currentCap} → ${url.slice(0, 120)} (${(elapsed / 1000).toFixed(1)}s)`);
+              // Update title with completion status
+              useChatStore.getState().updateMessage(
+                useChatStore.getState().messages.findLast((m) => m.text.startsWith(_refId))?.id || "",
+                `${_refId}: ${currentCap} — done (${(elapsed / 1000).toFixed(1)}s)`
+              );
               // Debug: log response keys to help diagnose black images
               console.log(`[create_media] ${_refId} response keys:`, Object.keys(data).join(","), "| nsfw:", (data as any).has_nsfw_concepts, (data as any).nsfw_content_detected);
 

@@ -24,21 +24,39 @@ function useFirstCardHint(hasUrl: boolean): boolean {
   return show;
 }
 
-/** Spinner with elapsed timer — shows how long generation has been running. */
-function GeneratingSpinner({ type }: { type: string }) {
+/** Spinner with elapsed timer + progress bar based on model-typical latencies. */
+function GeneratingSpinner({ type, capability }: { type: string; capability?: string }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     const t0 = Date.now();
     const iv = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
     return () => clearInterval(iv);
   }, []);
-  const estimate = type === "video" ? " (typically 30-90s)" : type === "audio" ? " (typically 10-30s)" : "";
+
+  // Model-specific ETA estimates (seconds)
+  const etaMap: Record<string, number> = {
+    "flux-dev": 8, "flux-schnell": 4, "gpt-image": 12, "recraft-v4": 6,
+    "nano-banana": 5, "gemini-image": 8, "seedream-5-lite": 6, "kontext-edit": 8,
+    "seedance-i2v": 60, "seedance-i2v-fast": 30, "kling-i2v": 45, "veo-i2v": 40,
+    "ltx-i2v": 25, "ltx-t2v": 30, "chatterbox-tts": 10, "music": 15,
+  };
+  const defaultEta = type === "video" ? 60 : type === "audio" ? 12 : 8;
+  const eta = capability ? (etaMap[capability] || defaultEta) : defaultEta;
+  const pct = Math.min(elapsed / eta, 0.95); // never show 100% until actually done
+
   return (
-    <div className="flex flex-col items-center gap-3">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--text-muted)]" />
+    <div className="flex flex-col items-center gap-2 w-full px-6">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--text-muted)]" />
       <span className="font-mono text-[11px] text-[var(--text-dim)]">
-        Generating… {elapsed}s{estimate}
+        {elapsed}s{capability ? ` · ${capability}` : ""}{elapsed < eta ? ` · ~${eta - elapsed}s left` : " · almost done"}
       </span>
+      {/* Progress bar */}
+      <div className="w-full h-1 rounded-full bg-white/10 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-purple-500/60 transition-all duration-1000"
+          style={{ width: `${Math.round(pct * 100)}%` }}
+        />
+      </div>
     </div>
   );
 }
@@ -507,7 +525,7 @@ export function Card({ card }: { card: CardData }) {
               />
             )
           ) : (
-            <GeneratingSpinner type={card.type} />
+            <GeneratingSpinner type={card.type} capability={card.capability} />
           )}
         </div>
       )}
