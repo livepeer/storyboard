@@ -51,8 +51,8 @@ function buildStreamGraph(pipelineId = "longlive") {
 /** Stream start params that enable video-to-video mode.
  *  input_mode: "video" is THE gating parameter — without it, published
  *  frames are completely dropped by the pipeline. */
-function buildStreamStartParams(recipe: ResolvedRecipe, prompt: string, noise: number) {
-  return {
+function buildStreamStartParams(recipe: ResolvedRecipe, prompt: string, noise: number, vaceRefUrl?: string) {
+  const params: Record<string, unknown> = {
     prompt,
     prompts: prompt,
     pipeline_ids: [recipe.pipeline],
@@ -63,6 +63,14 @@ function buildStreamStartParams(recipe: ResolvedRecipe, prompt: string, noise: n
     denoising_step_list: recipe.denoising,
     ...recipe.extras,
   };
+  // VACE must be enabled at stream start — cannot be toggled mid-stream.
+  // The pipeline loads the VACE processor block only at init time.
+  if (vaceRefUrl) {
+    params.vace_enabled = true;
+    params.vace_ref_images = [vaceRefUrl];
+    params.vace_context_scale = 0.8;
+  }
+  return params;
 }
 
 /** Enrich a short music description into a detailed prompt for better generation */
@@ -147,11 +155,13 @@ export function createStageTools(ctx: StageToolContext) {
           prompt: { type: "string", description: "Scene description" },
           preset: { type: "string", description: "Visual preset: dreamy, cinematic, anime, abstract, faithful, painterly, psychedelic" },
           recipe: { type: "string", description: "Stream recipe: classic, ltx-responsive, ltx-smooth, fast-preview, krea-hq, memflow-consistent. Default: classic" },
+          vace_ref: { type: "string", description: "Optional: URL of a reference image for VACE visual conditioning (colors, composition)" },
         },
         required: ["prompt"],
       },
       async execute(args: Record<string, unknown>) {
         const prompt = args.prompt as string;
+        const vaceRef = args.vace_ref as string | undefined;
         const presetMap: Record<string, number> = {
           dreamy: 0.7, cinematic: 0.5, anime: 0.6, abstract: 0.95,
           faithful: 0.2, painterly: 0.65, psychedelic: 0.9,
@@ -169,7 +179,7 @@ export function createStageTools(ctx: StageToolContext) {
           headers: headers(),
           body: JSON.stringify({
             model_id: "scope",
-            params: buildStreamStartParams(recipe, prompt, noise),
+            params: buildStreamStartParams(recipe, prompt, noise, vaceRef),
           }),
         }).then(async (resp) => {
           if (resp.ok) {

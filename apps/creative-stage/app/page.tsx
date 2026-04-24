@@ -21,9 +21,44 @@ import { RecordBar } from "../components/RecordBar";
 import { detectBpm } from "../lib/bpm-detect";
 import { StageRecorder, type RecorderState } from "../lib/recorder";
 
-// ─── Stores ───
-const artifacts = createArtifactStore();
+// ─── Stores (with persistence) ───
+const artifacts = createArtifactStore({ maxArtifacts: 50 });
 const chat = createChatStore();
+
+// Persist artifacts to localStorage
+const ARTIFACTS_KEY = "cs_artifacts";
+function saveArtifacts() {
+  try {
+    const { artifacts: arts, edges } = artifacts.getState();
+    const safe = arts.filter((a) => !a.url?.startsWith("blob:")).slice(-50);
+    localStorage.setItem(ARTIFACTS_KEY, JSON.stringify({ artifacts: safe, edges }));
+  } catch { /* quota */ }
+}
+function loadArtifacts() {
+  try {
+    const raw = localStorage.getItem(ARTIFACTS_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (data.artifacts?.length) {
+      for (const a of data.artifacts) artifacts.getState().add(a);
+    }
+  } catch { /* corrupt data */ }
+}
+
+// Prompt history
+const PROMPT_HISTORY_KEY = "cs_prompt_history";
+function savePromptHistory(prompt: string) {
+  if (!prompt.trim() || prompt.startsWith("/")) return;
+  try {
+    const h = JSON.parse(localStorage.getItem(PROMPT_HISTORY_KEY) || "[]") as string[];
+    const filtered = h.filter((p) => p !== prompt);
+    filtered.unshift(prompt);
+    localStorage.setItem(PROMPT_HISTORY_KEY, JSON.stringify(filtered.slice(0, 20)));
+  } catch {}
+}
+function getPromptHistory(): string[] {
+  try { return JSON.parse(localStorage.getItem(PROMPT_HISTORY_KEY) || "[]"); } catch { return []; }
+}
 
 function getSdkConfig() {
   if (typeof window === "undefined") return { url: "https://sdk.daydream.monster", key: "" };
@@ -253,9 +288,10 @@ export default function Stage() {
     };
   }, [mounted]);
 
-  // Create live output card
+  // Load persisted artifacts + create live output card
   useEffect(() => {
     if (!mounted) return;
+    loadArtifacts();
     const existing = artifacts.getState().getByRefId("live-output");
     if (!existing) {
       artifacts.getState().add({
@@ -263,14 +299,82 @@ export default function Stage() {
         x: 200, y: 50, w: 640, h: 400,
       });
     }
+    // Subscribe to changes for auto-save
+    const unsub = artifacts.subscribe(() => saveArtifacts());
+    return unsub;
   }, [mounted]);
+
+  // Undo/redo + lightbox keyboard shortcuts
+  const [undoStack] = useState<Array<{ artifacts: Artifact[] }>>(() => []);
+  useEffect(() => {
+    if (!mounted) return;
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+        e.preventDefault();
+        const prev = undoStack.pop();
+        if (prev) {
+          // Replace artifacts (keep live-output)
+          const live = artifacts.getState().getByRefId("live-output");
+          const restored = live ? [live, ...prev.artifacts.filter((a) => a.refId !== "live-output")] : prev.artifacts;
+          // Clear and re-add
+          for (const a of artifacts.getState().artifacts) {
+            if (a.refId !== "live-output") artifacts.getState().remove(a.id);
+          }
+          for (const a of restored) {
+            if (a.refId !== "live-output") artifacts.getState().add(a);
+          }
+          chat.getState().addMessage(`Undone (${prev.artifacts.length} cards)`, "system");
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [mounted, undoStack]);
 
   // ─── Agent Handler ───
   const handleSend = useCallback(async (text: string) => {
     chat.getState().addMessage(text, "user");
+    savePromptHistory(text);
 
     const sdk = getSdkConfig();
     const say = (msg: string) => chat.getState().addMessage(msg, "system");
+
+    // /demo command — one-command wow moment
+    if (text.trim().startsWith("/demo")) {
+      const concept = text.trim().slice(5).trim() || "dreamy sunset landscape";
+      say(`Starting demo: "${concept}" — generating image, stream, music, and performance...`);
+      // Step 1: Generate key image
+      try {
+        const hdrs = { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) };
+        const imgResp = await fetch(`${sdk.url}/inference`, {
+          method: "POST", headers: hdrs,
+          body: JSON.stringify({ capability: "flux-dev", prompt: `cinematic ${concept}, beautiful lighting`, params: {} }),
+        });
+        if (imgResp.ok) {
+          const imgData = await imgResp.json();
+          const imgUrl = imgData.image_url || imgData.images?.[0]?.url || imgData.data?.images?.[0]?.url;
+          if (imgUrl) {
+            artifacts.getState().add({ type: "image", title: `Demo: ${concept}`, url: imgUrl, refId: `demo-${Date.now()}`, x: 50, y: 50, w: 320, h: 280 });
+            say("Image generated. Starting live stream...");
+          }
+        }
+      } catch { say("Image generation skipped"); }
+      // Step 2: Start stream with scenes
+      const scenes = [
+        { title: "Opening", prompt: `wide establishing shot, ${concept}, cinematic`, preset: "cinematic", duration: 8 },
+        { title: "Close-up", prompt: `close-up detail, ${concept}, dramatic lighting`, preset: "dreamy", duration: 8 },
+        { title: "Abstract", prompt: `abstract expressionist interpretation of ${concept}`, preset: "abstract", duration: 6 },
+        { title: "Finale", prompt: `golden hour, ${concept}, breathtaking beauty`, preset: "painterly", duration: 8 },
+      ];
+      // Create scenes via context
+      const indexed = scenes.map((s, i) => ({ ...s, index: i }));
+      perfRef.current.setScenes(indexed);
+      setPerfState(perfRef.current.getState());
+      say(`4 scenes created. Type "start a ${concept} stream" to begin streaming, or use the chat to ask the agent.`);
+      return;
+    }
 
     // ── Creative Pipeline: classify → validate → execute ──
     try {
@@ -644,6 +748,22 @@ export default function Stage() {
     setShowSettings(false);
   };
 
+  // Walkthrough state
+  const [showWalkthrough, setShowWalkthrough] = useState(false);
+  const [walkStep, setWalkStep] = useState(0);
+  useEffect(() => {
+    if (!mounted) return;
+    if (localStorage.getItem("cs_walkthrough_done")) return;
+    setShowWalkthrough(true);
+    setWalkStep(localStorage.getItem("sdk_api_key") ? 1 : 0);
+  }, [mounted]);
+  const walkthroughSteps = [
+    { icon: "\u2699\uFE0F", title: "1. Set your API key", desc: "Click the gear icon and enter your Daydream API key to connect to AI models." },
+    { icon: "\u{1F3AC}", title: "2. Start creating", desc: "Type a prompt like \"a dreamy sunset\" or try /demo jazz sunset for the full pipeline demo." },
+    { icon: "\u{1F3A8}", title: "3. Go live", desc: "Ask for scenes, music, and hit Play. Your AI-powered live stream starts instantly." },
+  ];
+  const dismissWalkthrough = () => { localStorage.setItem("cs_walkthrough_done", "1"); setShowWalkthrough(false); };
+
   if (!mounted) return null;
 
   const liveCard = arts.find((a) => a.refId === "live-output");
@@ -652,6 +772,28 @@ export default function Stage() {
 
   return (
     <div style={S.root}>
+      {/* Walkthrough overlay */}
+      {showWalkthrough && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 99998, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }}>
+          <div style={{ width: 380, background: "#14141f", border: "1px solid rgba(139,92,246,0.3)", borderRadius: 16, padding: 24, boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+              {walkthroughSteps.map((_, i) => (
+                <div key={i} style={{ flex: 1, height: 4, borderRadius: 2, background: i <= walkStep ? (i < walkStep ? "#22c55e" : "#8b5cf6") : "rgba(255,255,255,0.1)" }} />
+              ))}
+            </div>
+            <div style={{ fontSize: 24, marginBottom: 8 }}>{walkthroughSteps[walkStep].icon}</div>
+            <h3 style={{ fontSize: 14, fontWeight: 600, color: "#fff", margin: 0 }}>{walkthroughSteps[walkStep].title}</h3>
+            <p style={{ fontSize: 12, color: "#9ca3af", lineHeight: 1.6, margin: "8px 0 0" }}>{walkthroughSteps[walkStep].desc}</p>
+            <div style={{ marginTop: 20, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <button onClick={dismissWalkthrough} style={{ background: "none", border: "none", color: "#666", fontSize: 11, cursor: "pointer" }}>Skip</button>
+              <button onClick={() => { if (walkStep < 2) setWalkStep(walkStep + 1); else dismissWalkthrough(); }}
+                style={{ background: "rgba(139,92,246,0.2)", border: "none", color: "#c4b5fd", padding: "8px 20px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                {walkStep < 2 ? "Next" : "Get started"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* ─── Canvas Area ─── */}
       <div style={S.canvasArea} onContextMenu={(e) => {
         e.preventDefault();
@@ -1107,6 +1249,25 @@ export default function Stage() {
                   )}
                   {isImage && (
                     <>
+                      <CtxMenuItem label="View Fullscreen" icon="\uD83D\uDD0D" onClick={() => {
+                        setCtxMenu(null);
+                        if (!art.url) return;
+                        const overlay = document.createElement("div");
+                        overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out";
+                        const img = document.createElement("img");
+                        img.src = art.url;
+                        img.style.cssText = "max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px";
+                        overlay.appendChild(img);
+                        if (art.title) {
+                          const cap = document.createElement("div");
+                          cap.style.cssText = "position:absolute;bottom:20px;left:50%;transform:translateX(-50%);max-width:600px;padding:8px 16px;background:rgba(0,0,0,0.7);border-radius:8px;color:#ccc;font-size:12px;text-align:center";
+                          cap.textContent = art.title;
+                          overlay.appendChild(cap);
+                        }
+                        overlay.onclick = () => overlay.remove();
+                        document.addEventListener("keydown", function esc(ev) { if (ev.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", esc); } });
+                        document.body.appendChild(overlay);
+                      }} />
                       <CtxMenuItem label="Animate (Seedance)" icon="🎬" onClick={async () => {
                         setCtxMenu(null);
                         const prompt = await styledPrompt("Animate Image", "Describe the motion…");
