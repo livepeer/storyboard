@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePromptEditor } from "@/components/ui/PromptEditor";
 import { startWebcam, stopWebcam, captureFrame } from "@/lib/stream/webcam";
 import {
   startStream,
@@ -17,6 +18,7 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { useChatStore } from "@/lib/chat/store";
 
 export function CameraWidget() {
+  const { prompt: showPromptEditor, dialogNode: promptEditorDialog } = usePromptEditor();
   const [active, setActive] = useState(false);
   const [minimized, setMinimized] = useState(false);
   // `streamCount` is derived state (length of sessionsRef at last update).
@@ -284,7 +286,7 @@ export function CameraWidget() {
 
   const handleLv2v = useCallback(async () => {
     if (!videoRef.current) return;
-    const prompt = window.prompt("LV2V style prompt:", "cyberpunk neon city");
+    const prompt = await showPromptEditor("LV2V Stream", "Describe the visual style for the live stream...", "cyberpunk neon city", "This prompt controls how your webcam feed is transformed in real-time");
     if (!prompt) return;
 
     setStatus("Starting stream\u2026");
@@ -430,7 +432,7 @@ export function CameraWidget() {
     [handlePromptSubmit]
   );
 
-  return (
+  return (<>
     <div
       ref={panelRef}
       className={`fixed bottom-4 left-4 z-[1500] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-lg)] ${
@@ -601,5 +603,7 @@ export function CameraWidget() {
         </div>
       )}
     </div>
+    {promptEditorDialog}
+  </>
   );
 }
