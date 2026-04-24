@@ -62,5 +62,6 @@ export { useStyledPrompt } from "./ui/StyledPrompt";
 export { planRemix, detectRemixIntent, type RemixRequest, type RemixPlan, type RemixMode } from "./agent/visual-remix";
 export { createVoiceInput, isSpeechRecognitionSupported, type VoiceInput, type VoiceInputOptions } from "./agent/voice-input";
 export { exportToJson, buildVideoManifest, buildStoryboardHtml, listSocialPlatforms, getSocialSpecs, type ExportFormat, type ExportOptions, type ExportResult, type ExportableScene, type SocialPlatform } from "./agent/export-pipeline";
+export { exportForSocial, cropImage, calculateCrop, type SocialExportOptions, type SocialExportResult, type CropRect } from "./agent/social-export";
 export { executeDAG, buildProjectDAG, type DAGNode, type DAGResult, type DAGOptions } from "./agent/dag-executor";
 export { buildVariationSteps, type VariationOptions, type VariationStep } from "./agent/variation-engine";
