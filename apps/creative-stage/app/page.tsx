@@ -1048,10 +1048,11 @@ export default function Stage() {
                   document.body.appendChild(overlay);
                 }}
               >
-                {/* Close button */}
+                {/* Close button — defer removal so event doesn't leak to card behind */}
                 <button
-                  onClick={(e) => { e.stopPropagation(); artifacts.getState().remove(a.id); }}
-                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); e.preventDefault(); e.nativeEvent.stopImmediatePropagation(); setTimeout(() => artifacts.getState().remove(a.id), 0); }}
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+                  onPointerUp={(e) => { e.stopPropagation(); e.preventDefault(); }}
                   style={{
                     position: "absolute", top: 4, right: 4, zIndex: 10,
                     width: 20, height: 20, borderRadius: "50%",
