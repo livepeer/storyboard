@@ -58,3 +58,4 @@ export { ChatPanel } from "./ui/ChatPanel";
 export { MessageBubble } from "./ui/MessageBubble";
 export { ToolPill } from "./ui/ToolPill";
 export { useStyledPrompt } from "./ui/StyledPrompt";
+export { planRemix, detectRemixIntent, type RemixRequest, type RemixPlan, type RemixMode } from "./agent/visual-remix";
