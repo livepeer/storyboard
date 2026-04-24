@@ -240,11 +240,14 @@ export function autoFillModels(named: string[], requested: number): string[] {
  */
 function detectModelCountRequest(text: string): number {
   const lower = text.toLowerCase();
-  // "4 different models", "using 3 models", "compare 5 models"
+  // "4 different models", "using 3 models", "compare 5 models",
+  // "with 5 different models", "compare with 4 models"
   const m = lower.match(/(\d+)\s+(?:different\s+)?(?:models?|ai\s+models?)/);
   if (m) return parseInt(m[1], 10);
   // "multiple models", "several models", "various models"
-  if (/(?:multiple|several|various|many|all)\s+(?:different\s+)?(?:models?|ai\s+models?)/.test(lower)) return 4;
+  if (/(?:multiple|several|various|many|all|different)\s+(?:different\s+)?(?:models?|ai\s+models?)/.test(lower)) return 4;
+  // "compare models" without a count
+  if (/compare\s+(?:the\s+)?(?:models?|ai\s+models?)/.test(lower)) return 4;
   return 0;
 }
 
@@ -253,28 +256,22 @@ function detectModelCountRequest(text: string): number {
 export function classifyWithRegex(text: string): IntentPlan {
   const lower = text.toLowerCase();
   const models = extractMentionedModels(text);
-
-  // Compare models: 2+ model names explicitly
-  if (models.length >= 2) {
-    return {
-      type: "compare_models",
-      confidence: 0.95,
-      models,
-      prompt: cleanPrompt(text),
-      reason: `Detected ${models.length} model names`,
-    };
-  }
-
-  // Compare models: "N models" / "N different models" (partially named)
   const requestedCount = detectModelCountRequest(text);
-  if (requestedCount >= 2) {
-    const filled = autoFillModels(models, requestedCount);
+  const targetCount = Math.max(models.length, requestedCount);
+
+  // Compare models: 2+ model names or "N models" request
+  if (targetCount >= 2) {
+    const finalModels = targetCount > models.length
+      ? autoFillModels(models, targetCount)
+      : models;
     return {
       type: "compare_models",
-      confidence: 0.85,
-      models: filled,
+      confidence: targetCount > models.length ? 0.85 : 0.95,
+      models: finalModels,
       prompt: cleanPrompt(text),
-      reason: `User requested ${requestedCount} models (${models.length} named, ${filled.length - models.length} auto-filled): ${filled.join(", ")}`,
+      reason: targetCount > models.length
+        ? `User requested ${requestedCount} models (${models.length} named, auto-filled to ${finalModels.length}): ${finalModels.join(", ")}`
+        : `Detected ${models.length} model names: ${models.join(", ")}`,
     };
   }
 
@@ -305,7 +302,8 @@ export function classifyWithRegex(text: string): IntentPlan {
   }
 
   // Batch: "make a X, a Y, and a Z" (distinct articles/items)
-  const articleItems = text.match(/\ba\s+\w+(?:\s+\w+){0,3}(?=\s*[,]|\s+and\s)/gi);
+  // Match "a <words>" followed by comma, "and", or end of sentence
+  const articleItems = text.match(/\ba\s+\w+(?:\s+\w+){0,3}(?=\s*[,.]|\s+and\s|$)/gi);
   if (articleItems && articleItems.length >= 3) {
     return {
       type: "batch_generate",
@@ -353,34 +351,29 @@ export async function planIntent(
   config?: LLMClassifierConfig,
 ): Promise<IntentPlan> {
   // Tier 0: Deterministic checks — ALWAYS run first.
-  // Model names are facts. If 2+ model names appear, it's a comparison.
   const models = extractMentionedModels(text);
-  if (models.length >= 2) {
-    const plan: IntentPlan = {
-      type: "compare_models",
-      confidence: 0.99,
-      models,
-      prompt: cleanPrompt(text),
-      reason: `${models.length} model names detected: ${models.join(", ")}`,
-    };
-    console.log(`[IntentPlanner] Deterministic: ${plan.reason}`);
-    return plan;
-  }
-
-  // "N different models" / "4 models" — user wants comparison but named
-  // fewer than N. Auto-fill from defaults (e.g. "4 models, include gpt-image"
-  // → gpt-image + flux-dev + recraft-v4 + nano-banana)
   const requestedCount = detectModelCountRequest(text);
-  if (requestedCount >= 2) {
-    const filled = autoFillModels(models, requestedCount);
+
+  // User explicitly requested N models (may have named some or all)
+  // Use the LARGER of: named model count vs requested count
+  // "5 different models including recraft and nano" → 5 (not 2)
+  const targetCount = Math.max(models.length, requestedCount);
+
+  if (targetCount >= 2) {
+    const finalModels = targetCount > models.length
+      ? autoFillModels(models, targetCount)
+      : models;
+    const isAutoFilled = targetCount > models.length;
     const plan: IntentPlan = {
       type: "compare_models",
-      confidence: 0.90,
-      models: filled,
+      confidence: isAutoFilled ? 0.90 : 0.99,
+      models: finalModels,
       prompt: cleanPrompt(text),
-      reason: `User requested ${requestedCount} models (${models.length} named, auto-filled to ${filled.length}): ${filled.join(", ")}`,
+      reason: isAutoFilled
+        ? `User requested ${requestedCount} models (${models.length} named, auto-filled to ${finalModels.length}): ${finalModels.join(", ")}`
+        : `${models.length} model names detected: ${models.join(", ")}`,
     };
-    console.log(`[IntentPlanner] Deterministic (auto-fill): ${plan.reason}`);
+    console.log(`[IntentPlanner] Deterministic${isAutoFilled ? " (auto-fill)" : ""}: ${plan.reason}`);
     return plan;
   }
 
