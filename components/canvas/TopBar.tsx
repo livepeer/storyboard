@@ -15,21 +15,39 @@ function ExportPanel({ onClose }: { onClose: () => void }) {
 
   async function getScenes(): Promise<ExportableScene[]> {
     try {
-      const { useProjectStore } = await import("@/lib/projects/store");
-      const proj = useProjectStore.getState().getActiveProject();
-      if (!proj) return [];
       const { useCanvasStore: store } = await import("@/lib/canvas/store");
       const cards = store.getState().cards;
-      return proj.scenes.map((s, i) => {
-        const card = s.cardRefId ? cards.find((c) => c.refId === s.cardRefId) : null;
-        return {
+
+      // Try project scenes first
+      const { useProjectStore } = await import("@/lib/projects/store");
+      const proj = useProjectStore.getState().getActiveProject();
+      if (proj && proj.scenes.length > 0) {
+        return proj.scenes.map((s, i) => {
+          // Match by cardRefId OR artifactRefId (both old and new naming)
+          const refId = s.cardRefId || (s as any).artifactRefId;
+          const card = refId
+            ? cards.find((c) => c.refId === refId || c.refId.endsWith(refId))
+            : null;
+          return {
+            index: i,
+            title: s.title || `Scene ${i + 1}`,
+            description: s.description || s.prompt,
+            imageUrl: card?.type === "image" ? card.url : undefined,
+            videoUrl: card?.type === "video" ? card.url : undefined,
+          };
+        });
+      }
+
+      // Fallback: all canvas cards with media (no project needed)
+      return cards
+        .filter((c) => c.url && (c.type === "image" || c.type === "video"))
+        .map((c, i) => ({
           index: i,
-          title: s.title,
-          description: s.description || s.prompt,
-          imageUrl: card?.type === "image" ? card.url : undefined,
-          videoUrl: card?.type === "video" ? card.url : undefined,
-        };
-      });
+          title: c.title || c.refId,
+          description: c.prompt || c.title || "",
+          imageUrl: c.type === "image" ? c.url : undefined,
+          videoUrl: c.type === "video" ? c.url : undefined,
+        }));
     } catch { return []; }
   }
 

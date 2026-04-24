@@ -341,6 +341,51 @@ export default function Stage() {
     const sdk = getSdkConfig();
     const say = (msg: string) => chat.getState().addMessage(msg, "system");
 
+    // /help command
+    if (text.trim() === "/help" || text.trim() === "/?") {
+      say([
+        "── CREATIVE STAGE ──",
+        "",
+        "QUICK START",
+        '  Type a scene description → agent starts a live AI stream',
+        '  /demo <concept>        Full pipeline: image + music + stream + scenes',
+        '  /demo jazz sunset      Example: generates everything from 2 words',
+        "",
+        "STREAM CONTROLS",
+        '  "start a dreamy sunset"      Start a live stream',
+        '  "change to anime style"      Update prompt mid-stream',
+        '  "add 4 scenes"               Create scene sequence',
+        '  Space bar                     Play/stop performance',
+        '  R key                         Start/stop recording',
+        "",
+        "CANVAS",
+        "  Drag image → Live Output     Set as stream source (auto-analyzes)",
+        "  Clear (on source badge)       Reset to scene prompt",
+        "  Double-click image            Fullscreen lightbox",
+        "  Right-click card              Context menu (animate, edit, delete)",
+        "  ✕ button on card              Close/remove card",
+        "  Cmd+Z                         Undo",
+        "",
+        "GENERATION",
+        '  "generate an image of..."     Create image on canvas',
+        '  "create a video of..."        Generate video clip',
+        '  "generate music: calm jazz"   Background music + beat sync',
+        '  "compare gpt and flux for..." Side-by-side model comparison',
+        "",
+        "MUSIC & SYNC",
+        '  Music auto-loops and syncs visuals to beats',
+        '  Click ♻ on waveform to regenerate with new prompt',
+        '  Click BPM button to re-detect tempo',
+        "",
+        "TIPS",
+        "  • Set API key first (gear icon, top-right)",
+        "  • Drag any generated image onto the stream to transform it",
+        "  • noise_scale controls how much AI transforms the input (0.2=faithful, 0.8=creative)",
+        "  • Scenes auto-play when you press Space — each transitions the stream's prompt",
+      ].join("\n"));
+      return;
+    }
+
     // /demo command — full pipeline: image → music → stream → scenes → auto-play
     if (text.trim().startsWith("/demo")) {
       const concept = text.trim().slice(5).trim() || "dreamy sunset landscape";
