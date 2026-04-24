@@ -37,6 +37,7 @@ interface ProjectState {
   getActiveProject: () => Project | undefined;
   setActiveProject: (id: string | null) => void;
 
+  patchProject: (id: string, patch: Partial<Project>) => void;
   updateProjectStatus: (id: string, status: ProjectStatus) => void;
   updateSceneStatus: (projectId: string, sceneIndex: number, status: SceneStatus, cardRefId?: string) => void;
   updateScenePrompt: (projectId: string, sceneIndex: number, prompt: string) => void;
@@ -124,6 +125,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   setActiveProject: (id) => set({ activeProjectId: id }),
+
+  patchProject: (id, patch) => {
+    set((state) => {
+      const updated = state.projects.map((p) =>
+        p.id === id ? { ...p, ...patch } : p
+      );
+      saveProjects(updated);
+      return { projects: updated };
+    });
+  },
 
   updateProjectStatus: (id, status) => {
     set((state) => {

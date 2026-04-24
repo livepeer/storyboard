@@ -1549,7 +1549,7 @@ async function handleFaceLock(args: string): Promise<string> {
   if (sub === "clear") {
     const active = useProjectStore.getState().getActiveProject();
     if (!active) return "No active project.";
-    (active as any).faceLock = undefined;
+    useProjectStore.getState().patchProject(active.id, { faceLock: undefined } as any);
     return "Character reference lock cleared.";
   }
 
@@ -1569,11 +1569,9 @@ async function handleFaceLock(args: string): Promise<string> {
   const active = useProjectStore.getState().getActiveProject();
   if (!active) return "No active project. Create one first with /project add <brief>, then /facelock <card>.";
 
-  (active as any).faceLock = {
-    refId: card.refId,
-    url: card.url,
-    lockedAt: Date.now(),
-  };
+  useProjectStore.getState().patchProject(active.id, {
+    faceLock: { refId: card.refId, url: card.url, lockedAt: Date.now() },
+  } as any);
 
   return `Character locked to **${card.refId}**.\n` +
     `All future image generation in project "${active.brief.slice(0, 40)}" will use this as a reference via kontext-edit.\n` +
