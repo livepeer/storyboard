@@ -246,24 +246,29 @@ async function filmApply(idOrEmpty: string): Promise<string> {
     const { listTools } = await import("@/lib/tools/registry");
     const createMediaTool = listTools().find((t) => t.name === "create_media");
     if (createMediaTool) {
-      for (let si = 0; si < keyFrameCards.length && si < film.shots.length; si++) {
-        const kf = keyFrameCards[si];
-        if (!kf.url) continue;
-        const shot = film.shots[si];
-        const motionPrompt = hifi
-          ? `${shot.camera}, subtle cinematic motion, ${film.style}`.slice(0, 200)
-          : `${shot.camera}, ${shot.description}, ${film.style}`.slice(0, 300);
-        try {
-          await createMediaTool.execute({
-            steps: [{
-              action: "animate",
-              source_url: kf.url,
-              prompt: motionPrompt,
-              duration: shot.duration || 10,
-            }],
-          });
-          animatedCount++;
-        } catch { /* individual animation failure — continue */ }
+      // Build all animation steps upfront so create_media creates all cards
+      // on the canvas immediately (visible spinning) before any inference starts.
+      const animationSteps = keyFrameCards
+        .slice(0, film.shots.length)
+        .map((kf, si) => {
+          if (!kf.url) return null;
+          const shot = film.shots[si];
+          const motionPrompt = hifi
+            ? `${shot.camera}, subtle cinematic motion, ${film.style}`.slice(0, 200)
+            : `${shot.camera}, ${shot.description}, ${film.style}`.slice(0, 300);
+          return {
+            action: "animate" as const,
+            source_url: kf.url,
+            prompt: motionPrompt,
+            duration: shot.duration || 10,
+          };
+        })
+        .filter(Boolean);
+
+      if (animationSteps.length > 0) {
+        const result = await createMediaTool.execute({ steps: animationSteps });
+        const data = result?.data as { results?: { url?: string }[] } | undefined;
+        animatedCount = data?.results?.filter((r) => r.url).length ?? 0;
       }
     }
   } catch { /* animation phase failure — key frames still created */ }

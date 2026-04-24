@@ -467,6 +467,15 @@ export const createMediaTool: ToolDefinition = {
     // generate steps use the same model. Prevents mixed styles in multi-scene projects.
     const lockedCapability: Record<string, { capability: string; type: CardType }> = {};
 
+    // Whether steps can run in parallel — true when no step depends on another step's output.
+    // steps with depends_on reference results[N].url, so they must wait for step N.
+    // Film animation, storyboard generation: all steps are independent → parallel.
+    const hasCrossStepDeps = rawSteps.some((s) => s.depends_on !== undefined);
+
+    // Per-step inference closures — populated in setup loop, fired in parallel or serial.
+    type InferenceTask = () => Promise<void>;
+    const inferenceTasks: InferenceTask[] = [];
+
     for (let i = 0; i < rawSteps.length; i++) {
       const step = rawSteps[i];
 
@@ -619,156 +628,163 @@ export const createMediaTool: ToolDefinition = {
       );
       const attemptChain = buildAttemptChain(capability, liveCapNames);
 
-      let stepDone = false;
-      let lastAttempt:
-        | { error: string; capability: string; elapsed: number }
-        | undefined;
+      // Capture all loop-local variables for the inference closure.
+      // The setup loop keeps running (model locking, card creation)
+      // while inferences are deferred until Phase 2.
+      const _i = i;
+      const _step = step;
+      const _card = card;
+      const _refId = refId;
+      const _params = { ...params };
+      const _capability = capability;
+      const _effectivePrompt = effectivePrompt;
+      const _attemptChain = [...attemptChain];
+      const _rawDuration = rawDuration;
 
-      for (let attemptIdx = 0; attemptIdx < attemptChain.length; attemptIdx++) {
-        const currentCap = attemptChain[attemptIdx];
+      inferenceTasks.push(async () => {
+        let stepDone = false;
+        let lastAttempt:
+          | { error: string; capability: string; elapsed: number }
+          | undefined;
 
-        // User-facing notice when we fall back. Keep it short and
-        // actionable — the user sees "veo-i2v failed — trying ltx-i2v…".
-        if (attemptIdx > 0) {
-          const prev = attemptChain[attemptIdx - 1];
-          useChatStore
-            .getState()
-            .addMessage(`${prev} failed — trying ${currentCap}…`, "system");
-          console.log(`[create_media] Fallback: ${prev} → ${currentCap} (step ${i})`);
-        }
+        for (let attemptIdx = 0; attemptIdx < _attemptChain.length; attemptIdx++) {
+          const currentCap = _attemptChain[attemptIdx];
 
-        // Adapt params per model — each video model has different field names.
-        const capParams = { ...params };
-        if (rawDuration && currentCap.startsWith("seedance")) {
-          capParams.duration = String(rawDuration);
-          capParams.generate_audio = true;
-        } else if (currentCap.startsWith("kling-")) {
-          // Kling V3 i2v expects start_image_url (not image_url)
-          // Kling O3 i2v expects image_url (standard)
-          if (currentCap === "kling-v3-i2v" && capParams.image_url) {
-            capParams.start_image_url = capParams.image_url;
-            delete capParams.image_url;
-          }
-          // Kling duration is number (seconds), generate_audio boolean
-          if (rawDuration) capParams.duration = rawDuration;
-          capParams.generate_audio = true;
-          // O3 doesn't support negative_prompt or cfg_scale
-          if (currentCap.includes("-o3-")) {
-            delete capParams.negative_prompt;
-            delete capParams.cfg_scale;
-          }
-        } else {
-          delete capParams.duration;
-          delete capParams.generate_audio;
-        }
-
-        const t0 = performance.now();
-        try {
-          const result = await runInference({
-            capability: currentCap,
-            prompt: effectivePrompt,
-            params: capParams,
-          });
-          const elapsed = performance.now() - t0;
-
-          const r = result as Record<string, unknown>;
-          const data = (r.data ?? r) as Record<string, unknown>;
-          const images = data.images as Array<{ url: string }> | undefined;
-          const image = data.image as { url: string } | undefined;
-          const video = data.video as { url: string } | undefined;
-          const audio = data.audio as { url: string } | undefined;
-          const audioFile = data.audio_file as { url: string } | undefined;
-          const output = data.output as { url: string } | undefined;
-
-          let url: string | undefined =
-            (r.image_url as string) ??
-            images?.[0]?.url ??
-            image?.url ??
-            (r.video_url as string) ??
-            video?.url ??
-            (r.audio_url as string) ??
-            audio?.url ??
-            audioFile?.url ??
-            output?.url ??
-            (data.url as string) ??
-            undefined;
-
-          // Last-ditch extraction: some models bury the URL in an
-          // unlabeled field (e.g. top-level stringified). Find any
-          // "http..." string in the response as a fallback.
-          if (!url && typeof data === "object") {
-            url = Object.values(data).find(
-              (v) => typeof v === "string" && (v as string).startsWith("http")
-            ) as string | undefined;
+          if (attemptIdx > 0) {
+            const prev = _attemptChain[attemptIdx - 1];
+            useChatStore
+              .getState()
+              .addMessage(`${prev} failed — trying ${currentCap}…`, "system");
+            console.log(`[create_media] Fallback: ${prev} → ${currentCap} (step ${_i})`);
           }
 
-          const topError = r.error as string | undefined;
-          const dataError = data.error as string | undefined;
-          const falError = extractFalError(data);
-          const effectiveError = topError || dataError || falError;
-
-          if (url && !effectiveError) {
-            // Success — commit and break out of the attempt loop
-            recordModelLatency(currentCap, elapsed); // feed self-learning router
-            const genMeta = { capability: currentCap, prompt: effectivePrompt, elapsed };
-            canvas.updateCard(card.id, { url, error: undefined, ...genMeta });
-            results.push({ refId, cardId: card.id, url, capability: currentCap, elapsed });
-            if (step.depends_on !== undefined && results[step.depends_on]) {
-              canvas.addEdge(results[step.depends_on].refId, refId, {
-                capability: currentCap,
-                prompt: step.prompt,
-                action: step.action,
-                elapsed,
-              });
+          const capParams = { ..._params };
+          if (_rawDuration && currentCap.startsWith("seedance")) {
+            capParams.duration = String(_rawDuration);
+            capParams.generate_audio = true;
+          } else if (currentCap.startsWith("kling-")) {
+            if (currentCap === "kling-v3-i2v" && capParams.image_url) {
+              capParams.start_image_url = capParams.image_url;
+              delete capParams.image_url;
             }
-            stepDone = true;
-            break;
+            if (_rawDuration) capParams.duration = _rawDuration;
+            capParams.generate_audio = true;
+            if (currentCap.includes("-o3-")) {
+              delete capParams.negative_prompt;
+              delete capParams.cfg_scale;
+            }
+          } else {
+            delete capParams.duration;
+            delete capParams.generate_audio;
           }
 
-          // No URL OR upstream error — record and decide whether to fallback
-          const failMsg = effectiveError
-            ? humanizeError(effectiveError)
-            : `No output from ${currentCap}`;
-          console.warn(`[create_media] ${currentCap} attempt failed: ${failMsg}`);
-          lastAttempt = { error: failMsg, capability: currentCap, elapsed };
+          const t0 = performance.now();
+          try {
+            const result = await runInference({
+              capability: currentCap,
+              prompt: _effectivePrompt,
+              params: capParams,
+            });
+            const elapsed = performance.now() - t0;
 
-          if (!isRecoverableFailure(failMsg)) {
-            // Auth / connectivity failure — cycling won't help. Stop here.
-            break;
+            const r = result as Record<string, unknown>;
+            const data = (r.data ?? r) as Record<string, unknown>;
+            const images = data.images as Array<{ url: string }> | undefined;
+            const image = data.image as { url: string } | undefined;
+            const video = data.video as { url: string } | undefined;
+            const audio = data.audio as { url: string } | undefined;
+            const audioFile = data.audio_file as { url: string } | undefined;
+            const output = data.output as { url: string } | undefined;
+
+            let url: string | undefined =
+              (r.image_url as string) ??
+              images?.[0]?.url ??
+              image?.url ??
+              (r.video_url as string) ??
+              video?.url ??
+              (r.audio_url as string) ??
+              audio?.url ??
+              audioFile?.url ??
+              output?.url ??
+              (data.url as string) ??
+              undefined;
+
+            if (!url && typeof data === "object") {
+              url = Object.values(data).find(
+                (v) => typeof v === "string" && (v as string).startsWith("http")
+              ) as string | undefined;
+            }
+
+            const topError = r.error as string | undefined;
+            const dataError = data.error as string | undefined;
+            const falError = extractFalError(data);
+            const effectiveError = topError || dataError || falError;
+
+            if (url && !effectiveError) {
+              recordModelLatency(currentCap, elapsed);
+              const genMeta = { capability: currentCap, prompt: _effectivePrompt, elapsed };
+              canvas.updateCard(_card.id, { url, error: undefined, ...genMeta });
+              results[_i] = { refId: _refId, cardId: _card.id, url, capability: currentCap, elapsed };
+              if (_step.depends_on !== undefined && results[_step.depends_on]) {
+                canvas.addEdge(results[_step.depends_on].refId, _refId, {
+                  capability: currentCap,
+                  prompt: _step.prompt,
+                  action: _step.action,
+                  elapsed,
+                });
+              }
+              stepDone = true;
+              break;
+            }
+
+            const failMsg = effectiveError
+              ? humanizeError(effectiveError)
+              : `No output from ${currentCap}`;
+            console.warn(`[create_media] ${currentCap} attempt failed: ${failMsg}`);
+            lastAttempt = { error: failMsg, capability: currentCap, elapsed };
+
+            if (!isRecoverableFailure(failMsg)) break;
+          } catch (e) {
+            const elapsed = performance.now() - t0;
+            const raw = e instanceof Error ? e.message : "Unknown error";
+            const friendly = humanizeError(raw);
+            console.warn(`[create_media] ${currentCap} threw: ${raw}`);
+            lastAttempt = { error: friendly, capability: currentCap, elapsed };
+            if (!isRecoverableFailure(friendly)) break;
           }
-          // else: continue to next attempt in chain
-        } catch (e) {
-          const elapsed = performance.now() - t0;
-          const raw = e instanceof Error ? e.message : "Unknown error";
-          const friendly = humanizeError(raw);
-          console.warn(`[create_media] ${currentCap} threw: ${raw}`);
-          lastAttempt = { error: friendly, capability: currentCap, elapsed };
-          if (!isRecoverableFailure(friendly)) break;
         }
-      }
 
-      if (!stepDone) {
-        // Every attempt in the chain failed. Commit the final error
-        // onto the card using the LAST attempt's capability (so the
-        // card badge shows what actually ran last, not what was
-        // originally requested).
-        const finalErr = lastAttempt?.error || `No output from any of: ${attemptChain.join(", ")}`;
-        const finalCap = lastAttempt?.capability || capability;
-        const finalElapsed = lastAttempt?.elapsed || 0;
-        canvas.updateCard(card.id, {
-          error: finalErr,
-          capability: finalCap,
-          prompt: effectivePrompt,
-          elapsed: finalElapsed,
-        });
-        results.push({
-          refId,
-          cardId: card.id,
-          error: finalErr,
-          capability: finalCap,
-          elapsed: finalElapsed,
-        });
+        if (!stepDone) {
+          const finalErr = lastAttempt?.error || `No output from any of: ${_attemptChain.join(", ")}`;
+          const finalCap = lastAttempt?.capability || _capability;
+          const finalElapsed = lastAttempt?.elapsed || 0;
+          canvas.updateCard(_card.id, {
+            error: finalErr,
+            capability: finalCap,
+            prompt: _effectivePrompt,
+            elapsed: finalElapsed,
+          });
+          results[_i] = {
+            refId: _refId,
+            cardId: _card.id,
+            error: finalErr,
+            capability: finalCap,
+            elapsed: finalElapsed,
+          };
+        }
+      });
+
+      // For cross-step deps: run this step's inference immediately (sequential)
+      // so subsequent steps can read results[i].url in their setup.
+      if (hasCrossStepDeps) {
+        await inferenceTasks[inferenceTasks.length - 1]();
       }
+    }
+
+    // Phase 2: fire all independent inferences in parallel.
+    // (Cross-dep steps were already awaited above in the setup loop.)
+    if (!hasCrossStepDeps && inferenceTasks.length > 0) {
+      await Promise.allSettled(inferenceTasks.map((t) => t()));
     }
 
     // Show error summary in agent chat if any steps failed
