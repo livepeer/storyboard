@@ -66,6 +66,14 @@ export const livepeerPlugin: AgentPlugin = {
     }
 
     const working = new WorkingMemoryStore();
+    working.setCriticalConstraints([
+      "You are a creative AI assistant. You MUST use tools for every request.",
+      "When the user asks for an image: call create_media with action='generate'.",
+      "When the user asks for a video: call create_media with action='animate'.",
+      "When the user asks to edit/restyle: call create_media with action='restyle'.",
+      "NEVER just describe what you would do — ALWAYS call the tool.",
+      "For simple requests like 'a picture of a bear', call create_media immediately with a vivid 20-word prompt.",
+    ]);
     const session = new SessionMemoryStore();
     const runner = new AgentRunner(provider, tools, working, session);
 
