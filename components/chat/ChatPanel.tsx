@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/lib/chat/store";
 import { getActivePlugin } from "@/lib/agents/registry";
 import { useCanvasStore } from "@/lib/canvas/store";
-import { createVoiceInput, isSpeechRecognitionSupported } from "@livepeer/creative-kit";
+import { createVoiceInput, isSpeechRecognitionSupported, ConfirmationCard, type ConfirmationRequest } from "@livepeer/creative-kit";
 import { MessageBubble } from "./MessageBubble";
 import { ToolPill } from "./ToolPill";
 import { QuickActions } from "./QuickActions";
@@ -147,6 +147,7 @@ export function ChatPanel() {
   const [isListening, setIsListening] = useState(false);
   const [voiceSupported] = useState(() => typeof window !== "undefined" && isSpeechRecognitionSupported());
   const voiceRef = useRef<ReturnType<typeof createVoiceInput> | null>(null);
+  const [pendingGate, setPendingGate] = useState<ConfirmationRequest | null>(null);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -450,6 +451,21 @@ export function ChatPanel() {
     return () => window.removeEventListener("chat-prefill", handler);
   }, [sendMessage, focusInput]);
 
+  // --- Listen for confirmation gate events from project_generate ---
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as ConfirmationRequest;
+      setMinimized(false);
+      setPendingGate({
+        ...detail,
+        onConfirm: () => { setPendingGate(null); detail.onConfirm(); },
+        onCancel: () => { setPendingGate(null); detail.onCancel(); },
+      });
+    };
+    window.addEventListener("confirm-gate", handler);
+    return () => window.removeEventListener("confirm-gate", handler);
+  }, []);
+
   return (
     <div
       ref={panelRef}
@@ -509,6 +525,11 @@ export function ChatPanel() {
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} />
             ))}
+
+            {/* Confirmation gate — shown when project_generate needs user approval */}
+            {pendingGate && (
+              <ConfirmationCard request={pendingGate} />
+            )}
 
             {/* Status indicator — shows verb like "Thinking...", "Generating 3 images..." */}
             {isThinking && (

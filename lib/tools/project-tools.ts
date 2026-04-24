@@ -4,7 +4,7 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { useSessionContext } from "@/lib/agents/session-context";
 import { executeTool } from "./registry";
 import type { Scene, StyleGuide, VideoConsistency } from "@/lib/projects/types";
-import { executeDAG, type DAGNode } from "@livepeer/creative-kit";
+import { executeDAG, type DAGNode, checkSceneGate, checkRegenerateGate } from "@livepeer/creative-kit";
 
 /**
  * project_create — Create a project from a brief with scene breakdown.
@@ -175,6 +175,27 @@ export const projectGenerateTool: ToolDefinition = {
     const store = useProjectStore.getState();
     const project = store.getProject(projectId);
     if (!project) return { success: false, error: `Project ${projectId} not found` };
+
+    // --- Confirmation gate: pause before large / regenerate jobs ---
+    const existingCards = project.scenes.filter((s) => s.status === "done").length;
+    const pendingCount = project.scenes.filter((s) => s.status === "pending" || s.status === "regenerating").length;
+    const gate = existingCards > 0
+      ? checkRegenerateGate(pendingCount, existingCards)
+      : checkSceneGate(project.scenes.length, project.styleGuide?.visualStyle || "flux-dev", project.styleGuide?.visualStyle);
+
+    if (gate) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          // Fire a custom event — ChatPanel listens and shows a ConfirmationCard
+          window.dispatchEvent(new CustomEvent("confirm-gate", {
+            detail: { ...gate, onConfirm: resolve, onCancel: () => reject(new Error("Cancelled")) },
+          }));
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Cancelled";
+        return { success: false, data: { message: msg, cancelled: true } };
+      }
+    }
 
     // DAG-based parallel generation — runs independent scenes concurrently
     // (up to 4 at a time) and models dependencies (e.g. video_keyframe:
