@@ -779,13 +779,8 @@ export default function Stage() {
     const dx = Math.abs((dropped.x + dropped.w / 2) - (live.x + live.w / 2));
     const dy = Math.abs((dropped.y + dropped.h / 2) - (live.y + live.h / 2));
     if (dx < live.w && dy < live.h && dropped.url && streamIdRef.current) {
-      // ── Smart Source Drop: analyze → prompt → control ──
-      // Instead of VACE (can't be added mid-stream), we:
-      // 1. Set the image as publish source (the stream transforms these frames)
-      // 2. Analyze the image via Gemini Vision to extract its visual DNA
-      // 3. Inject the analysis as the stream's prompt (style, palette, mood)
-      // This makes the stream visually match the dropped image WITHOUT
-      // touching the pipeline graph — just prompt + noise_scale changes.
+      // ── Simple: set source + analyze → add as temporary scene ──
+      sourceAppliedRef.current.add(dropped.refId);
 
       const srcType = dropped.type === "video" ? "video" as const : "image" as const;
       if (setSourceFnRef.current) {
@@ -798,74 +793,59 @@ export default function Stage() {
       const sdk = getSdkConfig();
       const hdrs = { "Content-Type": "application/json", ...(sdk.key ? { Authorization: `Bearer ${sdk.key}` } : {}) };
 
-      // Step 1: Set video mode + low noise (preserve source closely)
+      // Set video mode so published frames are used
       fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
         method: "POST", headers: hdrs,
         body: JSON.stringify({ type: "parameters", params: {
-          input_mode: "video",
-          noise_scale: 0.3,
-          noise_controller: false,
+          input_mode: "video", noise_scale: 0.3, noise_controller: false,
         }}),
       }).catch(() => {});
 
-      store.connect(dropped.refId, "live-output", { action: srcType === "video" ? "video-source" : "image-source" });
+      store.connect(dropped.refId, "live-output", { action: "image-source" });
 
-      // Single status message — updates in-place (no chat flooding)
-      const statusMsg = chat.getState().addMessage(`Source: "${dropped.title}" → analyzing...`, "system");
+      // Status message (single, updates in-place)
+      const statusMsg = chat.getState().addMessage(`Source: "${dropped.title}" — analyzing...`, "system");
       sourceStatusMsgRef.current = statusMsg.id;
 
-      // Step 2: Analyze image via server-side API → inject as stream prompt
+      // Analyze in background → update stream prompt to match image
       if (srcType === "image") {
         (async () => {
           try {
             const imgResp = await fetch(dropped.url!);
             const blob = await imgResp.blob();
-            if (blob.size > 10_000_000) throw new Error("Image too large");
+            if (blob.size > 10_000_000) throw new Error("Too large");
             const buf = await blob.arrayBuffer();
             const bytes = new Uint8Array(buf);
             let bin = "";
             for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
-            const b64 = btoa(bin);
 
-            const analyzeResp = await fetch("/api/analyze", {
+            const resp = await fetch("/api/analyze", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ imageBase64: b64, mimeType: blob.type || "image/jpeg" }),
+              body: JSON.stringify({ imageBase64: btoa(bin), mimeType: blob.type || "image/jpeg" }),
             });
-            const result = await analyzeResp.json() as { ok: boolean; analysis?: Record<string, string> };
+            const result = await resp.json() as { ok: boolean; analysis?: Record<string, string> };
             if (result.ok && result.analysis) {
-              const analysis = result.analysis;
-              const streamPrompt = [
-                analysis.style,
-                analysis.palette ? `color palette: ${analysis.palette}` : "",
-                analysis.mood ? `mood: ${analysis.mood}` : "",
-                analysis.setting ? `setting: ${analysis.setting}` : "",
-                analysis.description?.slice(0, 80) || "",
-              ].filter(Boolean).join(", ");
+              const a = result.analysis;
+              const prompt = [a.style, a.palette, a.mood, a.description?.slice(0, 60)].filter(Boolean).join(", ");
 
+              // Update stream prompt
               if (streamIdRef.current) {
                 await fetch(`${sdk.url}/stream/${streamIdRef.current}/control`, {
                   method: "POST", headers: hdrs,
-                  body: JSON.stringify({ type: "parameters", params: {
-                    prompts: streamPrompt,
-                    noise_scale: 0.35,
-                  }}),
+                  body: JSON.stringify({ type: "parameters", params: { prompts: prompt, noise_scale: 0.35 } }),
                 });
               }
-
-              // Update the SAME message — no new row
-              chat.getState().updateMessage(statusMsg.id,
-                `Source: "${dropped.title}" — ${analysis.style}, ${analysis.palette}, ${analysis.mood}`
-              );
+              chat.getState().updateMessage(statusMsg.id, `Source: "${dropped.title}" — ${a.style || "applied"}`);
             } else {
-              chat.getState().updateMessage(statusMsg.id, `Source: "${dropped.title}" — analysis skipped, using as raw frames`);
+              chat.getState().updateMessage(statusMsg.id, `Source: "${dropped.title}" — applied`);
             }
           } catch {
-            chat.getState().updateMessage(statusMsg.id, `Source: "${dropped.title}" — using as raw frames`);
+            chat.getState().updateMessage(statusMsg.id, `Source: "${dropped.title}" — applied`);
           }
         })();
       } else {
-        chat.getState().updateMessage(statusMsg.id, `Source: "${dropped.title}" — video feed active`);
+        chat.getState().updateMessage(statusMsg.id, `Source: "${dropped.title}" — video active`);
       }
     }
   }, []);
@@ -1030,35 +1010,36 @@ export default function Stage() {
                           setSourceFnRef.current({ type: "blank" });
                           streamSourceRef.current = { type: "blank" };
                           setStreamSourceDisplay({ type: "blank" });
+                          // Allow re-dropping the same card
+                          sourceAppliedRef.current.clear();
 
-                          // Restore scene prompt + noise_scale to undo the analysis override
+                          // Restore scene prompt + noise — remove video mode (no frames to publish)
                           const ps = perfRef.current.getState();
                           const currentScene = ps.scenes[ps.currentScene];
-                          if (currentScene && streamIdRef.current) {
+                          if (streamIdRef.current) {
                             const sdk2 = getSdkConfig();
                             const presetNoise: Record<string, number> = {
                               dreamy: 0.7, cinematic: 0.5, anime: 0.6, abstract: 0.95,
                               faithful: 0.2, painterly: 0.65, psychedelic: 0.9,
                             };
+                            const prompt = currentScene?.prompt || "cinematic visual";
+                            const noise = currentScene ? (presetNoise[currentScene.preset] ?? 0.5) : 0.5;
                             fetch(`${sdk2.url}/stream/${streamIdRef.current}/control`, {
                               method: "POST",
                               headers: { "Content-Type": "application/json", ...(sdk2.key ? { Authorization: `Bearer ${sdk2.key}` } : {}) },
                               body: JSON.stringify({ type: "parameters", params: {
-                                prompts: currentScene.prompt,
-                                noise_scale: presetNoise[currentScene.preset] ?? 0.5,
-                                input_mode: "video",
+                                prompts: prompt,
+                                noise_scale: noise,
                               }}),
                             }).catch(() => {});
                           }
 
-                          // Update the existing status message instead of adding a new one
+                          // Update status message in-place
                           if (sourceStatusMsgRef.current) {
                             chat.getState().updateMessage(sourceStatusMsgRef.current,
-                              `Source cleared — restored scene prompt${currentScene ? `: "${currentScene.prompt.slice(0, 50)}"` : ""}`
+                              `Source cleared${currentScene ? ` — "${currentScene.prompt.slice(0, 40)}"` : ""}`
                             );
                             sourceStatusMsgRef.current = null;
-                          } else {
-                            chat.getState().addMessage("Source cleared — restored scene prompt.", "system");
                           }
                         }
                       }}
