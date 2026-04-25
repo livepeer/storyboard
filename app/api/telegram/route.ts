@@ -12,11 +12,17 @@ import {
   sendMessageWithButtons, answerCallback, setCommands,
 } from "@/lib/telegram/bot";
 
-const getToken = () => process.env.TELEGRAM_BOT_TOKEN || "";
-const getConfig = () => ({
-  sdkUrl: process.env.LIVEPEER_SDK_URL || process.env.NEXT_PUBLIC_SDK_URL || "https://sdk.daydream.monster",
-  sdkKey: process.env.LIVEPEER_API_KEY || process.env.DAYDREAM_API_KEY || "",
-});
+// Bot config can come from env vars (production) or query params (UI setup).
+// The Settings UI registers the webhook with token+key in the URL so the
+// server-side handler can use them without Vercel env vars.
+function getConfigFromReq(req: NextRequest) {
+  const params = req.nextUrl.searchParams;
+  return {
+    token: params.get("t") || process.env.TELEGRAM_BOT_TOKEN || "",
+    sdkUrl: process.env.LIVEPEER_SDK_URL || process.env.NEXT_PUBLIC_SDK_URL || "https://sdk.daydream.monster",
+    sdkKey: params.get("k") || process.env.LIVEPEER_API_KEY || process.env.DAYDREAM_API_KEY || "",
+  };
+}
 
 /** Send BotActions to a Telegram chat. */
 async function deliver(token: string, chatId: number | string, actions: BotAction[]) {
@@ -53,11 +59,12 @@ async function deliver(token: string, chatId: number | string, actions: BotActio
 }
 
 export async function POST(req: NextRequest) {
-  const token = getToken();
-  if (!token) return NextResponse.json({ ok: false });
+  const cfg = getConfigFromReq(req);
+  if (!cfg.token) return NextResponse.json({ ok: false, error: "No bot token" });
 
+  const token = cfg.token;
   const update = await req.json();
-  const engine = createBotEngine(getConfig());
+  const engine = createBotEngine({ sdkUrl: cfg.sdkUrl, sdkKey: cfg.sdkKey });
 
   // ── Callback query (button click) ──
   if (update.callback_query) {

@@ -409,7 +409,7 @@ function TelegramSection() {
           body: JSON.stringify({
             action: "register",
             token: token.trim(),
-            webhookUrl: `${host}/api/telegram`,
+            webhookUrl: `${host}/api/telegram?t=${encodeURIComponent(token.trim())}&k=${encodeURIComponent(localStorage.getItem("sdk_api_key") || "")}`,
           }),
         });
         const data = await resp.json();
