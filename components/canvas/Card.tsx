@@ -70,6 +70,133 @@ function GeneratingSpinner({ type, capability }: { type: string; capability?: st
   );
 }
 
+/** Prompt bar — editable prompt with regenerate button. */
+function PromptBar({ card, cap, prompt, elapsed, colors }: {
+  card: CardData; cap: string | undefined; prompt: string | undefined;
+  elapsed: number | undefined; colors: { text: string };
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(prompt || "");
+  const [regenerating, setRegenerating] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (editing && textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(editValue.length, editValue.length);
+    }
+  }, [editing, editValue.length]);
+
+  const handleRegenerate = async (newPrompt: string) => {
+    if (!newPrompt.trim() || regenerating) return;
+    setRegenerating(true);
+    setEditing(false);
+
+    const canvas = useCanvasStore.getState();
+    // Save the new prompt on the card
+    canvas.updateCard(card.id, { prompt: newPrompt.trim(), error: undefined, url: undefined });
+
+    try {
+      const { executeTool } = await import("@/lib/tools/registry");
+      await executeTool("create_media", {
+        steps: [{
+          action: card.type === "video" ? "animate" : "generate",
+          prompt: newPrompt.trim(),
+          model_override: card.capability || undefined,
+          source_url: card.type === "video" ? undefined : undefined,
+        }],
+      });
+    } catch {
+      canvas.updateCard(card.id, { error: "Regeneration failed" });
+    }
+    setRegenerating(false);
+  };
+
+  return (
+    <div
+      style={{
+        borderTop: `1px solid ${colors.text}33`,
+        background: `${colors.text}0d`,
+        padding: "6px 10px",
+        fontSize: 10,
+        color: "#c4b5fd",
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+        <span style={{ fontWeight: 600, color: colors.text }} title={card.routeReason || "auto-selected"}>
+          {cap || "generate"}
+          {card.routeReason && card.routeReason !== "auto" && (
+            <span style={{ fontWeight: 400, fontSize: 8, color: "#a78bfa", marginLeft: 4 }}>({card.routeReason})</span>
+          )}
+        </span>
+        <span style={{ color: "#34d399" }}>
+          {elapsed ? `${(elapsed / 1000).toFixed(1)}s` : ""}
+        </span>
+      </div>
+
+      {editing ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <textarea
+            ref={textareaRef}
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleRegenerate(editValue); }
+              if (e.key === "Escape") { setEditing(false); setEditValue(prompt || ""); }
+            }}
+            rows={2}
+            style={{
+              width: "100%", resize: "none", border: "1px solid rgba(139,92,246,0.4)",
+              borderRadius: 4, padding: "4px 6px", fontSize: 10, lineHeight: 1.4,
+              background: "rgba(0,0,0,0.3)", color: "#e2e8f0", outline: "none",
+              fontFamily: "inherit",
+            }}
+          />
+          <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+            <button
+              onClick={() => { setEditing(false); setEditValue(prompt || ""); }}
+              style={{ background: "none", border: "none", color: "#888", fontSize: 9, cursor: "pointer", padding: "2px 6px" }}
+            >Cancel</button>
+            <button
+              onClick={() => handleRegenerate(editValue)}
+              disabled={!editValue.trim() || regenerating}
+              style={{
+                background: "rgba(139,92,246,0.3)", border: "none", borderRadius: 4,
+                color: "#c4b5fd", fontSize: 9, fontWeight: 600, cursor: "pointer",
+                padding: "2px 8px", opacity: !editValue.trim() ? 0.4 : 1,
+              }}
+            >{regenerating ? "..." : "Regenerate"}</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
+          <div
+            style={{ flex: 1, color: "var(--text-muted)", fontSize: 9, lineHeight: 1.4, cursor: "pointer" }}
+            title="Click to edit prompt, double-click to copy"
+            onClick={(e) => { e.stopPropagation(); setEditValue(prompt || ""); setEditing(true); }}
+            onDoubleClick={(e) => { e.stopPropagation(); if (prompt) navigator.clipboard.writeText(prompt); }}
+          >
+            {prompt ? (prompt.length > 100 ? prompt.slice(0, 100) + "\u2026" : prompt) : "No prompt"}
+          </div>
+          {prompt && (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleRegenerate(prompt); }}
+              disabled={regenerating}
+              title="Regenerate with same prompt"
+              style={{
+                flexShrink: 0, background: "rgba(139,92,246,0.2)", border: "none",
+                borderRadius: 3, color: "#a78bfa", fontSize: 9, cursor: "pointer",
+                padding: "1px 5px", opacity: regenerating ? 0.4 : 1,
+              }}
+            >{regenerating ? "..." : "↻"}</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Editable card title — click to copy, double-click to rename. */
 function EditableTitle({ title, onRename, onCopy }: { title: string; onRename: (t: string) => void; onCopy: () => void }) {
   const [editing, setEditing] = useState(false);
@@ -576,44 +703,14 @@ export function Card({ card }: { card: CardData }) {
         </div>
       )}
 
-      {/* Model info bar — shows when card is selected; uses card metadata or incoming edge */}
+      {/* Model info bar — editable prompt + regenerate */}
       {isSelected && !card.minimized && (() => {
         const cap = card.capability || incomingEdge?.meta?.capability;
         const prompt = card.prompt || incomingEdge?.meta?.prompt;
         const elapsed = card.elapsed ?? incomingEdge?.meta?.elapsed;
         if (!cap && !prompt) return null;
         return (
-          <div style={{
-            borderTop: `1px solid ${colors.text}33`,
-            background: `${colors.text}0d`,
-            padding: "6px 10px",
-            fontSize: 10,
-            color: "#c4b5fd",
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: prompt ? 2 : 0 }}>
-              <span style={{ fontWeight: 600, color: colors.text }} title={card.routeReason || "auto-selected"}>
-                {cap || "generate"}
-                {card.routeReason && card.routeReason !== "auto" && (
-                  <span style={{ fontWeight: 400, fontSize: 8, color: "#a78bfa", marginLeft: 4 }}>({card.routeReason})</span>
-                )}
-              </span>
-              <span style={{ color: "#34d399" }}>
-                {elapsed ? `${(elapsed / 1000).toFixed(1)}s` : ""}
-              </span>
-            </div>
-            {prompt && (
-              <div
-                style={{ color: "var(--text-muted)", fontSize: 9, lineHeight: 1.4, cursor: "pointer" }}
-                title="Click to copy prompt"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigator.clipboard.writeText(prompt);
-                }}
-              >
-                {prompt.length > 120 ? prompt.slice(0, 120) + "\u2026" : prompt}
-              </div>
-            )}
-          </div>
+          <PromptBar card={card} cap={cap} prompt={prompt} elapsed={elapsed} colors={colors} />
         );
       })()}
 
