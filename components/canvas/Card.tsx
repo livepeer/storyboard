@@ -93,21 +93,34 @@ function PromptBar({ card, cap, prompt, elapsed, colors }: {
     setEditing(false);
 
     const canvas = useCanvasStore.getState();
-    // Save the new prompt on the card
+    const model = card.capability || "flux-dev";
+    // Clear URL to show spinner, save new prompt
     canvas.updateCard(card.id, { prompt: newPrompt.trim(), error: undefined, url: undefined });
 
     try {
-      const { executeTool } = await import("@/lib/tools/registry");
-      await executeTool("create_media", {
-        steps: [{
-          action: card.type === "video" ? "animate" : "generate",
-          prompt: newPrompt.trim(),
-          model_override: card.capability || undefined,
-          source_url: card.type === "video" ? undefined : undefined,
-        }],
+      // Call SDK directly — don't use create_media (it creates a new card)
+      const { runInference } = await import("@/lib/sdk/client");
+      const t0 = performance.now();
+      const result = await runInference({
+        capability: model,
+        prompt: newPrompt.trim(),
+        params: {},
       });
-    } catch {
-      canvas.updateCard(card.id, { error: "Regeneration failed" });
+      const elapsed = performance.now() - t0;
+
+      const r = result as Record<string, unknown>;
+      const d = (r.data ?? r) as Record<string, unknown>;
+      const images = d.images as Array<{ url: string }> | undefined;
+      const url = (r.image_url as string) ?? images?.[0]?.url
+        ?? (r.video_url as string) ?? (d.url as string);
+
+      if (url) {
+        canvas.updateCard(card.id, { url, error: undefined, capability: model, elapsed, routeReason: "regenerated" });
+      } else {
+        canvas.updateCard(card.id, { error: "No output — try a different prompt" });
+      }
+    } catch (e) {
+      canvas.updateCard(card.id, { error: `Failed: ${(e as Error).message?.slice(0, 80)}` });
     }
     setRegenerating(false);
   };
