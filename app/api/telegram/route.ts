@@ -19,7 +19,7 @@ function getConfigFromReq(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   return {
     token: params.get("t") || process.env.TELEGRAM_BOT_TOKEN || "",
-    sdkUrl: process.env.LIVEPEER_SDK_URL || process.env.NEXT_PUBLIC_SDK_URL || "https://sdk.daydream.monster",
+    sdkUrl: params.get("s") || process.env.LIVEPEER_SDK_URL || "https://sdk.daydream.monster",
     sdkKey: params.get("k") || process.env.LIVEPEER_API_KEY || process.env.DAYDREAM_API_KEY || "",
   };
 }

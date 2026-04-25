@@ -408,8 +408,9 @@ function TelegramSection() {
           alert("Set your Daydream API key first (above), then enable the bot.");
           return;
         }
+        const sdkUrl = localStorage.getItem("sdk_service_url") || "https://sdk.daydream.monster";
         const host = window.location.origin;
-        const webhookUrl = `${host}/api/telegram?t=${encodeURIComponent(token.trim())}&k=${encodeURIComponent(sdkKey)}`;
+        const webhookUrl = `${host}/api/telegram?t=${encodeURIComponent(token.trim())}&k=${encodeURIComponent(sdkKey)}&s=${encodeURIComponent(sdkUrl)}`;
         console.log("[Telegram] Registering webhook:", webhookUrl.slice(0, 80) + "...");
         const resp = await fetch("/api/telegram/setup", {
           method: "POST",
