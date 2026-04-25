@@ -9,11 +9,20 @@ export function tgUrl(token: string, method: string): string {
 }
 
 export async function sendMessage(token: string, chatId: number | string, text: string): Promise<void> {
-  await fetch(tgUrl(token, "sendMessage"), {
+  // Try Markdown first, fallback to plain text if Telegram rejects it
+  const resp = await fetch(tgUrl(token, "sendMessage"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
   });
+  if (!resp.ok) {
+    // Markdown failed (unbalanced * or _) — retry as plain text
+    await fetch(tgUrl(token, "sendMessage"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+  }
 }
 
 export async function sendPhoto(token: string, chatId: number | string, photoUrl: string, caption?: string): Promise<void> {

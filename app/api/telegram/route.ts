@@ -63,7 +63,12 @@ export async function POST(req: NextRequest) {
   if (!cfg.token) return NextResponse.json({ ok: false, error: "No bot token" });
 
   const token = cfg.token;
-  const update = await req.json();
+  let update: Record<string, unknown>;
+  try {
+    update = await req.json();
+  } catch {
+    return NextResponse.json({ ok: true }); // malformed body — ignore
+  }
   const engine = createBotEngine({ sdkUrl: cfg.sdkUrl, sdkKey: cfg.sdkKey });
 
   // ── Callback query (button click) ──
@@ -87,18 +92,24 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Text message ──
-  const msg = update.message;
-  if (!msg?.text) return NextResponse.json({ ok: true });
+  const msg = update.message as { text?: string; chat?: { id: number } } | undefined;
+  if (!msg?.text || !msg?.chat?.id) return NextResponse.json({ ok: true });
 
   const chatId = msg.chat.id;
 
-  // Register commands menu on first /start
-  if (msg.text.trim() === "/start") {
-    await setCommands(token);
-  }
+  try {
+    // Register commands menu on first /start
+    if (msg.text.trim() === "/start") {
+      await setCommands(token).catch(() => {});
+    }
 
-  const response = await engine.handle(msg.text);
-  await deliver(token, chatId, response.actions);
+    const response = await engine.handle(msg.text);
+    await deliver(token, chatId, response.actions);
+  } catch (e) {
+    // Always return 200 to prevent Telegram retry storms
+    console.error("[Telegram] Handler error:", (e as Error).message);
+    await sendMessage(token, chatId, `Error: ${(e as Error).message?.slice(0, 100) || "unknown"}`).catch(() => {});
+  }
 
   return NextResponse.json({ ok: true });
 }

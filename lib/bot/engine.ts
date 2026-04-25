@@ -56,37 +56,39 @@ export function createBotEngine(config: BotConfig) {
       // /start
       if (trimmed === "/start") {
         return { actions: [{ type: "text", text:
-          "🎨 *Storyboard Bot*\n\n" +
-          "Generate AI images, videos & music using 40+ models.\n\n" +
-          "/compare `prompt` — 4 models side by side\n" +
-          "/vary `prompt` — 4 creative variations\n" +
-          "/styles `prompt` — 4 art styles\n" +
-          "/video `prompt` — video clip\n" +
-          "/music `description` — generate music\n" +
+          "🎨 Storyboard Bot\n\n" +
+          "Generate AI images, videos and music using 40+ models.\n\n" +
+          "Commands:\n" +
+          "/compare prompt — 4 models side by side\n" +
+          "/vary prompt — 4 creative variations\n" +
+          "/styles prompt — 4 art styles\n" +
+          "/video prompt — video clip\n" +
+          "/music description — generate music\n" +
           "/models — list models\n" +
-          "/help — all commands"
+          "/help — all commands\n\n" +
+          "Or just type anything to generate an image!"
         }] };
       }
 
       // /help
       if (trimmed === "/help") {
         return { actions: [{ type: "text", text:
-          "*Commands:*\n\n" +
-          "📸 Just type anything → image\n" +
-          "/compare `prompt` → 4 models\n" +
-          "/vary `prompt` → 4 variations\n" +
-          "/styles `prompt` → 4 art styles\n" +
-          "/video `prompt` → video clip\n" +
-          "/music `desc` → music\n" +
-          "/models → list models\n\n" +
-          "💡 `use gpt-image for X` → specific model"
+          "Commands:\n\n" +
+          "📸 Just type anything — generates an image\n" +
+          "/compare prompt — 4 AI models side by side\n" +
+          "/vary prompt — 4 variations\n" +
+          "/styles prompt — watercolor, oil, pencil, digital\n" +
+          "/video prompt — video clip\n" +
+          "/music description — music track\n" +
+          "/models — list available models\n\n" +
+          "Tip: type \"use gpt-image for X\" for a specific model"
         }] };
       }
 
       // /models
       if (trimmed === "/models") {
         return { actions: [{ type: "text", text:
-          "*Models:*\n" +
+          "Available models:\n\n" +
           "🖼 Image: flux-dev, gpt-image, recraft-v4, nano-banana, gemini-image, seedream-5-lite\n" +
           "✏️ Edit: kontext-edit\n" +
           "🎬 Video: seedance-i2v, ltx-i2v, ltx-t2v\n" +
