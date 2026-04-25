@@ -33,6 +33,7 @@ async function infer(config: BotConfig, prompt: string, model: string): Promise<
   const timer = setTimeout(() => controller.abort(), 55_000); // 55s (under Vercel 60s limit)
 
   try {
+    console.log(`[Bot] Inference ${model}: ${config.sdkUrl}/inference key=${config.sdkKey ? config.sdkKey.slice(0, 6) + "..." : "NONE"}`);
     const resp = await fetch(`${config.sdkUrl}/inference`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.sdkKey}` },
@@ -43,7 +44,7 @@ async function infer(config: BotConfig, prompt: string, model: string): Promise<
 
     if (!resp.ok) {
       const err = await resp.text().catch(() => "");
-      console.error(`[Bot] Inference ${model} failed: ${resp.status} ${err.slice(0, 100)}`);
+      console.error(`[Bot] Inference ${model} HTTP ${resp.status}: ${err.slice(0, 200)}`);
       return null;
     }
 
@@ -233,7 +234,12 @@ export function createBotEngine(config: BotConfig) {
           ],
         });
       } else {
-        actions.push({ type: "text", text: "❌ Generation failed. Check that the API key is valid and the SDK is reachable." });
+        actions.push({ type: "text", text:
+          "❌ Generation failed.\n" +
+          `SDK: ${config.sdkUrl}\n` +
+          `Key: ${config.sdkKey ? config.sdkKey.slice(0, 6) + "..." : "NOT SET"}\n` +
+          "Check API key and SDK reachability."
+        });
       }
 
       return { actions };
