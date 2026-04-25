@@ -60,6 +60,7 @@ async function deliver(token: string, chatId: number | string, actions: BotActio
 
 export async function POST(req: NextRequest) {
   const cfg = getConfigFromReq(req);
+  console.log(`[Telegram] Webhook: token=${cfg.token ? cfg.token.slice(0, 8) + "..." : "NONE"}, key=${cfg.sdkKey ? cfg.sdkKey.slice(0, 6) + "..." : "NONE"}, url=${req.nextUrl.toString().slice(0, 100)}`);
   if (!cfg.token) return NextResponse.json({ ok: false, error: "No bot token" });
 
   const token = cfg.token;

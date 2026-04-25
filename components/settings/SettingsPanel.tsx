@@ -401,15 +401,23 @@ function TelegramSection() {
     const newEnabled = !enabled;
     try {
       if (newEnabled) {
-        // Register webhook
+        // Register webhook — include SDK key so server can use it
+        const sdkKey = localStorage.getItem("sdk_api_key") || "";
+        if (!sdkKey) {
+          setStatus("error");
+          alert("Set your Daydream API key first (above), then enable the bot.");
+          return;
+        }
         const host = window.location.origin;
+        const webhookUrl = `${host}/api/telegram?t=${encodeURIComponent(token.trim())}&k=${encodeURIComponent(sdkKey)}`;
+        console.log("[Telegram] Registering webhook:", webhookUrl.slice(0, 80) + "...");
         const resp = await fetch("/api/telegram/setup", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             action: "register",
             token: token.trim(),
-            webhookUrl: `${host}/api/telegram?t=${encodeURIComponent(token.trim())}&k=${encodeURIComponent(localStorage.getItem("sdk_api_key") || "")}`,
+            webhookUrl,
           }),
         });
         const data = await resp.json();
