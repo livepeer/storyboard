@@ -111,7 +111,7 @@ export default function DocsPage() {
           ))}
         </div>
         <div className="px-4 pb-4 border-t border-white/[0.04] pt-4">
-          <a href="https://docs.daydream.live" target="_blank" className="block rounded-lg bg-[#6366f1]/20 border border-[#6366f1]/30 px-3 py-2 text-[10px] text-center text-[#6366f1] hover:bg-[#6366f1]/30 transition-colors">
+          <a href="https://app.daydream.live/sign-in?returnUrl=/explore" target="_blank" className="block rounded-lg bg-[#6366f1]/20 border border-[#6366f1]/30 px-3 py-2 text-[10px] text-center text-[#6366f1] hover:bg-[#6366f1]/30 transition-colors">
             Get API Key →
           </a>
         </div>
@@ -519,7 +519,7 @@ curl -X POST https://sdk.daydream.monster/inference \\
         {/* Footer */}
         <div className="border-t border-white/[0.04] pt-6 pb-10 mt-12 text-center text-xs text-white/20">
           <a href="https://livepeer.org" className="text-white/40 hover:text-white/60">Livepeer</a> ·
-          <a href="https://docs.daydream.live" className="text-white/40 hover:text-white/60 ml-2">Daydream Docs</a> ·
+          <a href="https://app.daydream.live/sign-in?returnUrl=/explore" className="text-white/40 hover:text-white/60 ml-2">Daydream Docs</a> ·
           <a href="https://github.com/livepeer/storyboard" className="text-white/40 hover:text-white/60 ml-2">GitHub</a>
         </div>
       </main>

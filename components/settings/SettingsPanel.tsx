@@ -240,12 +240,12 @@ export function SettingsPanel() {
             <p className="mb-4 text-[10px] text-[var(--text-dim)]">
               Get your API key at{" "}
               <a
-                href="https://docs.daydream.live/api/api-reference"
+                href="https://app.daydream.live/sign-in?returnUrl=/explore"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[var(--text-muted)] underline"
               >
-                docs.daydream.live
+                app.daydream.live
               </a>
             </p>
 
