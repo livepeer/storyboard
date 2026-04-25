@@ -249,6 +249,9 @@ export function SettingsPanel() {
               </a>
             </p>
 
+            {/* Telegram Bot */}
+            <TelegramSection />
+
             {/* MCP Connected Tools */}
             <div className="mb-6">
               <McpPanel />
@@ -356,5 +359,126 @@ function UsageStats() {
         <span>{compaction.compaction_count}</span>
       </div>
     </div>
+  );
+}
+
+/** Telegram Bot settings — configure, test, enable/disable. */
+function TelegramSection() {
+  const [token, setToken] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem("telegram_bot_token") || "" : ""
+  );
+  const [status, setStatus] = useState<"idle" | "testing" | "ok" | "error" | "registered">("idle");
+  const [botName, setBotName] = useState("");
+  const [enabled, setEnabled] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem("telegram_bot_enabled") === "1" : false
+  );
+
+  const handleTest = useCallback(async () => {
+    if (!token.trim()) return;
+    setStatus("testing");
+    try {
+      const resp = await fetch("/api/telegram/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "test", token: token.trim() }),
+      });
+      const data = await resp.json();
+      if (data.ok && data.result) {
+        setBotName(`@${data.result.username}`);
+        setStatus("ok");
+        localStorage.setItem("telegram_bot_token", token.trim());
+      } else {
+        setStatus("error");
+      }
+    } catch {
+      setStatus("error");
+    }
+  }, [token]);
+
+  const handleToggle = useCallback(async () => {
+    if (!token.trim()) return;
+    const newEnabled = !enabled;
+    try {
+      if (newEnabled) {
+        // Register webhook
+        const host = window.location.origin;
+        const resp = await fetch("/api/telegram/setup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "register",
+            token: token.trim(),
+            webhookUrl: `${host}/api/telegram`,
+          }),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          setEnabled(true);
+          setStatus("registered");
+          localStorage.setItem("telegram_bot_enabled", "1");
+          localStorage.setItem("telegram_bot_token", token.trim());
+        } else {
+          setStatus("error");
+        }
+      } else {
+        // Unregister webhook
+        await fetch("/api/telegram/setup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "unregister", token: token.trim() }),
+        });
+        setEnabled(false);
+        setStatus("idle");
+        localStorage.setItem("telegram_bot_enabled", "0");
+      }
+    } catch {
+      setStatus("error");
+    }
+  }, [token, enabled]);
+
+  return (
+    <details className="mb-6">
+      <summary className="cursor-pointer text-[11px] text-[var(--text-muted)]">
+        Telegram Bot
+        {enabled && <span className="ml-2 text-green-400 text-[9px]">Active</span>}
+      </summary>
+      <div className="mt-2 space-y-2">
+        <p className="text-[10px] text-[var(--text-dim)]">
+          Connect a Telegram bot to generate images via chat. Get a bot token from{" "}
+          <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="underline text-[var(--text-muted)]">@BotFather</a>.
+        </p>
+        <input
+          type="password"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="Bot token from @BotFather"
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-xs text-[var(--text)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleTest}
+            disabled={!token.trim()}
+            className="rounded-lg bg-white/10 px-3 py-1.5 text-[11px] text-[var(--text-muted)] hover:bg-white/20 disabled:opacity-40"
+          >
+            Test
+          </button>
+          <button
+            onClick={handleToggle}
+            disabled={!token.trim()}
+            className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:opacity-40 ${
+              enabled
+                ? "bg-red-500/20 text-red-300 hover:bg-red-500/30"
+                : "bg-green-500/20 text-green-300 hover:bg-green-500/30"
+            }`}
+          >
+            {enabled ? "Disable" : "Enable"}
+          </button>
+          {status === "ok" && <span className="text-[10px] text-green-400">{botName}</span>}
+          {status === "registered" && <span className="text-[10px] text-green-400">Webhook registered</span>}
+          {status === "testing" && <span className="text-[10px] text-[var(--text-dim)]">Testing...</span>}
+          {status === "error" && <span className="text-[10px] text-red-400">Failed — check token</span>}
+        </div>
+      </div>
+    </details>
   );
 }

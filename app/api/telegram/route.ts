@@ -1,0 +1,97 @@
+/**
+ * Telegram adapter — thin layer over the shared Bot Engine.
+ * Translates Telegram webhook events → BotEngine → Telegram API responses.
+ *
+ * To add Discord/Slack/WhatsApp: create a new adapter that imports
+ * createBotEngine and translates their webhook format the same way.
+ */
+import { NextRequest, NextResponse } from "next/server";
+import { createBotEngine, type BotAction } from "@/lib/bot/engine";
+import {
+  sendMessage, sendPhoto, sendVideo,
+  sendMessageWithButtons, answerCallback, setCommands,
+} from "@/lib/telegram/bot";
+
+const getToken = () => process.env.TELEGRAM_BOT_TOKEN || "";
+const getConfig = () => ({
+  sdkUrl: process.env.LIVEPEER_SDK_URL || process.env.NEXT_PUBLIC_SDK_URL || "https://sdk.daydream.monster",
+  sdkKey: process.env.LIVEPEER_API_KEY || process.env.DAYDREAM_API_KEY || "",
+});
+
+/** Send BotActions to a Telegram chat. */
+async function deliver(token: string, chatId: number | string, actions: BotAction[]) {
+  for (const a of actions) {
+    switch (a.type) {
+      case "text":
+        await sendMessage(token, chatId, a.text || "");
+        break;
+      case "photo":
+        if (a.url) await sendPhoto(token, chatId, a.url, a.caption);
+        break;
+      case "video":
+        if (a.url) await sendVideo(token, chatId, a.url, a.caption);
+        break;
+      case "audio":
+        if (a.url) {
+          await fetch(`https://api.telegram.org/bot${token}/sendAudio`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, audio: a.url, title: a.caption }),
+          });
+        }
+        break;
+      case "buttons":
+        if (a.buttons) {
+          const keyboard = a.buttons.map((row) =>
+            row.map((b) => ({ text: b.label, callback_data: b.data }))
+          );
+          await sendMessageWithButtons(token, chatId, a.text || "Choose:", keyboard);
+        }
+        break;
+    }
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const token = getToken();
+  if (!token) return NextResponse.json({ ok: false });
+
+  const update = await req.json();
+  const engine = createBotEngine(getConfig());
+
+  // ── Callback query (button click) ──
+  if (update.callback_query) {
+    const cb = update.callback_query;
+    const chatId = cb.message?.chat?.id;
+    await answerCallback(token, cb.id, "Working...");
+    const response = await engine.handleCallback(cb.data || "");
+    await deliver(token, chatId, response.actions);
+    return NextResponse.json({ ok: true });
+  }
+
+  // ── Voice message → transcribe placeholder ──
+  if (update.message?.voice) {
+    const chatId = update.message.chat.id;
+    await sendMessage(token, chatId,
+      "🎤 Voice received! Voice-to-creation coming soon.\n" +
+      "For now, type your prompt or use /help for commands."
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  // ── Text message ──
+  const msg = update.message;
+  if (!msg?.text) return NextResponse.json({ ok: true });
+
+  const chatId = msg.chat.id;
+
+  // Register commands menu on first /start
+  if (msg.text.trim() === "/start") {
+    await setCommands(token);
+  }
+
+  const response = await engine.handle(msg.text);
+  await deliver(token, chatId, response.actions);
+
+  return NextResponse.json({ ok: true });
+}
