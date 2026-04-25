@@ -73,17 +73,22 @@ export async function POST(req: NextRequest) {
 
   // ── Callback query (button click) ──
   if (update.callback_query) {
-    const cb = update.callback_query;
-    const chatId = cb.message?.chat?.id;
-    await answerCallback(token, cb.id, "Working...");
-    const response = await engine.handleCallback(cb.data || "");
-    await deliver(token, chatId, response.actions);
+    const cb = update.callback_query as Record<string, unknown>;
+    const cbMsg = cb.message as Record<string, unknown> | undefined;
+    const cbChat = cbMsg?.chat as Record<string, unknown> | undefined;
+    const chatId = cbChat?.id as number | undefined;
+    if (chatId) {
+      await answerCallback(token, cb.id as string, "Working...");
+      const response = await engine.handleCallback((cb.data as string) || "");
+      await deliver(token, chatId, response.actions);
+    }
     return NextResponse.json({ ok: true });
   }
 
   // ── Voice message → transcribe placeholder ──
-  if (update.message?.voice) {
-    const chatId = update.message.chat.id;
+  const rawMsg = update.message as Record<string, unknown> | undefined;
+  if (rawMsg?.voice) {
+    const chatId = (rawMsg.chat as Record<string, unknown>)?.id as number;
     await sendMessage(token, chatId,
       "🎤 Voice received! Voice-to-creation coming soon.\n" +
       "For now, type your prompt or use /help for commands."
