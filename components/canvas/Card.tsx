@@ -136,58 +136,65 @@ function PromptBar({ card, cap, prompt, elapsed, colors }: {
       </div>
 
       {editing ? (
-        /* Floating expanded editor — positioned above the card for comfortable editing */
-        <div style={{
-          position: "absolute", bottom: "100%", left: 0, right: 0,
-          marginBottom: 4, zIndex: 100,
-          background: "rgba(16,16,24,0.98)", backdropFilter: "blur(16px)",
-          border: "1px solid rgba(139,92,246,0.4)", borderRadius: 10,
-          padding: 10, boxShadow: "0 -8px 32px rgba(0,0,0,0.5)",
-        }}>
-          <div style={{ fontSize: 10, color: "#a78bfa", marginBottom: 4, fontWeight: 600 }}>
-            Edit prompt — Enter to regenerate
-          </div>
-          <textarea
-            ref={textareaRef}
-            value={editValue}
-            onChange={(e) => {
-              setEditValue(e.target.value);
-              // Auto-resize
-              const el = e.target;
-              el.style.height = "auto";
-              el.style.height = Math.min(el.scrollHeight, 160) + "px";
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleRegenerate(editValue); }
-              if (e.key === "Escape") { setEditing(false); setEditValue(prompt || ""); }
-            }}
-            rows={3}
-            style={{
-              width: "100%", resize: "none", border: "1px solid rgba(255,255,255,0.1)",
-              borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.5,
-              background: "rgba(0,0,0,0.4)", color: "#e2e8f0", outline: "none",
-              fontFamily: "inherit", minHeight: 60, maxHeight: 160,
-            }}
+        /* Fixed-position editor overlay — never clipped by card's overflow */
+        <>
+          {/* Backdrop */}
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 3000, background: "rgba(0,0,0,0.4)" }}
+            onClick={() => { setEditing(false); setEditValue(prompt || ""); }}
           />
-          <div style={{ display: "flex", gap: 6, justifyContent: "space-between", marginTop: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 9, color: "#666" }}>Shift+Enter for newline</span>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button
-                onClick={() => { setEditing(false); setEditValue(prompt || ""); }}
-                style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#888", fontSize: 11, cursor: "pointer", padding: "4px 12px" }}
-              >Cancel</button>
-              <button
-                onClick={() => handleRegenerate(editValue)}
-                disabled={!editValue.trim() || regenerating}
-                style={{
-                  background: "rgba(139,92,246,0.3)", border: "none", borderRadius: 6,
-                  color: "#c4b5fd", fontSize: 11, fontWeight: 600, cursor: "pointer",
-                  padding: "4px 14px", opacity: !editValue.trim() ? 0.4 : 1,
-                }}
-              >{regenerating ? "Generating..." : "Regenerate"}</button>
+          {/* Editor panel — centered on screen */}
+          <div style={{
+            position: "fixed", top: "20vh", left: "50%", transform: "translateX(-50%)",
+            zIndex: 3001, width: 440,
+            background: "rgba(16,16,24,0.98)", backdropFilter: "blur(16px)",
+            border: "1px solid rgba(139,92,246,0.4)", borderRadius: 12,
+            padding: 16, boxShadow: "0 16px 48px rgba(0,0,0,0.6)",
+          }}>
+            <div style={{ fontSize: 12, color: "#a78bfa", marginBottom: 8, fontWeight: 600 }}>
+              Edit prompt
+            </div>
+            <textarea
+              ref={textareaRef}
+              value={editValue}
+              onChange={(e) => {
+                setEditValue(e.target.value);
+                const el = e.target;
+                el.style.height = "auto";
+                el.style.height = Math.min(el.scrollHeight, 200) + "px";
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleRegenerate(editValue); }
+                if (e.key === "Escape") { setEditing(false); setEditValue(prompt || ""); }
+              }}
+              rows={4}
+              style={{
+                width: "100%", resize: "none", border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 8, padding: "10px 12px", fontSize: 13, lineHeight: 1.5,
+                background: "rgba(0,0,0,0.4)", color: "#e2e8f0", outline: "none",
+                fontFamily: "inherit", minHeight: 80, maxHeight: 200,
+              }}
+            />
+            <div style={{ display: "flex", gap: 6, justifyContent: "space-between", marginTop: 10, alignItems: "center" }}>
+              <span style={{ fontSize: 10, color: "#666" }}>Enter to regenerate · Shift+Enter for newline · Esc to cancel</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  onClick={() => { setEditing(false); setEditValue(prompt || ""); }}
+                  style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#888", fontSize: 11, cursor: "pointer", padding: "5px 14px" }}
+                >Cancel</button>
+                <button
+                  onClick={() => handleRegenerate(editValue)}
+                  disabled={!editValue.trim() || regenerating}
+                  style={{
+                    background: "rgba(139,92,246,0.3)", border: "none", borderRadius: 6,
+                    color: "#c4b5fd", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                    padding: "5px 16px", opacity: !editValue.trim() ? 0.4 : 1,
+                  }}
+                >{regenerating ? "Generating..." : "Regenerate"}</button>
+              </div>
             </div>
           </div>
-        </div>
+        </>
       ) : (
         <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
           <div
