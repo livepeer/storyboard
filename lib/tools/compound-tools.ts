@@ -577,13 +577,42 @@ export const createMediaTool: ToolDefinition = {
       // Title: use step.title if agent provided one, else extract 3-5 key words from prompt
       const title = step.title || extractShortTitle(step.prompt);
 
-      // Create card (spinner shows while generating) — set capability early
-      // so GeneratingSpinner can show model-specific ETA
-      console.log(`[create_media] Step ${i}/${rawSteps.length}: refId=${refId}, capability=${capability} (${routeReason})`);
-      const card = canvas.addCard({ type, title, refId, batchId });
+      // Auto-detect aspect ratio from prompt BEFORE creating the card
+      // so the card dimensions match the image aspect ratio.
+      const params: Record<string, unknown> = {};
+      let cardW = 320;
+      let cardH = 280;
+      if (type === "image" && !step.source_url) {
+        const lower = effectivePrompt.toLowerCase();
+        const ratioMatch = lower.match(/\b(\d{1,2})\s*[:x]\s*(\d{1,2})\b/);
+        let imgW = 1024;
+        let imgH = 768;
+
+        if (ratioMatch) {
+          const rw = parseInt(ratioMatch[1]);
+          const rh = parseInt(ratioMatch[2]);
+          if (rw >= rh) { imgW = 1024; imgH = Math.round(1024 * rh / rw); }
+          else { imgH = 1024; imgW = Math.round(1024 * rw / rh); }
+        } else if (/\b(portrait|vertical|tall)\b/.test(lower) ||
+            /\b(person|woman|man|girl|boy|full.body|standing|fashion|model|wear|clothing|dress|outfit)\b/.test(lower)) {
+          imgW = 768; imgH = 1024;
+        } else if (/\b(landscape|widescreen|horizontal|panorama|cinematic)\b/.test(lower)) {
+          imgW = 1024; imgH = 576;
+        } else if (/\b(square)\b/.test(lower)) {
+          imgW = 1024; imgH = 1024;
+        }
+
+        params.image_size = { width: imgW, height: imgH };
+        const aspect = imgW / imgH;
+        cardW = 320;
+        cardH = Math.max(180, Math.min(450, Math.round(320 / aspect)));
+      }
+
+      // Create card with correct aspect ratio
+      console.log(`[create_media] Step ${i}/${rawSteps.length}: refId=${refId}, capability=${capability} (${routeReason}), card=${cardW}x${cardH}`);
+      const card = canvas.addCard({ type, title, refId, batchId, width: cardW, height: cardH });
       canvas.updateCard(card.id, { capability });
 
-      // Chat explanation — why this model was chosen (only for first step or unique routing)
       if (i === 0 || routeReason !== "auto") {
         const reason = routeReason === "auto" ? `auto-selected for ${step.action}` : routeReason;
         useChatStore.getState().addMessage(`${refId}: ${capability} (${reason})`, "system");
@@ -593,21 +622,6 @@ export const createMediaTool: ToolDefinition = {
         useCanvasStore.getState().updateCard(card.id, {
           x: pos.x, y: pos.y, w: pos.w, h: pos.h,
         });
-      }
-
-      // Build params — inject source URL from depends_on or source_url
-      const params: Record<string, unknown> = {};
-
-      // Auto-detect portrait orientation for person/fashion prompts.
-      // Flux-dev defaults to landscape 1024×768 which squeezes full-body
-      // subjects into a small area, causing perceived "blur". Setting
-      // portrait (768×1024) fills the frame properly.
-      if (
-        type === "image" &&
-        !step.source_url &&
-        /\b(person|woman|man|girl|boy|portrait|full.body|standing|fashion|model|wear|clothing|dress|outfit)\b/i.test(effectivePrompt)
-      ) {
-        params.image_size = { width: 768, height: 1024 };
       }
       if (step.depends_on !== undefined && results[step.depends_on]) {
         const dep = results[step.depends_on];
