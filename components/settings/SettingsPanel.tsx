@@ -249,8 +249,9 @@ export function SettingsPanel() {
               </a>
             </p>
 
-            {/* Telegram Bot */}
+            {/* Chat Bots */}
             <TelegramSection />
+            <DiscordSection />
 
             {/* MCP Connected Tools */}
             <div className="mb-6">
@@ -477,6 +478,77 @@ function TelegramSection() {
           {status === "registered" && <span className="text-[10px] text-green-400">Webhook registered</span>}
           {status === "testing" && <span className="text-[10px] text-[var(--text-dim)]">Testing...</span>}
           {status === "error" && <span className="text-[10px] text-red-400">Failed — check token</span>}
+        </div>
+      </div>
+    </details>
+  );
+}
+
+/** Discord Bot settings. */
+function DiscordSection() {
+  const [appId, setAppId] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem("discord_app_id") || "" : ""
+  );
+  const [token, setToken] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem("discord_bot_token") || "" : ""
+  );
+  const [status, setStatus] = useState<"idle" | "registering" | "ok" | "error">("idle");
+
+  const handleRegister = useCallback(async () => {
+    if (!appId.trim() || !token.trim()) return;
+    setStatus("registering");
+    try {
+      localStorage.setItem("discord_app_id", appId.trim());
+      localStorage.setItem("discord_bot_token", token.trim());
+      const resp = await fetch("/api/discord/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appId: appId.trim(), token: token.trim() }),
+      });
+      const data = await resp.json();
+      setStatus(data.ok ? "ok" : "error");
+    } catch {
+      setStatus("error");
+    }
+  }, [appId, token]);
+
+  return (
+    <details className="mb-6">
+      <summary className="cursor-pointer text-[11px] text-[var(--text-muted)]">
+        Discord Bot
+        {status === "ok" && <span className="ml-2 text-green-400 text-[9px]">Commands registered</span>}
+      </summary>
+      <div className="mt-2 space-y-2">
+        <p className="text-[10px] text-[var(--text-dim)]">
+          Create a Discord app at{" "}
+          <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer" className="underline text-[var(--text-muted)]">discord.com/developers</a>.
+          Set Interactions Endpoint URL to: <code className="text-[9px]">{typeof window !== "undefined" ? window.location.origin : ""}/api/discord</code>
+        </p>
+        <input
+          type="text"
+          value={appId}
+          onChange={(e) => setAppId(e.target.value)}
+          placeholder="Application ID"
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-xs text-[var(--text)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
+        />
+        <input
+          type="password"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="Bot Token"
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-xs text-[var(--text)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--border-hover)]"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRegister}
+            disabled={!appId.trim() || !token.trim()}
+            className="rounded-lg bg-[#5865F2]/20 px-3 py-1.5 text-[11px] font-semibold text-[#5865F2] hover:bg-[#5865F2]/30 disabled:opacity-40"
+          >
+            Register Commands
+          </button>
+          {status === "ok" && <span className="text-[10px] text-green-400">Slash commands registered</span>}
+          {status === "registering" && <span className="text-[10px] text-[var(--text-dim)]">Registering...</span>}
+          {status === "error" && <span className="text-[10px] text-red-400">Failed — check credentials</span>}
         </div>
       </div>
     </details>
