@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useEpisodeStore } from "@/lib/episodes/store";
+import { useChatStore } from "@/lib/chat/store";
 import type { Card } from "@/lib/canvas/types";
 
 const PADDING = 20;
@@ -290,7 +291,168 @@ function EpisodeLabelBox({
         >
           {"\uD83D\uDCCC"}
         </button>
+
+        {/* Episode actions menu */}
+        <EpisodeActionsMenu name={name} cards={cards} color={color} r={r} g={g} b={b} />
       </div>
     </div>
   );
 }
+
+/** Episode right-click/click menu — render, export, share. */
+function EpisodeActionsMenu({ name, cards, color, r, g, b }: {
+  name: string; cards: Card[]; color: string; r: number; g: number; b: number;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const mediaCards = useMemo(
+    () => cards.filter((c) => c.url && (c.type === "image" || c.type === "video")),
+    [cards]
+  );
+  const audioCards = useMemo(
+    () => cards.filter((c) => c.url && c.type === "audio"),
+    [cards]
+  );
+
+  const handleRender = useCallback(async () => {
+    setOpen(false);
+    if (mediaCards.length === 0) return;
+    const say = useChatStore.getState().addMessage;
+    const progressMsg = say(`Rendering "${name}" (${mediaCards.length} cards)... 0%`, "system");
+
+    try {
+      const { renderProject } = await import("@livepeer/creative-kit");
+      const renderCards = mediaCards.map((c) => ({
+        refId: c.refId, url: c.url!, type: c.type as "image" | "video",
+        duration: c.type === "video" ? undefined : 4,
+      }));
+      const result = await renderProject({
+        cards: renderCards,
+        musicSource: audioCards[0]?.url || undefined,
+        transition: "crossfade",
+        transitionDuration: 0.5,
+        onProgress: (pct) => {
+          useChatStore.getState().updateMessage(progressMsg.id, `Rendering "${name}"... ${Math.round(pct * 100)}%`);
+        },
+      });
+
+      useChatStore.getState().updateMessage(progressMsg.id,
+        `Rendered "${name}" — ${result.duration.toFixed(1)}s (${(result.size / 1024 / 1024).toFixed(1)}MB)`
+      );
+
+      // Add to canvas + download
+      useCanvasStore.getState().addCard({
+        type: "video", title: `${name} — rendered`,
+        refId: `render-${name}-${Date.now()}`, url: result.url,
+      });
+      const a = document.createElement("a");
+      a.href = result.url; a.download = result.fileName; a.click();
+    } catch (e) {
+      useChatStore.getState().updateMessage(progressMsg.id, `Render failed: ${(e as Error).message?.slice(0, 80)}`);
+    }
+  }, [name, mediaCards, audioCards]);
+
+  const handleExportImages = useCallback(async () => {
+    setOpen(false);
+    const imgCards = mediaCards.filter((c) => c.type === "image");
+    if (imgCards.length === 0) return;
+    try {
+      const { downloadCards, getSavableCards } = await import("@/lib/utils/download");
+      const savable = getSavableCards(imgCards);
+      await downloadCards(savable);
+      useChatStore.getState().addMessage(`Exported ${savable.length} images from "${name}"`, "system");
+    } catch {}
+  }, [name, mediaCards]);
+
+  const handleExportSocial = useCallback(async (platform: string) => {
+    setOpen(false);
+    const imgCards = mediaCards.filter((c) => c.type === "image");
+    if (imgCards.length === 0) return;
+    try {
+      const { exportForSocial } = await import("@livepeer/creative-kit");
+      const results = await exportForSocial({
+        platform: platform as any,
+        cards: imgCards.map((c) => ({ refId: c.refId, url: c.url!, type: "image" as const })),
+      });
+      for (const r of results) {
+        for (const f of r.files) {
+          const url = URL.createObjectURL(f.blob);
+          const a = document.createElement("a"); a.href = url; a.download = f.name; a.click();
+          URL.revokeObjectURL(url);
+        }
+      }
+      useChatStore.getState().addMessage(`Exported "${name}" for ${platform}`, "system");
+    } catch {}
+  }, [name, mediaCards]);
+
+  const handleShareJson = useCallback(() => {
+    setOpen(false);
+    const data = {
+      episode: name,
+      exportedAt: new Date().toISOString(),
+      cards: cards.map((c) => ({ refId: c.refId, type: c.type, title: c.title, url: c.url, prompt: c.prompt, capability: c.capability })),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `${name}.json`; a.click();
+    URL.revokeObjectURL(url);
+    useChatStore.getState().addMessage(`Exported "${name}" as JSON`, "system");
+  }, [name, cards]);
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        className="text-xs cursor-pointer select-none opacity-40 hover:opacity-80 transition-opacity"
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        title="Episode actions"
+      >
+        {"\u22EF"}
+      </button>
+
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 2999 }} onClick={() => setOpen(false)} />
+          <div
+            style={{
+              position: "absolute", top: "100%", right: 0, zIndex: 3000,
+              minWidth: 200, marginTop: 4,
+              background: "rgba(16,16,24,0.98)", backdropFilter: "blur(16px)",
+              border: `1px solid rgba(${r},${g},${b},0.3)`, borderRadius: 10,
+              padding: "6px 0", boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: "4px 12px", fontSize: 10, color: `rgba(${r},${g},${b},0.6)`, fontWeight: 600 }}>
+              {name} · {mediaCards.length} media
+            </div>
+
+            {mediaCards.length > 0 && (
+              <button onClick={handleRender} style={menuItemStyle}>
+                🎬 Render Video{audioCards.length > 0 ? " + Music" : ""}
+              </button>
+            )}
+
+            {mediaCards.filter((c) => c.type === "image").length > 0 && (
+              <>
+                <button onClick={handleExportImages} style={menuItemStyle}>📥 Download Images</button>
+                <button onClick={() => handleExportSocial("instagram")} style={menuItemStyle}>📱 Export for Instagram</button>
+                <button onClick={() => handleExportSocial("tiktok")} style={menuItemStyle}>📱 Export for TikTok</button>
+                <button onClick={() => handleExportSocial("youtube")} style={menuItemStyle}>📺 Export for YouTube</button>
+              </>
+            )}
+
+            <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "4px 8px" }} />
+            <button onClick={handleShareJson} style={menuItemStyle}>📋 Export as JSON</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const menuItemStyle: React.CSSProperties = {
+  display: "block", width: "100%", textAlign: "left",
+  padding: "6px 12px", fontSize: 11, color: "#ccc",
+  background: "none", border: "none", cursor: "pointer",
+  transition: "background 100ms",
+};
