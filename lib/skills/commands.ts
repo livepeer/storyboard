@@ -107,6 +107,8 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleStreamCommand(cmd.args);
     case "project":
       return handleProjectCommand(cmd.args);
+    case "episode":
+      return (await import("@/lib/episodes/episode-commands")).handleEpisodeCommand(cmd.args);
     case "stream/graphs":
       return handleStreamCommand(`graphs ${cmd.args}`);
     case "stream/ptravel":

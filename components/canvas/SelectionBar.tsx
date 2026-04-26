@@ -46,6 +46,24 @@ export function SelectionBar() {
       {imageCount >= 2 && (
         <button onClick={() => openPanel("animate")} className={btn}>▶ Animate ({imageCount})</button>
       )}
+      {imageCount >= 2 && (() => {
+        // Check if selected cards belong to one episode → offer "Animate Episode"
+        const episodes = useEpisodeStore.getState().episodes;
+        const ep = episodes.find((e) => selectedCards.every((c) => e.cardIds.includes(c.id)));
+        if (!ep) return null;
+        return (
+          <button
+            onClick={async () => {
+              const { animateEpisode } = await import("@/lib/episodes/animate");
+              animateEpisode({ episodeId: ep.id });
+              clearSelection();
+            }}
+            className="rounded-lg px-3 py-1 text-[11px] text-amber-300 hover:bg-amber-500/10 transition-colors"
+          >
+            🎬 Episode→Video
+          </button>
+        );
+      })()}
       {imageCount >= 1 && (
         <button onClick={() => openPanel("export")} className={btn}>📥 Export ({imageCount})</button>
       )}
