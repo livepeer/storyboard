@@ -9,7 +9,7 @@ import { CameraWidget } from "@/components/canvas/CameraWidget";
 import { TrainingModal } from "@/components/training/TrainingModal";
 import { Walkthrough } from "@/components/ui/Walkthrough";
 import { SelectionBar } from "@/components/canvas/SelectionBar";
-// EpisodePanel removed — episode actions use SelectionBar instead
+import { EpisodePanel } from "@/components/canvas/EpisodePanel";
 import { registerPlugin, setActivePlugin } from "@/lib/agents/registry";
 import { builtInPlugin } from "@/lib/agents/built-in";
 import { claudePlugin } from "@/lib/agents/claude";
@@ -97,7 +97,7 @@ export default function Home() {
       <CameraWidget />
       <TrainingModal open={trainingOpen} onClose={() => setTrainingOpen(false)} />
       <SelectionBar />
-      {/* Episode actions handled by SelectionBar — click ⋯ on episode to select all cards */}
+      <EpisodePanel />
       <Walkthrough />
 
       {/* Keyboard shortcuts modal */}
