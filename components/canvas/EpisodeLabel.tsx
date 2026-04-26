@@ -304,6 +304,8 @@ function EpisodeActionsMenu({ name, cards, color, r, g, b }: {
   name: string; cards: Card[]; color: string; r: number; g: number; b: number;
 }) {
   const [open, setOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const btnRef = useRef<HTMLButtonElement>(null);
 
   const mediaCards = useMemo(
     () => cards.filter((c) => c.url && (c.type === "image" || c.type === "video")),
@@ -400,10 +402,16 @@ function EpisodeActionsMenu({ name, cards, color, r, g, b }: {
   }, [name, cards]);
 
   return (
-    <div style={{ position: "relative" }}>
+    <>
       <button
+        ref={btnRef}
         className="text-xs cursor-pointer select-none opacity-40 hover:opacity-80 transition-opacity"
-        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          const rect = btnRef.current?.getBoundingClientRect();
+          if (rect) setMenuPos({ x: rect.right, y: rect.bottom + 4 });
+          setOpen(!open);
+        }}
         title="Episode actions"
       >
         {"\u22EF"}
@@ -414,45 +422,58 @@ function EpisodeActionsMenu({ name, cards, color, r, g, b }: {
           <div style={{ position: "fixed", inset: 0, zIndex: 2999 }} onClick={() => setOpen(false)} />
           <div
             style={{
-              position: "absolute", top: "100%", right: 0, zIndex: 3000,
-              minWidth: 200, marginTop: 4,
+              position: "fixed", top: menuPos.y, left: menuPos.x - 210, zIndex: 3000,
+              width: 210,
               background: "rgba(16,16,24,0.98)", backdropFilter: "blur(16px)",
               border: `1px solid rgba(${r},${g},${b},0.3)`, borderRadius: 10,
               padding: "6px 0", boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+              pointerEvents: "auto",
             }}
             onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
           >
             <div style={{ padding: "4px 12px", fontSize: 10, color: `rgba(${r},${g},${b},0.6)`, fontWeight: 600 }}>
               {name} · {mediaCards.length} media
             </div>
 
             {mediaCards.length > 0 && (
-              <button onClick={handleRender} style={menuItemStyle}>
+              <MenuItem onClick={handleRender}>
                 🎬 Render Video{audioCards.length > 0 ? " + Music" : ""}
-              </button>
+              </MenuItem>
             )}
 
             {mediaCards.filter((c) => c.type === "image").length > 0 && (
               <>
-                <button onClick={handleExportImages} style={menuItemStyle}>📥 Download Images</button>
-                <button onClick={() => handleExportSocial("instagram")} style={menuItemStyle}>📱 Export for Instagram</button>
-                <button onClick={() => handleExportSocial("tiktok")} style={menuItemStyle}>📱 Export for TikTok</button>
-                <button onClick={() => handleExportSocial("youtube")} style={menuItemStyle}>📺 Export for YouTube</button>
+                <MenuItem onClick={handleExportImages}>📥 Download Images</MenuItem>
+                <MenuItem onClick={() => handleExportSocial("instagram")}>📱 Export for Instagram</MenuItem>
+                <MenuItem onClick={() => handleExportSocial("tiktok")}>📱 Export for TikTok</MenuItem>
+                <MenuItem onClick={() => handleExportSocial("youtube")}>📺 Export for YouTube</MenuItem>
               </>
             )}
 
             <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "4px 8px" }} />
-            <button onClick={handleShareJson} style={menuItemStyle}>📋 Export as JSON</button>
+            <MenuItem onClick={handleShareJson}>📋 Export as JSON</MenuItem>
           </div>
         </>
       )}
-    </div>
+    </>
   );
 }
 
-const menuItemStyle: React.CSSProperties = {
-  display: "block", width: "100%", textAlign: "left",
-  padding: "6px 12px", fontSize: 11, color: "#ccc",
-  background: "none", border: "none", cursor: "pointer",
-  transition: "background 100ms",
-};
+function MenuItem({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      onPointerDown={(e) => e.stopPropagation()}
+      style={{
+        display: "block", width: "100%", textAlign: "left",
+        padding: "6px 12px", fontSize: 11, color: "#ccc",
+        background: "none", border: "none", cursor: "pointer",
+      }}
+      onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
+      onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "none"; }}
+    >
+      {children}
+    </button>
+  );
+}
