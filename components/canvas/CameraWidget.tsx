@@ -186,7 +186,10 @@ export function CameraWidget() {
           session.onStatus = (msg) => setStatus(msg);
           session.onError = (err) => {
             addMessage(`LV2V: ${err}`, "system");
-            if (cardId) unregisterSession(cardId);
+            if (cardId) {
+              unregisterSession(cardId);
+              updateCard(cardId, { error: `Stream ended: ${err}` });
+            }
           };
           startPolling(session, 200);
 
@@ -250,7 +253,10 @@ export function CameraWidget() {
           session.onStatus = (msg) => setStatus(msg);
           session.onError = (err) => {
             addMessage(`LV2V: ${err}`, "system");
-            if (cardId) unregisterSession(cardId);
+            if (cardId) {
+              unregisterSession(cardId);
+              updateCard(cardId, { error: `Stream ended: ${err}` });
+            }
           };
           startPolling(session, 200);
 

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from "react";
 import type { Card as CardData } from "@/lib/canvas/types";
-import { getSession, getActiveSession, controlStream } from "@/lib/stream/session";
+import { getSession, controlStream } from "@/lib/stream/session";
 import { translateIntent } from "@/lib/stream/cockpit-agent";
 import { useCockpitStore } from "@/lib/stream/cockpit-store";
 import { SCOPE_PRESETS } from "@/lib/stream/scope-params";
@@ -22,7 +22,7 @@ export function StreamCockpit({ card }: Props) {
   const [activePreset, setActivePreset] = useState<string | undefined>();
   const previousParams = useRef<Record<string, unknown> | null>(null);
 
-  const session = getSession(card.refId) || getActiveSession();
+  const session = getSession(card.refId);
   const isActive = !!session && !session.stopped;
 
   /** Apply a tool call to the running stream.
@@ -36,7 +36,7 @@ export function StreamCockpit({ card }: Props) {
    */
   const applyAction = useCallback(
     (action: ToolCall, intent: string) => {
-      const sess = getSession(card.refId) || getActiveSession();
+      const sess = getSession(card.refId);
       if (!sess) return;
       previousParams.current = { ...(sess.lastParams || {}) };
 
@@ -94,7 +94,7 @@ export function StreamCockpit({ card }: Props) {
   );
 
   const handleRollback = useCallback(() => {
-    const sess = getSession(card.refId) || getActiveSession();
+    const sess = getSession(card.refId);
     if (!sess || !previousParams.current) return;
     // Fire-and-forget rollback: UI state flips immediately, network
     // catches up in the background.

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import type { Card as CardData } from "@/lib/canvas/types";
-import { getSession, getActiveSession } from "@/lib/stream/session";
+import { getSession } from "@/lib/stream/session";
 import { downloadCard } from "@/lib/utils/download";
 import { EpisodeBadge } from "./EpisodeBadge";
 import { useEpisodeStore } from "@/lib/episodes/store";
@@ -476,7 +476,9 @@ export function Card({ card }: { card: CardData }) {
   const isActiveEpisode = episode?.id === useEpisodeStore((s) => s.activeEpisodeId);
 
   // Auto-expand stream cards when streaming
-  const streamSession = card.type === "stream" ? (getSession(card.refId) || getActiveSession()) : null;
+  // Each stream card uses ONLY its own linked session — never steal another card's.
+  // getActiveSession() fallback caused cards to share sessions and interfere.
+  const streamSession = card.type === "stream" ? getSession(card.refId) : null;
   const isStreaming = !!streamSession && !streamSession.stopped;
   const expandedW = isStreaming ? 640 : card.w;
   // 640 (square frame) + 32 (title) + 50 (presets) + 80 (input) + 50 (chips) + 60 (feed) ≈ 920
