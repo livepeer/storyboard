@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useEpisodeStore } from "@/lib/episodes/store";
+import { useGroupDrag } from "@/lib/episodes/use-group-drag";
 import type { Card } from "@/lib/canvas/types";
 
 const EPIC_PADDING = 36;
@@ -61,6 +62,8 @@ function EpicLabelBox({
     return epic?.episodeIds.length ?? 0;
   }, [epicId]);
 
+  const { onDragStart, onDragMove, onDragEnd, justDraggedRef } = useGroupDrag(cards);
+
   // Compute bounding box around all epic cards
   let minX = Infinity,
     minY = Infinity,
@@ -96,10 +99,20 @@ function EpicLabelBox({
         pointerEvents: "none",
       }}
     >
-      {/* Label header */}
+      {/* Label header — drag to move all cards */}
       <div
-        className="flex items-center gap-2 px-4 py-2"
-        style={{ pointerEvents: "auto" }}
+        className="flex items-center gap-2 px-4 py-2 cursor-grab active:cursor-grabbing select-none"
+        style={{ pointerEvents: "auto", touchAction: "none" }}
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+        onPointerCancel={onDragEnd}
+        onClick={(e) => {
+          if (justDraggedRef.current) return;
+          e.stopPropagation();
+          useCanvasStore.getState().selectCards(cards.map((c) => c.id));
+        }}
+        title="Drag to move · Click to select all"
       >
         {/* Epic name */}
         <span
