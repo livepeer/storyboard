@@ -139,6 +139,12 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
       return handleRender(cmd.args);
     case "snapshot":
       return handleSnapshot(cmd.args);
+    case "epic":
+      return (await import("@/lib/episodes/commands")).handleEpicCommand(cmd.args);
+    case "arc":
+      return (await import("@/lib/episodes/commands")).handleArcCommand(cmd.args);
+    case "find":
+      return (await import("@/lib/episodes/commands")).handleFindCommand(cmd.args);
     case "facelock":
       return handleFaceLock(cmd.args);
     default:
@@ -238,6 +244,15 @@ function showHelp(): string {
     "  Image card: Restyle, Animate, Seedance, 3D, LEGO, Logo, Try-On,",
     "              Edit with GPT Image, Product Briefing, Analyze, LV2V Stream",
     "  Canvas:     GPT Image 2 (text/logos/products), Import media (file or URL)",
+    "",
+    "── HIERARCHY ──",
+    "  /epic create <name>         Group selected episodes into an epic",
+    "  /epic list                  List all epics (clickable → focus)",
+    "  /epic remove <name>         Remove epic (keeps episodes)",
+    "  /arc create <name>          Group selected epics into a story arc",
+    "  /arc list                   List all arcs",
+    "  /arc remove <name>          Remove arc (keeps epics)",
+    "  /find <query>               Search across all levels (clickable → focus)",
     "",
     "── SKILLS & MODELS ──",
     "  /skills                     List available agent skills",

@@ -29,6 +29,7 @@ interface CanvasState {
   setViewport: (v: Partial<CanvasViewport>) => void;
   zoomTo: (scale: number, centerX: number, centerY: number) => void;
   fitAll: (viewportWidth: number, viewportHeight: number) => void;
+  fitCards: (cardIds: string[], viewportWidth: number, viewportHeight: number) => void;
 
   // Layout
   applyLayout: (positions: Array<{ cardId: string; x: number; y: number; w?: number; h?: number }>) => void;
@@ -150,6 +151,17 @@ export const useCanvasStore = create<CanvasState>()(
           panY: (vh - ch * scale) / 2 - minY * scale,
         },
       };
+    }),
+
+  fitCards: (cardIds, vw, vh) =>
+    set((s) => {
+      const subset = s.cards.filter((c) => cardIds.includes(c.id));
+      if (subset.length === 0) return s;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const c of subset) { minX = Math.min(minX, c.x); minY = Math.min(minY, c.y); maxX = Math.max(maxX, c.x + c.w); maxY = Math.max(maxY, c.y + c.h); }
+      const cw = maxX - minX; const ch = maxY - minY; const pad = 80;
+      const scale = Math.min((vw - pad) / cw, (vh - pad) / ch, 2);
+      return { viewport: { scale, panX: (vw - cw * scale) / 2 - minX * scale, panY: (vh - ch * scale) / 2 - minY * scale } };
     }),
 
   addCard: (opts) => {
