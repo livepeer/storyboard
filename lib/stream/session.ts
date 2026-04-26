@@ -55,6 +55,17 @@ export async function startStream(
   prompt: string,
   scopeParams?: Record<string, unknown>
 ): Promise<Lv2vSession> {
+  // Stop ALL existing sessions before starting a new one.
+  // Without this, old publish/poll timers keep running and hit
+  // dead trickle channels (404), causing the new stream to compete
+  // with ghost publish loops from the old session.
+  for (const session of sessions.values()) {
+    if (!session.stopped) {
+      console.log(`[LV2V] Stopping previous stream ${session.streamId} before starting new one`);
+      await stopStream(session).catch(() => {});
+    }
+  }
+
   const headers: Record<string, string> = { "Content-Type": "application/json", ...sdkHeaders() };
   const hasAuth = !!headers["Authorization"];
   const url = sdkUrl();
@@ -210,12 +221,12 @@ export function startPublishing(
         if (session.publishErr <= 5) {
           console.log(`[LV2V] Publish error: HTTP ${r.status}, seq=${seq}`);
         }
-        // 410 Gone = SDK has no record of this stream → it's dead forever, stop immediately
-        if (r.status === 410) {
+        // 410 Gone or 404 Not Found = stream is dead, stop immediately
+        if (r.status === 410 || r.status === 404) {
           console.warn(
-            `[LV2V] Stream ${session.streamId} is gone (SDK returned 410). Auto-stopping.`,
+            `[LV2V] Stream ${session.streamId} is gone (HTTP ${r.status}). Auto-stopping.`,
           );
-          session.onError?.("Stream session lost — likely SDK restart. Stopping.");
+          session.onError?.("Stream ended. Stopping.");
           stopStream(session);
           return;
         }
