@@ -7,6 +7,8 @@ import { Card } from "./Card";
 import { ArrowLayer } from "./ArrowEdge";
 import { GroupButton } from "./GroupButton";
 import { EpisodeLabels } from "./EpisodeLabel";
+import { EpicLabels } from "./EpicLabel";
+import { StoryLabels } from "./StoryLabel";
 
 export function InfiniteCanvas() {
   const { viewport, cards, setViewport, zoomTo, selectCard, selectEdge, selectCards } =
@@ -156,6 +158,8 @@ export function InfiniteCanvas() {
           height: "100%",
         }}
       >
+        <StoryLabels />
+        <EpicLabels />
         <EpisodeLabels />
         <ArrowLayer />
         {lasso && (
