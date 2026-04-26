@@ -236,6 +236,121 @@ function PromptBar({ card, cap, prompt, elapsed, colors }: {
   );
 }
 
+/** Stream capture bar — screenshot + record clip from live stream. */
+function StreamCaptureBar({ card }: { card: CardData }) {
+  const [recording, setRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const getStreamCanvas = (): HTMLCanvasElement | null => {
+    // Find the canvas element inside or near this card's stream output
+    const cardEl = document.querySelector(`[data-card-id="${card.id}"]`);
+    return cardEl?.querySelector("canvas") as HTMLCanvasElement | null
+      ?? document.querySelector("canvas[data-scope-player]") as HTMLCanvasElement | null;
+  };
+
+  const handleScreenshot = async () => {
+    const srcCanvas = getStreamCanvas();
+    if (!srcCanvas) return;
+    const blob = await new Promise<Blob | null>((r) => srcCanvas.toBlob(r, "image/jpeg", 0.92));
+    if (!blob) return;
+
+    let imgUrl: string = URL.createObjectURL(blob);
+    try {
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((r) => { reader.onload = () => r(reader.result as string); reader.readAsDataURL(blob); });
+      const resp = await fetch("/api/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataUrl, fileName: `stream-screenshot-${Date.now()}.jpg` }) });
+      if (resp.ok) { const d = await resp.json(); if (d.url) imgUrl = d.url; }
+    } catch {}
+
+    const store = useCanvasStore.getState();
+    const refId = `ss-${Date.now()}`;
+    const w = srcCanvas.width || 640;
+    const h = srcCanvas.height || 480;
+    store.addCard({ type: "image", title: `Stream screenshot`, refId, url: imgUrl, width: 320, height: Math.round(320 * h / w) });
+    store.addEdge(card.refId, refId, { action: "screenshot" });
+  };
+
+  const handleRecord = () => {
+    const srcCanvas = getStreamCanvas();
+    if (!srcCanvas) return;
+
+    if (recording) {
+      // Stop recording
+      recorderRef.current?.stop();
+      if (timerRef.current) clearInterval(timerRef.current);
+      setRecording(false);
+      return;
+    }
+
+    // Start recording
+    chunksRef.current = [];
+    setElapsed(0);
+    const stream = srcCanvas.captureStream(30);
+    const recorder = new MediaRecorder(stream, {
+      mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm",
+      videoBitsPerSecond: 4_000_000,
+    });
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+    recorder.onstop = async () => {
+      const blob = new Blob(chunksRef.current, { type: "video/webm" });
+      let videoUrl: string = URL.createObjectURL(blob);
+
+      // Upload to GCS for persistence
+      try {
+        const reader = new FileReader();
+        const dataUrl = await new Promise<string>((r) => { reader.onload = () => r(reader.result as string); reader.readAsDataURL(blob); });
+        const resp = await fetch("/api/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataUrl, fileName: `stream-clip-${Date.now()}.webm` }) });
+        if (resp.ok) { const d = await resp.json(); if (d.url) videoUrl = d.url; }
+      } catch {}
+
+      const store = useCanvasStore.getState();
+      const refId = `clip-${Date.now()}`;
+      store.addCard({ type: "video", title: `Stream clip (${elapsed}s)`, refId, url: videoUrl });
+      store.addEdge(card.refId, refId, { action: "clip" });
+
+      // Auto-download
+      const a = document.createElement("a"); a.href = videoUrl; a.download = `stream-clip-${Date.now()}.webm`; a.click();
+    };
+    recorder.start(100);
+    recorderRef.current = recorder;
+    setRecording(true);
+    const t0 = Date.now();
+    timerRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+  };
+
+  return (
+    <div style={{
+      borderTop: "1px solid rgba(239,68,68,0.2)",
+      background: recording ? "rgba(239,68,68,0.08)" : "rgba(6,182,212,0.05)",
+      padding: "3px 8px",
+      fontSize: 10,
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+    }}
+    onPointerDown={(e) => e.stopPropagation()}
+    >
+      <button
+        onClick={handleScreenshot}
+        style={{ background: "none", border: "none", color: "#06b6d4", cursor: "pointer", fontSize: 10 }}
+        title="Take a screenshot → creates an image card"
+      >
+        📷 Screenshot
+      </button>
+      <button
+        onClick={handleRecord}
+        style={{ background: "none", border: "none", color: recording ? "#ef4444" : "#06b6d4", cursor: "pointer", fontSize: 10, fontWeight: recording ? 600 : 400 }}
+        title={recording ? "Stop recording" : "Record a clip → creates a video card"}
+      >
+        {recording ? `⏹ Stop (${elapsed}s)` : "⏺ Record clip"}
+      </button>
+    </div>
+  );
+}
+
 /** Editable card title — click to copy, double-click to rename. */
 function EditableTitle({ title, onRename, onCopy }: { title: string; onRename: (t: string) => void; onCopy: () => void }) {
   const [editing, setEditing] = useState(false);
@@ -758,7 +873,12 @@ export function Card({ card }: { card: CardData }) {
         <StreamCockpit card={card} />
       )}
 
-      {/* Video controls enhancement */}
+      {/* Stream capture bar — screenshot + record clip */}
+      {card.type === "stream" && !card.minimized && isStreaming && (
+        <StreamCaptureBar card={card} />
+      )}
+
+      {/* Video controls — fullscreen + screenshot */}
       {card.type === "video" && card.url && !card.minimized && (
         <div style={{
           borderTop: "1px solid rgba(6,182,212,0.2)",
@@ -767,19 +887,51 @@ export function Card({ card }: { card: CardData }) {
           fontSize: 9,
           color: "var(--text-dim)",
           display: "flex",
+          gap: 8,
           justifyContent: "space-between",
         }}>
           <span>Video</span>
-          <button
-            className="card-controls"
-            style={{ background: "none", border: "none", color: "#06b6d4", cursor: "pointer", fontSize: 9 }}
-            onClick={() => {
-              const video = document.querySelector(`video[src="${card.url}"]`) as HTMLVideoElement;
-              if (video) video.requestFullscreen?.();
-            }}
-          >
-            Fullscreen
-          </button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              style={{ background: "none", border: "none", color: "#06b6d4", cursor: "pointer", fontSize: 9 }}
+              onClick={async () => {
+                const video = document.querySelector(`video[src="${card.url}"]`) as HTMLVideoElement;
+                if (!video) return;
+                // Capture current frame as image
+                const canvas = document.createElement("canvas");
+                canvas.width = video.videoWidth || 640;
+                canvas.height = video.videoHeight || 480;
+                canvas.getContext("2d")!.drawImage(video, 0, 0);
+                const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.92));
+                if (!blob) return;
+
+                // Upload to GCS
+                let imgUrl: string = URL.createObjectURL(blob);
+                try {
+                  const reader = new FileReader();
+                  const dataUrl = await new Promise<string>((r) => { reader.onload = () => r(reader.result as string); reader.readAsDataURL(blob); });
+                  const resp = await fetch("/api/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataUrl, fileName: `screenshot-${Date.now()}.jpg` }) });
+                  if (resp.ok) { const d = await resp.json(); if (d.url) imgUrl = d.url; }
+                } catch {}
+
+                const store = useCanvasStore.getState();
+                const refId = `screenshot-${Date.now()}`;
+                store.addCard({ type: "image", title: `Screenshot: ${card.title?.slice(0, 20) || "video"}`, refId, url: imgUrl, width: 320, height: Math.round(320 * (canvas.height / canvas.width)) });
+                store.addEdge(card.refId, refId, { action: "screenshot" });
+              }}
+            >
+              📷 Screenshot
+            </button>
+            <button
+              style={{ background: "none", border: "none", color: "#06b6d4", cursor: "pointer", fontSize: 9 }}
+              onClick={() => {
+                const video = document.querySelector(`video[src="${card.url}"]`) as HTMLVideoElement;
+                if (video) video.requestFullscreen?.();
+              }}
+            >
+              Fullscreen
+            </button>
+          </div>
         </div>
       )}
 
