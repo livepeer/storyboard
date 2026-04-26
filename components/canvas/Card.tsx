@@ -774,6 +774,7 @@ export function Card({ card }: { card: CardData }) {
               <video
                 src={card.url}
                 controls
+                crossOrigin="anonymous"
                 className="h-full w-full object-contain"
               />
             ) : (
@@ -897,27 +898,30 @@ export function Card({ card }: { card: CardData }) {
               onClick={async () => {
                 const video = document.querySelector(`video[src="${card.url}"]`) as HTMLVideoElement;
                 if (!video) return;
-                // Capture current frame as image
-                const canvas = document.createElement("canvas");
-                canvas.width = video.videoWidth || 640;
-                canvas.height = video.videoHeight || 480;
-                canvas.getContext("2d")!.drawImage(video, 0, 0);
-                const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.92));
-                if (!blob) return;
-
-                // Upload to GCS
-                let imgUrl: string = URL.createObjectURL(blob);
                 try {
-                  const reader = new FileReader();
-                  const dataUrl = await new Promise<string>((r) => { reader.onload = () => r(reader.result as string); reader.readAsDataURL(blob); });
-                  const resp = await fetch("/api/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataUrl, fileName: `screenshot-${Date.now()}.jpg` }) });
-                  if (resp.ok) { const d = await resp.json(); if (d.url) imgUrl = d.url; }
-                } catch {}
+                  const cvs = document.createElement("canvas");
+                  cvs.width = video.videoWidth || 640;
+                  cvs.height = video.videoHeight || 480;
+                  cvs.getContext("2d")!.drawImage(video, 0, 0);
+                  const blob = await new Promise<Blob | null>((r) => cvs.toBlob(r, "image/jpeg", 0.92));
+                  if (!blob) throw new Error("Canvas export failed");
 
-                const store = useCanvasStore.getState();
-                const refId = `screenshot-${Date.now()}`;
-                store.addCard({ type: "image", title: `Screenshot: ${card.title?.slice(0, 20) || "video"}`, refId, url: imgUrl, width: 320, height: Math.round(320 * (canvas.height / canvas.width)) });
-                store.addEdge(card.refId, refId, { action: "screenshot" });
+                  let imgUrl: string = URL.createObjectURL(blob);
+                  try {
+                    const reader = new FileReader();
+                    const dataUrl = await new Promise<string>((r) => { reader.onload = () => r(reader.result as string); reader.readAsDataURL(blob); });
+                    const resp = await fetch("/api/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataUrl, fileName: `screenshot-${Date.now()}.jpg` }) });
+                    if (resp.ok) { const d = await resp.json(); if (d.url) imgUrl = d.url; }
+                  } catch {}
+
+                  const store = useCanvasStore.getState();
+                  const refId = `screenshot-${Date.now()}`;
+                  store.addCard({ type: "image", title: `Screenshot: ${card.title?.slice(0, 20) || "video"}`, refId, url: imgUrl, width: 320, height: Math.round(320 * (cvs.height / cvs.width)) });
+                  store.addEdge(card.refId, refId, { action: "screenshot" });
+                } catch {
+                  // Tainted canvas (CORS) — can't screenshot cross-origin video
+                  alert("Cannot screenshot this video (cross-origin restriction). Try right-click → Save frame in your browser instead.");
+                }
               }}
             >
               📷 Screenshot

@@ -8,7 +8,10 @@ import { BASE_CARD_W } from "./types";
  *  Keep in sync with the skill IDs in lib/layout/skills.ts. */
 const ORGANIZE_ALIASES: Record<string, string> = {
   grid: "basic",
-  flow: "narrative",
+  flow: "pipeline",
+  pathway: "pipeline",
+  pipe: "pipeline",
+  evolution: "pipeline",
   story: "narrative",
   sequence: "narrative",
   comic: "graphic-novel",
