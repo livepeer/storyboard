@@ -55,17 +55,6 @@ export async function startStream(
   prompt: string,
   scopeParams?: Record<string, unknown>
 ): Promise<Lv2vSession> {
-  // Stop ALL existing sessions before starting a new one.
-  // Without this, old publish/poll timers keep running and hit
-  // dead trickle channels (404), causing the new stream to compete
-  // with ghost publish loops from the old session.
-  for (const session of sessions.values()) {
-    if (!session.stopped) {
-      console.log(`[LV2V] Stopping previous stream ${session.streamId} before starting new one`);
-      await stopStream(session).catch(() => {});
-    }
-  }
-
   const headers: Record<string, string> = { "Content-Type": "application/json", ...sdkHeaders() };
   const hasAuth = !!headers["Authorization"];
   const url = sdkUrl();
