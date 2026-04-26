@@ -122,76 +122,94 @@ async function streamApply(idOrEmpty: string): Promise<string> {
       return `Stream start failed: ${startResult.error}`;
     }
 
-    // Get stream ID from the result
-    const streamData = startResult.data as Record<string, unknown> | undefined;
-    const streamId = (streamData?.stream_id || streamData?.message?.toString().match(/template=([^,]+)/)?.[1] || "") as string;
-
-    store.markStreaming(plan.id, streamId);
+    // Get stream ID — scope_start dispatches to CameraWidget which creates
+    // the session. We need to find the stream card it created.
+    store.markStreaming(plan.id, "");
     say(`⏳ Stream warming up — scenes will start when first frame arrives…`);
 
-    // 3. Wait for stream to actually produce frames before scheduling transitions.
-    // scope_start dispatches to CameraWidget which handles the 30-90s warm-up.
-    // We wait for the stream card to show frames (polling canvas for the card).
+    // Wait for THIS stream's card to appear (find by timestamp proximity)
+    const startTime = Date.now();
+    let myStreamRefId = "";
     await new Promise<void>((resolve) => {
       let checks = 0;
-      const maxChecks = 180; // 3 min max wait
+      const maxChecks = 180;
       const checkInterval = setInterval(() => {
         checks++;
         try {
           const { useCanvasStore } = require("@/lib/canvas/store");
           const cards = useCanvasStore.getState().cards;
-          const streamCard = cards.find((c: { type: string }) => c.type === "stream");
-          // Stream card exists and has a URL = frames are flowing
-          if (streamCard?.url || checks > maxChecks) {
+          // Find the stream card created AFTER we started (most recent stream card)
+          const streamCards = cards
+            .filter((c: { type: string; refId: string }) => c.type === "stream" && c.refId.startsWith("lv2v_"))
+            .sort((a: { refId: string }, b: { refId: string }) => {
+              const ta = parseInt(a.refId.split("_")[1]) || 0;
+              const tb = parseInt(b.refId.split("_")[1]) || 0;
+              return tb - ta; // newest first
+            });
+          const newest = streamCards[0];
+          if (newest && (newest.url || checks > maxChecks)) {
+            myStreamRefId = newest.refId;
             clearInterval(checkInterval);
             resolve();
           }
+          if (checks > maxChecks) { clearInterval(checkInterval); resolve(); }
         } catch {
           if (checks > maxChecks) { clearInterval(checkInterval); resolve(); }
         }
       }, 1000);
     });
 
+    // Resolve the actual stream_id from the refId
+    const { getSession: getSessionByRef } = await import("@/lib/stream/session");
+    const mySession = myStreamRefId ? getSessionByRef(myStreamRefId) : null;
+    const myStreamId = mySession?.streamId || "";
+
     say(`🔴 Stream live — Scene 1: ${firstScene.title} (${firstScene.duration}s)`);
 
-    // Scene transitions start NOW (stream is confirmed live)
-    let sceneElapsed = 0;
-    for (let i = 1; i < plan.scenes.length; i++) {
-      const prevDuration = plan.scenes[i - 1].duration;
-      sceneElapsed += prevDuration;
-      const scene = plan.scenes[i];
-      const sceneIdx = i;
-
-      setTimeout(async () => {
-        try {
-          const scopeControl = listTools().find((t) => t.name === "scope_control");
-          if (!scopeControl) return;
-
-          say(`🔄 Transitioning to Scene ${sceneIdx + 1}: ${scene.title}`);
-          await scopeControl.execute({
-            prompt: `${scene.prompt}, ${plan.style}`,
-            preset: scene.preset,
-            noise_scale: scene.noiseScale,
-          });
-          say(`▶ Scene ${sceneIdx + 1}: ${scene.title} (${scene.duration}s)`);
-          tracker.trackTool("scope_control", true);
-        } catch (e) {
-          say(`Scene ${sceneIdx + 1} transition failed: ${(e as Error).message}`);
-        }
-      }, sceneElapsed * 1000);
-    }
-
-    // 4. Schedule stream end
+    // Scene transitions — use the SPECIFIC stream_id, loop scenes forever
     const totalDuration = plan.scenes.reduce((sum, s) => sum + s.duration, 0);
-    setTimeout(async () => {
-      try {
-        const scopeStop = listTools().find((t) => t.name === "scope_stop");
-        if (scopeStop) await scopeStop.execute({});
-        store.markDone(plan.id);
-        say(`✓ Stream complete — "${plan.title}" finished (${totalDuration}s)`);
-        tracker.announce();
-      } catch { /* non-fatal */ }
-    }, totalDuration * 1000);
+    let loopRunning = true;
+
+    // Store a cancel function so /stream stop can break the loop
+    const cancelKey = `stream_loop_${plan.id}`;
+    (window as any)[cancelKey] = () => { loopRunning = false; };
+
+    const runSceneLoop = async () => {
+      let loopCount = 0;
+      while (loopRunning) {
+        for (let i = 0; i < plan.scenes.length && loopRunning; i++) {
+          const scene = plan.scenes[i];
+          if (loopCount > 0 || i > 0) {
+            // Transition to this scene (skip first scene on first loop — already playing)
+            try {
+              const scopeControl = listTools().find((t) => t.name === "scope_control");
+              if (!scopeControl) break;
+              const sceneLabel = `Scene ${i + 1}/${plan.scenes.length}${loopCount > 0 ? ` (loop ${loopCount + 1})` : ""}`;
+              say(`🔄 ${sceneLabel}: ${scene.title}`);
+              await scopeControl.execute({
+                stream_id: myStreamId || undefined,
+                prompt: `${scene.prompt}, ${plan.style}`,
+                preset: scene.preset,
+                noise_scale: scene.noiseScale,
+              });
+            } catch { break; }
+          }
+          // Wait for scene duration
+          await new Promise((r) => setTimeout(r, scene.duration * 1000));
+          // Check if stream is still alive
+          const sess = myStreamRefId ? getSessionByRef(myStreamRefId) : null;
+          if (!sess || sess.stopped) { loopRunning = false; break; }
+        }
+        loopCount++;
+      }
+      store.markDone(plan.id);
+      say(`✓ Stream "${plan.title}" ended.`);
+      delete (window as any)[cancelKey];
+      tracker.announce();
+    };
+
+    // Run scene loop in background (non-blocking)
+    runSceneLoop();
 
     const timeline = plan.scenes.map((s, i) => {
       const start = plan.scenes.slice(0, i).reduce((sum, x) => sum + x.duration, 0);
@@ -383,12 +401,19 @@ Output STRICT JSON only. No code fences.
 
 async function streamStop(): Promise<string> {
   try {
+    // Cancel any running scene loops
+    const store = useStreamStore.getState();
+    for (const p of store.plans) {
+      if (p.status === "streaming") {
+        const cancelFn = (window as any)[`stream_loop_${p.id}`];
+        if (typeof cancelFn === "function") cancelFn();
+        store.markDone(p.id);
+      }
+    }
+
     const { listTools } = await import("@/lib/tools/registry");
     const scopeStop = listTools().find((t) => t.name === "scope_stop");
     if (scopeStop) await scopeStop.execute({});
-    const store = useStreamStore.getState();
-    const active = store.plans.find((p) => p.status === "streaming");
-    if (active) store.markDone(active.id);
     return "Stream stopped.";
   } catch (e) {
     return `Stop failed: ${(e as Error).message}`;
