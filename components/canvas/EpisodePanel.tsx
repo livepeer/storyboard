@@ -194,14 +194,11 @@ export function EpisodePanel() {
 
         {/* Music (render only) */}
         {action === "render" && (
-          <div className="px-5 py-3 border-t border-white/5">
-            <div className="text-[10px] text-gray-500 mb-2 font-semibold">MUSIC (optional)</div>
-            <select value={musicCardId || ""} onChange={(e) => setMusicCardId(e.target.value || null)}
-              className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-xs text-gray-300 outline-none">
-              <option value="">No music</option>
-              {allAudioCards.map((c) => <option key={c.id} value={c.id}>{c.title || c.refId}</option>)}
-            </select>
-          </div>
+          <MusicPicker
+            musicCardId={musicCardId}
+            setMusicCardId={setMusicCardId}
+            allAudioCards={allAudioCards}
+          />
         )}
 
         {/* Export format (export only) */}
@@ -239,5 +236,87 @@ export function EpisodePanel() {
         </div>
       </div>
     </>
+  );
+}
+
+/** Music picker — choose existing audio, or generate new music inline. */
+function MusicPicker({ musicCardId, setMusicCardId, allAudioCards }: {
+  musicCardId: string | null;
+  setMusicCardId: (id: string | null) => void;
+  allAudioCards: Card[];
+}) {
+  const [generating, setGenerating] = useState(false);
+  const [genPrompt, setGenPrompt] = useState("");
+  const [showGen, setShowGen] = useState(false);
+
+  const handleGenerate = async () => {
+    if (!genPrompt.trim() || generating) return;
+    setGenerating(true);
+    useChatStore.getState().addMessage(`Generating music: "${genPrompt.slice(0, 40)}"...`, "system");
+
+    try {
+      const { runInference } = await import("@/lib/sdk/client");
+      const result = await runInference({
+        capability: "music",
+        prompt: genPrompt.trim(),
+        params: {
+          prompt: genPrompt.trim(),
+          lyrics_prompt: `[Intro]\n[Verse]\n${genPrompt.trim()}\n[Chorus]\n${genPrompt.trim()}\n[Outro]`,
+        },
+      });
+
+      const r = result as Record<string, unknown>;
+      const d = (r.data ?? r) as Record<string, unknown>;
+      const audioUrl = (r.audio_url as string) ?? (d.audio as { url: string })?.url ?? (d.url as string);
+
+      if (audioUrl) {
+        const card = useCanvasStore.getState().addCard({
+          type: "audio", title: `Music: ${genPrompt.slice(0, 25)}`,
+          refId: `music-${Date.now()}`, url: audioUrl,
+        });
+        setMusicCardId(card.id);
+        useChatStore.getState().addMessage("Music generated and selected!", "system");
+        setShowGen(false);
+        setGenPrompt("");
+      } else {
+        useChatStore.getState().addMessage("Music generation returned no audio.", "system");
+      }
+    } catch (e) {
+      useChatStore.getState().addMessage(`Music failed: ${(e as Error).message?.slice(0, 80)}`, "system");
+    }
+    setGenerating(false);
+  };
+
+  return (
+    <div className="px-5 py-3 border-t border-white/5">
+      <div className="text-[10px] text-gray-500 mb-2 font-semibold">MUSIC (optional — mixed into video)</div>
+
+      <select value={musicCardId || ""} onChange={(e) => { setMusicCardId(e.target.value || null); setShowGen(false); }}
+        className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-xs text-gray-300 outline-none">
+        <option value="">No music</option>
+        {allAudioCards.map((c) => <option key={c.id} value={c.id}>{c.title || c.refId}</option>)}
+      </select>
+
+      {!showGen ? (
+        <button onClick={() => setShowGen(true)}
+          className="mt-2 w-full rounded-lg border border-dashed border-purple-500/30 px-3 py-2 text-[10px] text-purple-400/70 hover:bg-purple-500/5 transition-colors text-center">
+          🎵 Generate new music...
+        </button>
+      ) : (
+        <div className="mt-2 flex gap-2">
+          <input
+            type="text" value={genPrompt} onChange={(e) => setGenPrompt(e.target.value)}
+            placeholder="calm jazz piano, upbeat electronic..."
+            onKeyDown={(e) => { if (e.key === "Enter") handleGenerate(); if (e.key === "Escape") setShowGen(false); }}
+            autoFocus
+            className="flex-1 rounded-lg border border-purple-500/30 bg-black/30 px-3 py-1.5 text-xs text-gray-300 outline-none placeholder:text-gray-600 focus:border-purple-500/50"
+          />
+          <button onClick={handleGenerate} disabled={!genPrompt.trim() || generating}
+            className="rounded-lg bg-purple-500/20 px-3 py-1.5 text-[10px] font-semibold text-purple-300 hover:bg-purple-500/30 disabled:opacity-40 whitespace-nowrap">
+            {generating ? "..." : "Generate"}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
