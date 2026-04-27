@@ -462,9 +462,17 @@ export const createMediaTool: ToolDefinition = {
       // Layout agent not available — cards use default nextPosition()
     }
 
+    // Pre-load modules once outside the loop (not per-step dynamic imports)
+    let episodeStoreModule: typeof import("@/lib/episodes/store") | null = null;
+    let sessionContextModule: typeof import("@/lib/agents/session-context") | null = null;
+    try {
+      [episodeStoreModule, sessionContextModule] = await Promise.all([
+        import("@/lib/episodes/store"),
+        import("@/lib/agents/session-context"),
+      ]);
+    } catch { /* modules not available */ }
+
     // Lock model per action across all steps for style consistency.
-    // Once the router picks "flux-dev" for step 0 (generate), ALL subsequent
-    // generate steps use the same model. Prevents mixed styles in multi-scene projects.
     const lockedCapability: Record<string, { capability: string; type: CardType }> = {};
 
     // Whether steps can run in parallel — true when no step depends on another step's output.
@@ -495,20 +503,18 @@ export const createMediaTool: ToolDefinition = {
         const isAnimate = step.action === "animate";
         // Check for active episode — use its effective context if present
         try {
-          const { useEpisodeStore } = await import("@/lib/episodes/store");
-          const { buildPrefixFromContext, buildMotionPrefixFromContext } = await import(
-            "@/lib/agents/session-context"
-          );
-          const epStore = useEpisodeStore.getState();
-          const activeEp = epStore.getActiveEpisode();
-          if (activeEp) {
-            const storyboardCtx = useSessionContext.getState().context;
-            if (storyboardCtx) {
-              const effective = epStore.getEffectiveContext(activeEp.id, storyboardCtx);
-              if (effective) {
-                sessionPrefix = isAnimate
-                  ? buildMotionPrefixFromContext(effective)
-                  : buildPrefixFromContext(effective);
+          if (episodeStoreModule && sessionContextModule) {
+            const epStore = episodeStoreModule.useEpisodeStore.getState();
+            const activeEp = epStore.getActiveEpisode();
+            if (activeEp) {
+              const storyboardCtx = useSessionContext.getState().context;
+              if (storyboardCtx) {
+                const effective = epStore.getEffectiveContext(activeEp.id, storyboardCtx);
+                if (effective) {
+                  sessionPrefix = isAnimate
+                    ? sessionContextModule.buildMotionPrefixFromContext(effective)
+                    : sessionContextModule.buildPrefixFromContext(effective);
+                }
               }
             }
           }
@@ -517,11 +523,8 @@ export const createMediaTool: ToolDefinition = {
         if (!sessionPrefix) {
           if (isAnimate) {
             const ctx = useSessionContext.getState().context;
-            if (ctx) {
-              const { buildMotionPrefixFromContext } = await import(
-                "@/lib/agents/session-context"
-              );
-              sessionPrefix = buildMotionPrefixFromContext(ctx);
+            if (ctx && sessionContextModule) {
+              sessionPrefix = sessionContextModule.buildMotionPrefixFromContext(ctx);
             }
           } else {
             sessionPrefix = useSessionContext.getState().buildPrefix();

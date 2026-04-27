@@ -27,20 +27,21 @@ function useFirstCardHint(hasUrl: boolean): boolean {
 /** Spinner with elapsed timer + progress bar using measured + estimated latency. */
 function GeneratingSpinner({ type, capability }: { type: string; capability?: string }) {
   const [elapsed, setElapsed] = useState(0);
-  const [measuredEta, setMeasuredEta] = useState<number | null>(null);
+  const [measuredEta, setMeasuredEta] = useState<number | null>(() => {
+    // Synchronous check — getModelStats is available at module load
+    if (!capability) return null;
+    try {
+      const { getModelStats } = require("@livepeer/creative-kit");
+      const stats = getModelStats();
+      const s = stats.get(capability);
+      return s && s.count >= 1 ? Math.ceil(s.avgMs / 1000) : null;
+    } catch { return null; }
+  });
   useEffect(() => {
     const t0 = Date.now();
     const iv = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
-    // Try to load measured latency from model router stats
-    if (capability) {
-      import("@livepeer/creative-kit").then((kit) => {
-        const stats = kit.getModelStats();
-        const s = stats.get(capability);
-        if (s && s.count >= 1) setMeasuredEta(Math.ceil(s.avgMs / 1000));
-      }).catch(() => {});
-    }
     return () => clearInterval(iv);
-  }, [capability]);
+  }, []);
 
   // Model-specific ETA: measured first, then hardcoded defaults
   const defaultEtaMap: Record<string, number> = {
@@ -53,18 +54,24 @@ function GeneratingSpinner({ type, capability }: { type: string; capability?: st
   const eta = measuredEta || (capability ? (defaultEtaMap[capability] || defaultEta) : defaultEta);
   const pct = Math.min(elapsed / eta, 0.95);
 
+  const almostDone = pct >= 0.9;
+
   return (
     <div className="flex flex-col items-center gap-2 w-full px-6">
       <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--text-muted)]" />
       <span className="font-mono text-[11px] text-[var(--text-dim)]">
-        {elapsed}s{capability ? ` · ${capability}` : ""}{elapsed < eta ? ` · ~${eta - elapsed}s left` : " · almost done"}
+        {elapsed}s{capability ? ` · ${capability}` : ""}{almostDone ? " · finishing up" : elapsed < eta ? ` · ~${eta - elapsed}s left` : ""}
       </span>
-      {/* Progress bar */}
+      {/* Progress bar — indeterminate pulse after 90% */}
       <div className="w-full h-1 rounded-full bg-white/10 overflow-hidden">
-        <div
-          className="h-full rounded-full bg-purple-500/60 transition-all duration-1000"
-          style={{ width: `${Math.round(pct * 100)}%` }}
-        />
+        {almostDone ? (
+          <div className="h-full rounded-full bg-purple-500/60 animate-pulse" style={{ width: "100%" }} />
+        ) : (
+          <div
+            className="h-full rounded-full bg-purple-500/60 transition-all duration-1000"
+            style={{ width: `${Math.round(pct * 100)}%` }}
+          />
+        )}
       </div>
     </div>
   );
