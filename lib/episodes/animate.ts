@@ -24,18 +24,22 @@ async function stitchVideosWithAudio(
   videoUrls: string[],
   onProgress?: (pct: number) => void,
 ): Promise<string> {
-  // Load all videos
+  // Load all videos — MUST be muted for autoplay to work (browser policy).
+  // Audio is captured via Web Audio API createMediaElementSource, which
+  // still receives audio data even when the element is muted in HTML.
   const videos: HTMLVideoElement[] = [];
   for (const url of videoUrls) {
     const vid = document.createElement("video");
     vid.crossOrigin = "anonymous";
-    vid.muted = false; // keep audio!
+    vid.muted = true; // required for programmatic play()
     vid.playsInline = true;
     vid.preload = "auto";
     vid.src = url;
     await new Promise<void>((resolve, reject) => {
       vid.onloadeddata = () => resolve();
       vid.onerror = () => reject(new Error(`Failed to load: ${url.slice(0, 60)}`));
+      // Timeout fallback — some CDNs are slow
+      setTimeout(() => resolve(), 15000);
     });
     videos.push(vid);
   }
@@ -71,8 +75,12 @@ async function stitchVideosWithAudio(
   return new Promise<string>((resolve, reject) => {
     recorder.onstop = () => {
       const blob = new Blob(chunks, { type: "video/webm" });
-      resolve(URL.createObjectURL(blob));
       audioCtx.close();
+      if (blob.size < 1000) {
+        reject(new Error(`Stitching produced empty video (${blob.size}B). Videos may have failed to load.`));
+        return;
+      }
+      resolve(URL.createObjectURL(blob));
     };
     recorder.onerror = () => reject(new Error("Recording failed"));
     recorder.start(100);
@@ -92,18 +100,26 @@ async function stitchVideosWithAudio(
 
       const vid = videos[currentIdx];
 
-      // Connect audio
+      // Connect audio: createMediaElementSource routes the element's audio
+      // through the Web Audio API instead of to speakers. Once connected,
+      // unmute the element so audio data flows through the source node.
       if (currentSource) { try { currentSource.disconnect(); } catch {} }
       try {
         currentSource = audioCtx.createMediaElementSource(vid);
         currentSource.connect(audioDest);
+        vid.muted = false; // unmute AFTER routing to AudioContext (not to speakers)
       } catch {
-        // Already created source for this element — reconnect
+        // Already created source for this element — just unmute
+        vid.muted = false;
         currentSource = null;
       }
 
       vid.currentTime = 0;
-      vid.play();
+      vid.play().catch(() => {
+        // If unmuted play fails (autoplay policy), retry muted (no audio but video works)
+        vid.muted = true;
+        vid.play().catch(() => {});
+      });
 
       // Draw frames
       const drawFrame = () => {
