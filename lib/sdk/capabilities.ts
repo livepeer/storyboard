@@ -75,6 +75,9 @@ const FALLBACK_CAPABILITIES = new Set([
   "seedream-5-lite", "seedance-i2v", "seedance-i2v-fast",
   "tripo-i3d", "tripo-t3d", "tripo-p1-i3d", "tripo-p1-t3d", "tripo-mv3d",
   "kling-v3-t2v", "kling-v3-i2v", "kling-o3-t2v", "kling-o3-i2v", "kling-o3-ref2v",
+  // Happy Horse 1.0 (Alibaba) — native 1080p + synced audio
+  // Verify fal model IDs when live: curl https://fal.ai/models/alibaba/happy-horse/text-to-video
+  "happy-horse-t2v", "happy-horse-i2v",
 ]);
 
 export function resolveCapability(
@@ -114,12 +117,14 @@ export function resolveCapability(
 
   // Try keyword match (e.g. "kling-i2v" contains "i2v" → "ltx-i2v")
   const keywords: Record<string, string[]> = {
+    "happy-horse": ["happy-horse-i2v", "happy-horse-t2v"],
+    "horse": ["happy-horse-i2v", "happy-horse-t2v"],
     "seedance": ["seedance-i2v", "seedance-i2v-fast"],
     "seedream": ["seedream-5-lite"],
     "kling": ["kling-o3-i2v", "kling-o3-t2v", "kling-v3-i2v"],
     "4k": ["kling-o3-i2v", "kling-o3-t2v"],
-    "i2v": ["seedance-i2v", "kling-o3-i2v", "ltx-i2v"],
-    "t2v": ["kling-o3-t2v", "ltx-t2v"],
+    "i2v": ["happy-horse-i2v", "seedance-i2v", "kling-o3-i2v", "ltx-i2v"],
+    "t2v": ["happy-horse-t2v", "kling-o3-t2v", "ltx-t2v"],
     "tts": ["chatterbox-tts"],
     "upscale": ["topaz-upscale"],
     "edit": ["gpt-image-edit", "kontext-edit"],

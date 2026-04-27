@@ -56,8 +56,9 @@ export const FALLBACK_CHAINS: Record<string, string[]> = {
   "kontext-edit": ["flux-fill", "gemini-image"],
   "flux-fill": ["kontext-edit"],
 
-  // Video image-to-video (Kling O3 4K is the premium tier)
-  "kling-o3-i2v": ["kling-v3-i2v", "seedance-i2v", "veo-i2v"],
+  // Video image-to-video (Happy Horse = best quality, Kling O3 = 4K premium)
+  "happy-horse-i2v": ["seedance-i2v", "kling-o3-i2v", "veo-i2v", "ltx-i2v"],
+  "kling-o3-i2v": ["happy-horse-i2v", "kling-v3-i2v", "seedance-i2v", "veo-i2v"],
   "kling-v3-i2v": ["kling-o3-i2v", "seedance-i2v", "veo-i2v"],
   "veo-i2v": ["seedance-i2v", "kling-o3-i2v", "ltx-i2v", "pixverse-i2v"],
   "seedance-i2v": ["seedance-i2v-fast", "kling-o3-i2v", "veo-i2v", "ltx-i2v"],
@@ -66,8 +67,9 @@ export const FALLBACK_CHAINS: Record<string, string[]> = {
   "pixverse-i2v": ["seedance-i2v-fast", "veo-i2v", "ltx-i2v"],
   "kling-i2v": ["kling-o3-i2v", "seedance-i2v", "veo-i2v", "ltx-i2v"],
 
-  // Video text-to-video (Kling O3 4K for premium)
-  "kling-o3-t2v": ["kling-v3-t2v", "veo-t2v", "ltx-t2v"],
+  // Video text-to-video (Happy Horse = best quality, Kling O3 = 4K)
+  "happy-horse-t2v": ["kling-o3-t2v", "veo-t2v", "ltx-t2v"],
+  "kling-o3-t2v": ["happy-horse-t2v", "kling-v3-t2v", "veo-t2v", "ltx-t2v"],
   "kling-v3-t2v": ["kling-o3-t2v", "veo-t2v", "ltx-t2v"],
   "veo-t2v": ["kling-o3-t2v", "ltx-t2v", "pixverse-t2v"],
   "ltx-t2v": ["veo-t2v", "kling-v3-t2v", "pixverse-t2v"],
@@ -705,7 +707,17 @@ export const createMediaTool: ToolDefinition = {
           }
 
           const capParams = { ..._params };
-          if (_rawDuration && currentCap.startsWith("seedance")) {
+          if (currentCap.startsWith("happy-horse")) {
+            // Happy Horse 1.0: native 1080p + synced audio
+            // Prompt sweet spot: ~20 words, subject+action+setting+camera cue
+            if (_rawDuration) capParams.duration = _rawDuration; // integer seconds (3-15)
+            capParams.sound = true; // joint audio-video synthesis
+            // Aspect ratio from card dimensions
+            const cardW = _card.w || 320;
+            const cardH = _card.h || 280;
+            const ratio = cardW / cardH;
+            capParams.aspect_ratio = ratio > 1.3 ? "16:9" : ratio < 0.8 ? "9:16" : "1:1";
+          } else if (_rawDuration && currentCap.startsWith("seedance")) {
             capParams.duration = String(_rawDuration);
             capParams.generate_audio = true;
           } else if (currentCap.startsWith("kling-")) {
@@ -731,7 +743,8 @@ export const createMediaTool: ToolDefinition = {
             // with actual server timing instead of client-side estimates).
             const isVideoModel = currentCap.includes("i2v") || currentCap.includes("t2v")
               || currentCap.includes("seedance") || currentCap.includes("kling")
-              || currentCap.includes("veo") || currentCap.includes("ltx");
+              || currentCap.includes("veo") || currentCap.includes("ltx")
+              || currentCap.includes("happy-horse");
             const result = isVideoModel
               ? await runInferenceStream(
                   { capability: currentCap, prompt: _effectivePrompt, params: capParams },

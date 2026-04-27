@@ -182,6 +182,17 @@ function getDuration(contentType: string): number {
   return map[contentType] || 10;
 }
 
+/** Optimize prompt for Happy Horse (~20 words: subject + action + setting + camera). */
+function optimizeForHappyHorse(prompt: string): string {
+  // Strip filler words that degrade Happy Horse output
+  const fillers = /\b(stunning|beautiful|hyperrealistic|highly detailed|4k|8k|photorealistic|masterpiece|cinematic masterpiece|gorgeous|incredible|amazing)\b/gi;
+  let clean = prompt.replace(fillers, "").replace(/\s{2,}/g, " ").trim();
+  // Trim to ~20 words
+  const words = clean.split(/\s+/);
+  if (words.length > 25) clean = words.slice(0, 22).join(" ");
+  return clean;
+}
+
 /** Build motion prompt for a card. */
 function buildMotionPrompt(card: Card, cohesionPrefix: string, contentType: string): string {
   const motionMap: Record<string, string> = {
@@ -200,11 +211,12 @@ function buildMotionPrompt(card: Card, cohesionPrefix: string, contentType: stri
   return `${cohesionPrefix}, ${motion}${cardContext ? `, ${cardContext}` : ""}`.slice(0, 200);
 }
 
-/** Select model based on style. */
+/** Select model based on style. Happy Horse is top quality when available. */
 function selectModel(style?: string): string {
   if (style === "fast") return "seedance-i2v-fast";
-  if (style === "cinematic" || style === "premium") return "seedance-i2v";
-  return "seedance-i2v"; // default
+  if (style === "premium" || style === "horse") return "happy-horse-i2v";
+  if (style === "cinematic") return "happy-horse-i2v"; // best quality
+  return "happy-horse-i2v"; // default: best available
 }
 
 /**
@@ -255,10 +267,13 @@ export async function animateEpisode(opts: AnimateEpisodeOptions): Promise<Anima
   }
 
   // Step 2: Build animation steps
+  const isHappyHorse = model.includes("happy-horse");
   const steps = imageCards.map((card) => {
     const contentType = detectContentType(card);
     const duration = getDuration(contentType);
-    const prompt = buildMotionPrompt(card, cohesionPrefix, contentType);
+    let prompt = buildMotionPrompt(card, cohesionPrefix, contentType);
+    // Happy Horse works best with ~20 words — trim filler
+    if (isHappyHorse) prompt = optimizeForHappyHorse(prompt);
     return {
       action: "animate" as const,
       source_url: card.url!,

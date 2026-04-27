@@ -47,6 +47,7 @@ function GeneratingSpinner({ type, capability }: { type: string; capability?: st
   const defaultEtaMap: Record<string, number> = {
     "flux-dev": 8, "flux-schnell": 4, "gpt-image": 12, "recraft-v4": 6,
     "nano-banana": 5, "gemini-image": 8, "seedream-5-lite": 6, "kontext-edit": 8,
+    "happy-horse-i2v": 45, "happy-horse-t2v": 45,
     "seedance-i2v": 60, "seedance-i2v-fast": 30, "kling-i2v": 45, "veo-i2v": 40,
     "ltx-i2v": 25, "ltx-t2v": 30, "chatterbox-tts": 10, "music": 15,
   };
