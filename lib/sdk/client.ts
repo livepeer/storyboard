@@ -109,3 +109,86 @@ export function runInference(
 ): Promise<InferenceResponse> {
   return sdkFetch<InferenceResponse>("/inference", req);
 }
+
+/**
+ * Streaming inference — SSE heartbeats from the SDK.
+ *
+ * Calls POST /inference/stream which returns text/event-stream:
+ *   data: {"status":"running","elapsed":1,"capability":"seedance-i2v"}
+ *   data: {"status":"done","image_url":"...","video_url":"...","elapsed_ms":...}
+ *   data: [DONE]
+ *
+ * Falls back to regular /inference if /inference/stream is not available.
+ */
+export async function runInferenceStream(
+  req: InferenceRequest,
+  onProgress?: (elapsed: number) => void,
+): Promise<InferenceResponse> {
+  const config = loadConfig();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (config.apiKey) headers["Authorization"] = `Bearer ${config.apiKey}`;
+
+  try {
+    const resp = await fetch(config.serviceUrl + "/inference/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(req),
+    });
+
+    if (!resp.ok || !resp.body) {
+      // Fallback to regular inference
+      return runInference(req);
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalResult: InferenceResponse | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Parse SSE events (double-newline separated)
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+
+      for (const event of events) {
+        if (!event.startsWith("data: ")) continue;
+        const payload = event.slice(6).trim();
+        if (payload === "[DONE]") continue;
+
+        try {
+          const data = JSON.parse(payload);
+          if (data.status === "running" && data.elapsed != null) {
+            onProgress?.(data.elapsed);
+          }
+          if (data.status === "error") {
+            throw new Error(data.error || "Inference failed");
+          }
+          if (data.status === "done" || data.image_url || data.video_url || data.audio_url) {
+            finalResult = data as InferenceResponse;
+          }
+        } catch (e) {
+          if (e instanceof Error && e.message !== "Inference failed") {
+            // JSON parse error — skip malformed event
+            continue;
+          }
+          throw e;
+        }
+      }
+    }
+
+    if (!finalResult) {
+      // No result from stream — fallback
+      return runInference(req);
+    }
+
+    return finalResult;
+  } catch (e) {
+    // Stream endpoint not available — fallback to blocking inference
+    console.warn("[SDK] Streaming inference failed, falling back:", (e as Error).message);
+    return runInference(req);
+  }
+}

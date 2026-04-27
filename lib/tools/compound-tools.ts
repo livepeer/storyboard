@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "./types";
 import { useCanvasStore } from "@/lib/canvas/store";
-import { runInference } from "@/lib/sdk/client";
+import { runInference, runInferenceStream } from "@/lib/sdk/client";
 import { resolveCapability, isValidCapability, getCachedCapabilities } from "@/lib/sdk/capabilities";
 import { useSkillStore } from "@/lib/skills/store";
 import { useChatStore } from "@/lib/chat/store";
@@ -726,11 +726,25 @@ export const createMediaTool: ToolDefinition = {
 
           const t0 = performance.now();
           try {
-            const result = await runInference({
-              capability: currentCap,
-              prompt: _effectivePrompt,
-              params: capParams,
-            });
+            // Use streaming inference for video models — provides real-time
+            // server-reported elapsed time (updates the card's progress bar
+            // with actual server timing instead of client-side estimates).
+            const isVideoModel = currentCap.includes("i2v") || currentCap.includes("t2v")
+              || currentCap.includes("seedance") || currentCap.includes("kling")
+              || currentCap.includes("veo") || currentCap.includes("ltx");
+            const result = isVideoModel
+              ? await runInferenceStream(
+                  { capability: currentCap, prompt: _effectivePrompt, params: capParams },
+                  (serverElapsed) => {
+                    // Update card with server-reported elapsed time
+                    canvas.updateCard(_card.id, { elapsed: serverElapsed * 1000 });
+                  },
+                )
+              : await runInference({
+                  capability: currentCap,
+                  prompt: _effectivePrompt,
+                  params: capParams,
+                });
             const elapsed = performance.now() - t0;
 
             const r = result as Record<string, unknown>;
