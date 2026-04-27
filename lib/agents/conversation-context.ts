@@ -42,6 +42,12 @@ export function resetForNewWork() {
     useSessionContext.getState().clearContext();
   } catch { /* not available */ }
 
+  // Deactivate current project so new work doesn't inherit or add to it
+  try {
+    const { useProjectStore } = require("@/lib/projects/store");
+    useProjectStore.getState().setActiveProject(null);
+  } catch { /* not available */ }
+
   // Clear active request (subject tracker)
   try {
     const { useActiveRequest } = require("@/lib/agents/active-request");

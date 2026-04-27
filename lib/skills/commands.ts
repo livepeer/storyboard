@@ -476,10 +476,20 @@ async function showContext(args?: string): Promise<string> {
     return contextGen(genMatch[1]?.trim() || "");
   }
 
-  // /context clear
+  // /context clear — full creative reset
   if (sub === "clear") {
     store.clearContext();
-    return "Creative context cleared. Next generation starts fresh.";
+    // Also deactivate the current project so new prompts don't add to it
+    try {
+      const { useProjectStore } = await import("@/lib/projects/store");
+      useProjectStore.getState().setActiveProject(null);
+    } catch {}
+    // Reset conversation context + active request
+    try {
+      const { resetForNewWork } = await import("@/lib/agents/conversation-context");
+      resetForNewWork();
+    } catch {}
+    return "Creative context cleared. Active project deactivated. Start fresh!";
   }
 
   // /context edit <field> <value> — overwrite a field
