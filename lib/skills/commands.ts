@@ -60,6 +60,39 @@ export async function executeCommand(cmd: ParsedCommand): Promise<string> {
     case "help":
       return showHelp();
     case "clear": {
+      const sub = cmd.args.trim().toLowerCase();
+      if (sub === "canvas") {
+        const canvas = useCanvasStore.getState();
+        const { history } = await import("@/lib/canvas/store");
+        history.pushUndo({ cards: canvas.cards, edges: canvas.edges });
+        // Remove all cards
+        for (const card of [...canvas.cards]) canvas.removeCard(card.id);
+        // Clear episodes, epics, stories
+        const { useEpisodeStore } = await import("@/lib/episodes/store");
+        const epStore = useEpisodeStore.getState();
+        for (const ep of [...epStore.episodes]) epStore.removeEpisode(ep.id);
+        for (const epic of [...epStore.epics]) epStore.removeEpic(epic.id);
+        for (const story of [...epStore.stories]) epStore.removeStory(story.id);
+        return "Canvas cleared. Cmd+Z to undo.";
+      }
+      if (sub === "all") {
+        // Clear everything: canvas + chat + projects + episodes
+        const canvas = useCanvasStore.getState();
+        for (const card of [...canvas.cards]) canvas.removeCard(card.id);
+        const { useChatStore } = await import("@/lib/chat/store");
+        useChatStore.getState().clearMessages();
+        const { useEpisodeStore } = await import("@/lib/episodes/store");
+        const epStore = useEpisodeStore.getState();
+        for (const ep of [...epStore.episodes]) epStore.removeEpisode(ep.id);
+        for (const epic of [...epStore.epics]) epStore.removeEpic(epic.id);
+        for (const story of [...epStore.stories]) epStore.removeStory(story.id);
+        try {
+          const { useProjectStore } = await import("@/lib/projects/store");
+          useProjectStore.getState().clearProjects();
+        } catch {}
+        return "";
+      }
+      // Default: clear chat only
       const { useChatStore } = await import("@/lib/chat/store");
       useChatStore.getState().clearMessages();
       return "";
@@ -200,6 +233,9 @@ function showHelp(): string {
     "  /layout list                Show available layout presets",
     "  /save [refId]               Save card(s) to file",
     "  /export                     Export canvas as JSON (copied to clipboard)",
+    "  /clear                      Clear chat messages",
+    "  /clear canvas               Clear all cards, episodes, epics (Cmd+Z to undo)",
+    "  /clear all                  Clear everything — canvas + chat + projects + episodes",
     "  /save canvas                Export entire canvas as portable JSON file",
     "  /load canvas                Import a saved canvas JSON file",
     "  /gallery                    Browse all cards with media as a list",
